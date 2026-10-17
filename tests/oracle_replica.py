@@ -10,8 +10,10 @@ refuses to run if the GARMENT_DEMO schema already holds ANY table (so a real Axp
 be touched), and never drops, updates or deletes anything.
 
 Tables and columns come from docs/live_schema_columns.json (the real column types and NOT NULL
-rules). Primary keys are added on the ID columns and indexes on the order links. --orders N adds N
-synthetic historic orders (2 lines x 4 sizes each) to rehearse large-table behaviour.
+rules). Primary keys are added on the ID columns and indexes on the order links. Besides the demo rows
+(tests/demo_db.py) it holds one recent order saved the way an operator saves one through POPPYS AI
+(PK/26-27/S/9101: 3 colour lines x 5 sizes), which the real-Oracle acceptance test F opens. --orders N
+adds N synthetic historic orders (2 lines x 4 sizes each) to rehearse large-table behaviour.
 
 Large-database rehearsal (docs/PERFORMANCE.md): a SECOND disposable container on another port, e.g.
     docker run -d --name poppys-replica-big -p 1522:1521 ... gvenzl/oracle-free:23-slim-faststart
@@ -22,6 +24,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -39,6 +42,23 @@ def coltype(c):
     if c['type'] in ('VARCHAR2', 'CHAR'):
         return f'{c["type"]}({c["length"]} BYTE)'
     return c['type']
+
+
+def existing_order():
+    """PK/26-27/S/9101 as an operator saves it: buyer NEXT, three colour lines of 500 pieces, five sizes each,
+    linked line -> sizes through SUBNO = SUB3_SUBNO, every ID decodable to a master name."""
+    oid, ref, sizes = 201, 'PK/26-27/S/9101', {31: 20, 32: 60, 33: 140, 34: 180, 35: 100}
+    lines = [41, 42, 43]
+    out = [('ORDMAS', dict(ORDMASID=oid, DOCID=ref, BUYER=1, STYLENO=11, STYLEDESC=21, ODATE=date(2026, 10, 17),
+                           OQTY=sum(sizes.values()) * len(lines), BONO='VG8439288-1', UOM=51, MERCH=61,
+                           SAMPLETYPE='DEVELOPMENT SAMPLE', ORDCATEGORY='SAMPLE ORDER', CANCEL='F'))]
+    for n, colour in enumerate(lines, 1):
+        sub = f'{ref}:{n}'
+        out.append(('ORDSTYLE', dict(ORDSTYLEID=oid * 10 + n, ORDMASID=oid, SNO=n, SUBNO=sub, COMBO=colour, ORDQTY=sum(sizes.values()),
+                                     SHIPDT=date(2026, 12, 15), PONUM='VG8439288-1')))
+        for r, (size, q) in enumerate(sizes.items(), 1):
+            out.append(('ORDSIZE', dict(ORDSIZEID=2000 + n * 10 + r, ORDMASID=oid, SUB3_SUBNO=sub, GSIZE=size, RQTY=q, PQTY=q, ORDSIZEROW=r)))
+    return out
 
 
 CHUNK = 250_000   # orders generated per INSERT: CONNECT BY holds every level in memory, so big runs go in chunks
@@ -97,7 +117,7 @@ def main():
                 cur.execute(f'CREATE INDEX {t}_ORD_IX ON {t} ({cols})')
         cur.execute('CREATE INDEX ORDMAS_DOCID_IX ON ORDMAS (DOCID)')
         by_table = {}
-        for t, v in demo_db.rows():
+        for t, v in demo_db.rows() + existing_order():
             by_table.setdefault((t, tuple(v)), []).append(list(v.values()))
         for (t, names), data in by_table.items():
             cur.executemany(f'INSERT INTO {t} ({",".join(names)}) VALUES ({",".join(":" + str(i + 1) for i in range(len(names)))})', data)

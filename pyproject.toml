@@ -43,16 +43,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = [
-    "B017",   # pytest.raises(Exception) is used where the Oracle driver error type does not matter
-    "S307",   # tests/fixtures.py evaluates its own arithmetic formulas when building workbooks
-]
-# B023: the small readers defined inside a loop run in the same iteration, so they never see a later value.
-# F401: a known finding (below).
+# No whole-file ignores: an exception is a `# noqa: <rule>  <reason>` on the exact line, so the rule keeps
+# protecting the rest of the file. The one entry below is temporary: backend/workbooks.py is being edited by
+# another engineer right now, so no line comment could be added yet. It covers exactly these findings; replace
+# them with the fix / line-level noqa, then delete the entry:
+#   F401  unused `from io import BytesIO` (delete the import)
+#   B023  setval() and val() are closures called in the same loop iteration (false positives: `# noqa: B023`)
 "backend/workbooks.py" = ["B023", "F401"]
-# Known findings, reported to the owners of these files: unused imports (F401) and unused variables (F841).
-# Remove each entry once fixed so the rule protects that file again; `ruff check --fix` removes the imports safely.
-"backend/insight/engine.py" = ["F401", "F841"]
-"backend/insight/service.py" = ["F401"]
-"backend/insight/understand.py" = ["F401"]
-"backend/main.py" = ["F841"]

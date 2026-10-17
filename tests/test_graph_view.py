@@ -1,6 +1,6 @@
 """Flowchart view maths (frontend/js/graph.js): zoom limits, fit-to-view, keep-in-view panning and
 zooming around the pointer. Runs the real ES module in Node; skipped where Node is not installed.
-The pointer, keyboard and toolbar behaviour is checked in a browser (see docs / the UI review)."""
+The pointer, keyboard and toolbar behaviour is driven in a real browser in tests/test_ui_browser.py."""
 import json
 import re
 import shutil
@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 GRAPH = Path(__file__).resolve().parents[1] / 'frontend' / 'js' / 'graph.js'
+CSS = GRAPH.parents[1] / 'styles.css'
 NODE = shutil.which('node')
 
 
@@ -69,3 +70,16 @@ def test_graph_module_is_csp_safe():
     buttons = re.findall(r'<button[^>]*data-z="(\w+)"[^>]*>', src)
     assert sorted(buttons) == ['fit', 'in', 'out', 'reset']
     assert all('aria-label=' in b for b in re.findall(r'<button[^>]*data-z="\w+"[^>]*>', src))
+
+
+def test_toolbar_stacking_and_zoom_announcements_stay_contained():
+    """The toolbar's z-index must not reach app chrome (the sticky Ask AI composer), and the zoom readout is
+    not itself a live region (it changes during gestures); a separate status announces the settled value."""
+    css = CSS.read_text(encoding='utf-8')
+    rule = re.search(r'\.gviewport \{([^}]*)\}', css)
+    assert rule and 'isolation: isolate' in rule.group(1)
+    assert re.search(r'\.composer \{[^}]*z-index:', css)
+    src = GRAPH.read_text(encoding='utf-8')
+    readout = re.search(r'<[a-z]+ class="gzoom"[^>]*>', src).group(0)
+    assert 'aria-live' not in readout and not readout.startswith('<output')
+    assert 'role="status"' in src and 'data-zsay' in src

@@ -98,7 +98,7 @@ def calculated(content):
         if m:
             from openpyxl.utils import column_index_from_string as ci, get_column_letter as gl
             return sum(value(ws, f'{gl(c)}{m.group(2)}') for c in range(ci(m.group(1)), ci(m.group(3)) + 1))
-        return eval(re.sub(r'([A-Z]+\d+)', lambda x: str(value(ws, x.group(1))), expr))  # test-only arithmetic
+        return eval(re.sub(r'([A-Z]+\d+)', lambda x: str(value(ws, x.group(1))), expr))  # noqa: S307  test-only: arithmetic of this file's own formulas
     # Store formulas and cached values the way Excel does: keep formula XML, inject <v> values.
     cache = {(ws.title, c.coordinate): value(ws, c.coordinate) for ws in wb for row in ws for c in row
              if isinstance(c.value, str) and c.value.startswith('=')}

@@ -23,15 +23,23 @@ missing() {
 }
 
 # Patterns for committed credentials. Only file:line is printed, never the matched text.
+# The first one: a literal value for any *_PASSWORD key, in any case, in every form a setting is written in:
+#   KEY=v (env, .env, shell, PowerShell $env:), KEY: v (YAML), {"KEY": "v"} (JSON), {'KEY': 'v'} (Python dict) and
+#   os.environ['KEY'] = 'v'. A value that only refers to a password is not a literal: $VAR, ${{ ... }}, %VAR%, <placeholder>,
+#   ..., a format field {x}, an expression ( + \, an empty value or a masked ***.
 SECRET_PATTERNS=(
-  '(ORACLE_PASSWORD|APP_USER_PASSWORD|POPPYS_REPLICA_PASSWORD|POPPYS_ORACLE_PASSWORD)[[:space:]]*[=:][[:space:]]*["'\'']?[A-Za-z0-9]'
+  '_[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]["'\'']?[]]?[[:space:]]*[=:][[:space:]]*["'\'']?[^][:space:]"'\''$<./\([+%{&|;,)*`=>]'
   '(^|[^A-Za-z0-9])Pp[0-9a-f]{48}([^0-9a-f]|$)'                     # the format scripts/bootstrap_local.py generates
   '[A-Za-z][A-Za-z0-9_$#]*/[A-Za-z0-9][^[:space:]/@"'\'']*@[A-Za-z0-9_.-]+(:[0-9]+)?/[A-Za-z0-9_.]+'   # user/<password>@host:port/service
   '-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----'
   'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}'
 )
-# Files that hold local settings, passwords or the local store. .env.example is the only allowed settings file.
-SECRET_FILES='(^|/)\.env($|\.)|^data/|\.(pem|key|p12|pfx|jks|sqlite3?|db)$|(^|/)id_(rsa|dsa|ecdsa|ed25519)($|\.)'
+# Lines the first pattern finds that hold no secret: flags such as ORACLE_RANDOM_PASSWORD: 'true', None/null, and type
+# annotations (oracle_password: str). Written so grep -E here and PowerShell's -match in check.ps1 read it the same way.
+SECRET_ALLOW='_[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]["'\'']?[]]? *[=:] *["'\'']?(true|false|none|null|str|bytes|SecretStr|True|False|None|TRUE|FALSE|NONE|NULL)(["'\'',}) =]|$)'
+# Files that hold local settings, passwords or the local store: .env, .env.*, *.env (poppys.env...), data/, keys and
+# databases. .env.example is the only allowed settings file.
+SECRET_FILES='(^|/)[^/]*\.env($|\.)|^data/|\.(pem|key|p12|pfx|jks|sqlite3?|db)$|(^|/)id_(rsa|dsa|ecdsa|ed25519)($|\.)'
 
 secrets() {
   step 'Secret scan: no settings files, local data or passwords in the repository'
@@ -44,7 +52,8 @@ secrets() {
   for pattern in "${SECRET_PATTERNS[@]}"; do
     # git grep exits 1 when nothing matches; anything above 1 is a broken scan, which must not pass as clean.
     if hits=$(git grep --untracked -n -I -E -e "$pattern" -- .); then
-      printf '%s\n' "$hits" | cut -d: -f1,2 | sed 's/^/  possible password or key at /'; bad=1
+      hits=$(printf '%s\n' "$hits" | grep -vE -e "$SECRET_ALLOW" || true)
+      if [ -n "$hits" ]; then printf '%s\n' "$hits" | cut -d: -f1,2 | sed 's/^/  possible password or key at /'; bad=1; fi
     elif [ $? -gt 1 ]; then echo "  the scan itself failed for pattern: $pattern"; bad=1; fi
   done
   if [ "$bad" = 1 ]; then

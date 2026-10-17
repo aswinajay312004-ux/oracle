@@ -10,8 +10,12 @@
 name: CI
 
 on:
-  push:
-  pull_request:
+  push:                    # only the long-lived branches and the designated working branches; other branches run through their PR
+    branches:
+      - main
+      - 'release/**'
+      - 'claude/**'
+  pull_request:            # every pull request, whatever its branch
   workflow_dispatch:
   schedule:
     - cron: '23 3 * * 1'   # Mondays 03:23 UTC
@@ -20,8 +24,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}   # a newer push replaces an older run, except on main
+  # One group per branch, whatever the event: a push to a claude/** branch with an open pull request starts a push
+  # run and a pull_request run for the same commit, and the newer one replaces the older, so the jobs (the Oracle job
+  # is about 30 minutes) run once. On main every run is kept.
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 defaults:
   run:
@@ -157,8 +164,8 @@ jobs:
           docker exec "$SERVICE_ID" resetPassword "$ORACLE_PASSWORD" > /dev/null
           docker exec "$SERVICE_ID" createAppUser GARMENT_DEMO "$APP_USER_PASSWORD" FREEPDB1 > /dev/null
 
-      - name: Build the GARMENT_DEMO replica (19 tables, synthetic orders)
-        run: POPPYS_REPLICA_PASSWORD="$APP_USER_PASSWORD" python tests/oracle_replica.py
+      - name: Build the GARMENT_DEMO replica (19 tables, demo orders, PK/26-27/S/9101 and 20,000 bulk-loaded orders)
+        run: POPPYS_REPLICA_PASSWORD="$APP_USER_PASSWORD" python tests/oracle_replica.py --orders 20000
 
       - name: Create the restricted POPPYS_APP account (writes a temporary .env.poppys)
         run: |
@@ -207,6 +214,10 @@ jobs:
     env:
       PYTHON: ''              # let scripts/check.ps1 use the python on PATH
     steps:
+      # Windows runners check out with core.autocrlf=true, which turns the committed LF text fixtures and scripts
+      # into CRLF. Set before checkout, so this job tests the files byte for byte as committed.
+      - name: Keep line endings exactly as committed
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         with:
           persist-credentials: false

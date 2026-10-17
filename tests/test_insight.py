@@ -235,3 +235,36 @@ def test_explorer_counts_are_approximate_only_for_very_large_unfiltered_tables(a
     assert page['approx'] is True and page['total'] == 5_000_000                       # statistics, marked ≈ on screen
     page = api.get('/api/explorer/tables/ORDSIZE?column=ORDMASID&value=101&exact=true').json()
     assert page['approx'] is False and page['total'] == 5                                # a filter is always counted
+
+
+# --- index-friendly text filters (docs/PERFORMANCE.md) -------------------------------------------------
+DEMO_QUESTIONS = ['How many orders for NEXT?', 'how many orders for next', 'size wise quantity for order PK/26-27/S/9001',
+                  'size wise quantity for order pk/26-27/s/9001', 'which buyer has order PK/26-27/S/9003', 'colour wise quantity for NEXT',
+                  'show orders of buyer NEXT', 'orders for PO-102', 'how many cancelled orders', 'top 1 buyers by quantity',
+                  'orders this month', 'monthly order quantity', 'colour wise quantity for white aop']
+
+
+def test_plain_column_filters_give_the_same_answers_as_the_forgiving_match(world, monkeypatch):
+    """The demo tables have no statistics, so their text filters now use the plain column (as a big table does).
+    Every demo answer is the same as with the old forgiving UPPER(TRIM(col)) match on every table."""
+    from backend.insight import query
+    plain = {q: ask(world, q) for q in DEMO_QUESTIONS}
+    assert any(' IN (' in r['sql'] or '= :b' in r['sql'] for r in plain.values())
+    assert not any('UPPER(TRIM(' in r['sql'] for r in plain.values())
+    monkeypatch.setattr(query, 'FORGIVING_ROWS', 10 ** 15)
+    for t in world['kb'].tables.values():   # statistics say every table is small: the old forgiving form everywhere
+        monkeypatch.setitem(t, 'rows', 4)
+    text_eq = 0
+    for q, r in plain.items():
+        old = ask(world, q)
+        if any(f['op'] == 'eq' and world['kb'].column(f['column'])['type'] in query.TEXT_TYPES for f in old['intent']['filters']):
+            assert 'UPPER(TRIM(' in old['sql'] and 'UPPER(TRIM(' not in r['sql'], q; text_eq += 1
+        assert old['rows'] == r['rows'] and old['summary'] == r['summary'], q
+    assert text_eq >= 8
+
+
+def test_a_lower_case_value_still_matches_through_the_value_index_spellings(world):
+    """The value index stores 'NEXT'; typed or proposed in lower case, the plain-column filter still finds it."""
+    r = engine.run(dict(base='ORDMAS', measures=[dict(agg='count', column=None)], filters=[dict(column='BUYMAS.BUYERNAME', op='eq', value='next')]),
+                   world['kb'], world['sources'], stored=engine.stored_spellings(world['find']))
+    assert r['rows'] == [[2]] and 'UPPER' not in r['sql'] and set(r['binds'].values()) == {'next', 'NEXT'}

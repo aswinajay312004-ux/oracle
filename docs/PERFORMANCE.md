@@ -7,9 +7,10 @@ millions of rows, found what grows with table size, fixed what was in reach and 
 **Short version.** Every path that used to read whole tables now uses an index, a sample, statistics or a
 time limit. Lookups by order reference, record ID and explorer pages stay at about 0.1 s at any size.
 Discovery takes about 12 s whatever the size (it took 6.5 min at 3M orders). Anything that still has to read a
-whole big table is stopped at its time limit with a plain message. Nothing hangs. One slow path is left, in the
-Ask AI compiler (`UPPER(TRIM(col)) = :v`), and so is the cost of `contains` searches. See
-[Remaining risks](#remaining-risks).
+whole big table is stopped at its time limit with a plain message. Nothing hangs. The Ask AI compiler no longer
+filters big tables with `UPPER(TRIM(col)) = :v`: "size wise quantity for order X" now runs on the order-reference
+index ([Ask AI text filters](#ask-ai-text-filters-follow-up)). What is left is the cost of `contains` searches.
+See [Remaining risks](#remaining-risks).
 
 ## Test bed
 
@@ -74,6 +75,70 @@ Statement level, 3M orders (best of 3):
 | Newest 20,000 order references, `GROUP BY … ORDER BY MAX(id)` | 2.6 s | read through the key index instead |
 | COUNT(*) of ORDSIZE (24M) / ORDSTYLE (6M) | 0.84 s / 0.31 s | statistics (≈) |
 
+## Ask AI text filters (follow-up)
+
+Measured on a second disposable replica (`poppys-replica-big2`, port 1524) with `tests/oracle_replica.py --orders
+300000` (ORDMAS 300,004 · ORDSTYLE 600,005 · ORDSIZE 2,400,010 rows, statistics gathered), the same machine,
+best of 3, statement only unless marked. "Before" forces the old forgiving compile on every table.
+
+| Ask AI question | Before: `UPPER(TRIM(col)) = :b0` | After: plain column | Plan after |
+|---|--:|--:|---|
+| Size wise quantity for order HX/0123456 | 0.576 s (whole question 0.81 s) | **0.0017 s** (whole question 0.027 s) | `INDEX RANGE SCAN ORDMAS_DOCID_IX`, then `INDEX RANGE SCAN ORDSIZE_ORD_IX` |
+| How many orders for PK/26-27/S/9001 | 0.121 s | **0.0012 s** | `INDEX RANGE SCAN ORDMAS_DOCID_IX` |
+| Orders for PO-H123456 (buyer PO, no index) | 0.109 s | 0.033 s | full scan, cheaper predicate |
+| Value index build (14 columns, 40,027 values) | — | 0.87 s | runs in the background at startup |
+| Live lookups for 4 unknown codes in one question | — | 0.22 s | one budget for the question |
+
+Before, the plan was `TABLE ACCESS FULL ORDMAS` + `TABLE ACCESS FULL ORDSIZE` with
+`filter(UPPER(TRIM("T2"."DOCID"))=:B0)`; it grows with the table (9.6–11.3 s at 3M orders, above). After:
+
+```
+HASH GROUP BY
+  HASH JOIN OUTER
+    NESTED LOOPS
+      NESTED LOOPS
+        TABLE ACCESS BY INDEX ROWID BATCHED  ORDMAS
+          INDEX RANGE SCAN                   ORDMAS_DOCID_IX   access("T2"."DOCID"=:B0)
+        INDEX RANGE SCAN                     ORDSIZE_ORD_IX    access("T2"."ORDMASID"="T0"."ORDMASID")
+      TABLE ACCESS BY INDEX ROWID            ORDSIZE
+    TABLE ACCESS FULL                        SIZE_MAS          (5 rows)
+```
+
+How it compiles (`backend/insight/query.py` `_condition`):
+- **Big tables** (more than 100,000 rows by statistics, `FORGIVING_ROWS`), and tables without statistics, get the
+  plain column: `col = :b`, or `col IN (:as_given, :spellings…, :capitals)` when they differ. The finder already
+  returns the stored value, and the value index adds every stored spelling of the same letters (`Next`, `NEXT`),
+  so the answer is the same as the forgiving match whenever the value index knows the value. `CHAR` columns are
+  blank-padded (`RPAD(:b, n)`) as Oracle stores them; a value longer than the column matches nothing (`1 = 0`).
+- **Small tables** (masters such as buyers, colours, sizes) and the uploaded-files table keep the forgiving
+  `UPPER(TRIM(col)) = :b`: a full scan of them costs nothing.
+- `contains`, `starts with`, `is not` and comparisons are unchanged (no index can answer them anyway).
+- All demo questions give exactly the same rows with both forms (`tests/test_insight.py`); the compiled SQL on big
+  tables is checked in `tests/test_large_db.py`.
+
+Other follow-ups from the review:
+- **Value index at startup.** It is built in a background thread when the server starts and the index is empty
+  (`VALUE_INDEX_AT_STARTUP=0` in `.env.poppys` turns that off). `/api/knowledge` reports it as `value_index`:
+  `state` (off, building, ready, empty, offline, failed), `source`, start and finish time, columns, values and the
+  error, if any. A question asked while it builds waits at most 5 s and then goes on without it (codes are still
+  found live). A question builds it itself only as a fallback (startup build off, Oracle down at startup), and after
+  a build that failed or found nothing, at most once every 5 minutes.
+- **One lookup budget per question.** `LOOKUP_BUDGET_MS` (6 s) is shared by all code-like words of a question, not
+  given to each word. Full scans never use the last second of it, so a later word still gets its index probe.
+- **Code columns are never closed lists.** A column counts as a closed category list only when its values at the
+  last refresh were words (at most 10 % contain a digit, saved as `words` in `data/value_index_meta.json`). A short
+  buyer-PO column is still looked up live. A meta file from before this change closes nothing until the next refresh.
+- **`QUERY_TIMEOUT_S` bounds.** Accepted from 1 to 600 seconds. Anything else (`inf`, `nan`, `0`, a typo such as
+  `20000`) is refused with a startup log line (`Ignoring QUERY_TIMEOUT_S='inf': use a number of seconds from 1 to
+  600. Using the default, 20 s.`); before, `inf` stopped the app from starting.
+- **Explorer "Load more".** The filtered `COUNT(*)` runs once, on the first page, and is reused (also when it ran
+  out of time) by the following pages for 5 minutes; filtering again counts again, and every save clears it.
+- **"Count unavailable".** A count that could not be made is `total: null` with `rows_known: false` in
+  `/api/explorer/tables/…` and in each linked table of `/api/explorer/related/…`, so the page can say so.
+- **Replica builder.** Order references keep all digits past 10,000,000 orders (`HX/10000000`; `LPAD(n, 7)`
+  cut it to `HX/1000000`, a duplicate). Every replica also holds PK/26-27/S/9101 (3 lines × 5 sizes), the
+  existing order the real-Oracle acceptance test F opens; CI builds its replica with `--orders 20000`.
+
 ## What changed
 
 **Live lookups** (`backend/insight/service.py`: `lookup_plan`, `live_finder`). An order reference typed in
@@ -87,7 +152,7 @@ Lookups now run in three tiers, and a tier runs only when the ones before it fou
 On big tables, short category lists that the value index holds completely (1,000 values or fewer, such as
 sample type) are skipped. Order references and other codes are always probed, because orders saved in Axpert
 after the last refresh are not in the index. Number columns are probed only for all-digit words, and a word
-longer than the column is never looked up. All lookups for one word share a 6-second budget. The dictionary harvest now records the leading index columns
+longer than the column is never looked up. All lookups of one question share a 6-second budget (one per word before the follow-up above). The dictionary harvest now records the leading index columns
 (`ALL_IND_COLUMNS`), so the app knows which columns are cheap.
 
 **Value index** (`refresh_values`). The order header is always indexed, whatever its size. Before, ORDMAS
@@ -130,23 +195,18 @@ columns, distinct counts within 1.1 %, same links and references). Figures that 
 
 ## Remaining risks
 
-1. **Ask AI text filters cannot use indexes.** `backend/insight/query.py` `_condition` compiles text
-   equality as `UPPER(TRIM(col)) = :v`. "Size wise quantity for order X" takes 11 s at 3M orders. It would take
-   0.002 s with `DOCID = :v`. At the client's size (about 4× this replica) it will pass the 20 s limit, and
-   the user will see the timeout message for a question about a single order. Fixes, either one:
-   - (code) compile equality on text as `col IN (:as_stored, :capitals)`. The finder already returns the
-     stored value. Fall back to `UPPER(TRIM())` only for small tables, the same rule as the explorer;
-   - (DBA, no code change) a function-based index, `CREATE INDEX ORDMAS_DOCID_UT ON GARMENT_DEMO.ORDMAS
-     (UPPER(TRIM(DOCID)))`, and the same for `BONO`. POPPYS AI itself never creates objects in the client
-     database.
+1. **Ask AI text filters: fixed** (see [above](#ask-ai-text-filters-follow-up)). What remains: on a big table a
+   text filter matches the value as given, its value-index spellings and capitals. A value saved after the last
+   refresh in mixed case, or with trailing spaces, is not found there (it still is on small tables). The save
+   path's duplicate check (`backend/erp/catalog.py` `order_ref_exists`, not part of this work) still uses
+   `upper(trim(DOCID)) = :ref`, a full scan of ORDMAS for every order previewed or saved.
 2. **`contains` on very large tables** reads every row: 8–10 s on 24M rows. No index can answer
    `LIKE '%x%'`. It is stopped at the time limit with advice to use "is exactly". Oracle Text would be needed
    to make it fast.
 3. **Whole-table aggregates grow linearly.** "How many orders?" takes 1.5 s at 3M (`COUNT(DISTINCT ORDMASID)`).
    Expect about 6 s at 4× size. That is acceptable.
-4. **First question after install.** If the value index is empty, `_ensure_values` (`backend/main.py`)
-   builds it inside the first Ask AI request: 2.5 s here, maybe 10–20 s on the client. Run Setup → Refresh
-   once after installation.
+4. **First question after install: fixed.** The value index is built in the background at startup (2.5 s at 3M
+   orders, 0.9 s at 300k); its progress is in `/api/knowledge` → `value_index`.
 5. **Statistics.** Big-table counts and the small/big decision for lookups use `ALL_TABLES.NUM_ROWS`. Keep
    Oracle's nightly statistics job on. Stale statistics only make numbers approximate, because every lookup
    is time-limited anyway.
@@ -157,9 +217,11 @@ columns, distinct counts within 1.1 %, same links and references). Figures that 
 
 | Setting | Where | Default |
 |---|---|---|
-| Time limit per query | `QUERY_TIMEOUT_S` in `.env.poppys` (or `POPPYS_QUERY_TIMEOUT_S`) | 20 s |
-| Live lookup per probe / per word | `LOOKUP_MS`, `LOOKUP_BUDGET_MS` in `backend/insight/service.py` | 2.5 s / 6 s |
-| "Small table" for forgiving lookups | `SCAN_ROWS` | 100,000 rows |
+| Time limit per query | `QUERY_TIMEOUT_S` in `.env.poppys` (or `POPPYS_QUERY_TIMEOUT_S`), 1–600 s | 20 s |
+| Live lookup per probe / per question | `LOOKUP_MS`, `LOOKUP_BUDGET_MS` in `backend/insight/service.py` | 2.5 s / 6 s |
+| "Small table": forgiving `UPPER(TRIM())` in Ask AI filters and live lookups | `FORGIVING_ROWS` in `backend/insight/query.py` (`SCAN_ROWS` follows it) | 100,000 rows |
+| Value index built at startup | `VALUE_INDEX_AT_STARTUP` in `.env.poppys` | on (`0` turns it off) |
+| Explorer: filtered count reused by "Load more" | `FILTER_COUNT_TTL` in `backend/main.py` | 5 min |
 | Values kept per column | `VALUE_CAP` | 20,000 (newest when more) |
 | Detail tables left to live lookups | `BIG_TABLE` | 2,000,000 rows |
 | Explorer: statistics instead of COUNT | `BIG_ROWS` in `backend/main.py` | 1,000,000 rows |
@@ -180,6 +242,8 @@ POPPYS_ORACLE_DSN=127.0.0.1:1522/FREEPDB1 POPPYS_ORACLE_USER=POPPYS_APP POPPYS_O
 POPPYS_ORACLE_DSN=127.0.0.1:1522/FREEPDB1 POPPYS_DISCOVERY_PASSWORD=<garment pw> \
   .venv/bin/python scripts/discover_schema.py --out /tmp/discovery
 POPPYS_TEST_ORACLE=1 POPPYS_ORACLE_DSN=... .venv/bin/python -m pytest -q tests/test_oracle.py tests/test_oracle_insight.py tests/test_large_db.py
+# query plan of one Ask AI question: EXPLAIN PLAN FOR <the answer's SQL>, then
+# SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, NULL, 'BASIC +PREDICATE'))
 docker rm -f poppys-replica-big
 ```
 

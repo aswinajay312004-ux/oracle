@@ -3,6 +3,7 @@
     $env:POPPYS_TEST_ORACLE='1'; .\\.venv\\Scripts\\python.exe -m pytest -q tests\\test_oracle_insight.py
 """
 import os
+import oracledb
 import pytest
 from backend import oracle_store, local_store
 from backend.config import OWNER
@@ -47,7 +48,7 @@ def test_read_only_transaction_blocks_writes(live):
     kb, ex, d = live
     c = ex.conn.cursor()
     c.execute('SET TRANSACTION READ ONLY')
-    with pytest.raises(Exception):
+    with pytest.raises(oracledb.DatabaseError):   # an Oracle refusal (read-only transaction or no privilege), not any error
         c.execute(f'UPDATE {OWNER}.ORDMAS SET REMARKS = REMARKS WHERE 1 = 0')
     ex.conn.rollback()
     with pytest.raises(ValueError):

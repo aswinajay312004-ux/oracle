@@ -24,7 +24,7 @@ const sampled = (pct, rows) => {
   const n = rows * pct / 100;
   return fmt(n >= 10000 ? Math.round(n / 1000) * 1000 : Math.round(n), 0);
 };
-const sampleTip = (pct, what) => `title="${esc(`Measured on a block sample of about ${pct}% of the table${what ? `; ${what}` : ''}. Discovery reads a sample of very large tables so it finishes quickly.`)}"`;
+const sampleTip = (pct, what) => `title="${esc(`Measured on a block sample of about ${Number(Number(pct).toPrecision(2))}% of the table${what ? `; ${what}` : ''}. Discovery reads a sample of very large tables so it finishes quickly.`)}"`;
 const DISTINCT_FROM = { statistics: 'distinct values from Oracle statistics', sample: 'distinct values counted in the sample' };
 
 function evidence(c) {

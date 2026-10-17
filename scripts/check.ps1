@@ -32,14 +32,19 @@ function Skip-Missing($name) {
 }
 
 # Same patterns as scripts/check.sh (POSIX regex, read by git grep -f). Only file:line is printed, never the text.
+# The first one: a literal value for any *_PASSWORD key (any case) as KEY=v, KEY: v, {"KEY": "v"}, {'KEY': 'v'} or
+# os.environ['KEY'] = 'v'; references ($VAR, %VAR%, <placeholder>, ..., {x}) are not literals.
 $SecretPatterns = @(
-  '(ORACLE_PASSWORD|APP_USER_PASSWORD|POPPYS_REPLICA_PASSWORD|POPPYS_ORACLE_PASSWORD)[[:space:]]*[=:][[:space:]]*["'']?[A-Za-z0-9]'
+  '_[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]["'']?[]]?[[:space:]]*[=:][[:space:]]*["'']?[^][:space:]"''$<./\([+%{&|;,)*`=>]'
   '(^|[^A-Za-z0-9])Pp[0-9a-f]{48}([^0-9a-f]|$)'
   '[A-Za-z][A-Za-z0-9_$#]*/[A-Za-z0-9][^[:space:]/@"'']*@[A-Za-z0-9_.-]+(:[0-9]+)?/[A-Za-z0-9_.]+'
   '-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----'
   'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}'
 )
-$SecretFiles = '(^|/)\.env($|\.)|^data/|\.(pem|key|p12|pfx|jks|sqlite3?|db)$|(^|/)id_(rsa|dsa|ecdsa|ed25519)($|\.)'
+# Lines the first pattern finds that hold no secret (ORACLE_RANDOM_PASSWORD: 'true', None/null, type annotations).
+# The same text as SECRET_ALLOW in check.sh; it is read here by -cnotmatch, so it uses no POSIX [[:classes:]].
+$SecretAllow = '_[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]["'']?[]]? *[=:] *["'']?(true|false|none|null|str|bytes|SecretStr|True|False|None|TRUE|FALSE|NONE|NULL)(["'',}) =]|$)'
+$SecretFiles = '(^|/)[^/]*\.env($|\.)|^data/|\.(pem|key|p12|pfx|jks|sqlite3?|db)$|(^|/)id_(rsa|dsa|ecdsa|ed25519)($|\.)'
 
 function Test-Secrets {
   Write-Step 'Secret scan: no settings files, local data or passwords in the repository'
@@ -60,6 +65,7 @@ function Test-Secrets {
     # git grep exits 1 when nothing matches; anything above 1 is a broken scan, which must not pass as clean.
     if ($LASTEXITCODE -gt 1) { Write-Host '  the scan itself failed (git grep)'; $bad = $true }
   } finally { Remove-Item $list -Force }
+  $hits = @($hits | Where-Object { $_ -cnotmatch $SecretAllow })
   foreach ($h in $hits) { $where = ($h -split ':')[0..1] -join ':'; Write-Host "  possible password or key at $where"; $bad = $true }
   if ($bad) { return (Write-Fail 'remove the file or value above (passwords belong in .env.poppys, which git ignores).') }
   return (Write-Ok 'nothing secret is committed.')

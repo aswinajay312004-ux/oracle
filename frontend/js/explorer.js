@@ -91,6 +91,7 @@ async function load(more = false) {
         for (const [c, m] of Object.entries(cur.data.decoded)) data.decoded[c] = { ...m, ...(data.decoded[c] || {}) };
       }
       cur.data = data; cur.after = data.next_after; cur.error = null;
+      if (!more) cur.moreError = null;   // a fresh first page (e.g. coming back to the screen) may page on again
       lastPage.set(cur.table, data);
       if (cur !== current) return;   // a newer table or filter was opened meanwhile
       if (!filtered && !more && noteCount(cur.table, data.total, data.approx)) drawTables();

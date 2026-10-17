@@ -253,15 +253,16 @@ export function renderGraph(el, model, opts = {}) {
   };
   // Classic scrollbars (Windows): when this diagram's height decides whether the page needs a scrollbar, the
   // scrollbar changes the width, the width changes the height, the scrollbar goes away and it starts again,
-  // every frame. A width that flips straight back by about a scrollbar's width keeps the narrower layout,
-  // which fits either way, until the box really changes size.
-  let lastW = -1, prevW = -1, flipAt = 0, pair = null, laid = -1;
+  // every frame. When the width keeps flipping between two values about a scrollbar's width apart, the
+  // narrower layout is kept (it fits either way) until the box really changes size.
+  let lastW = -1, prevW = -1, flipAt = 0, flips = 0, pair = null, laid = -1;
   function refit() {
     if (!svg.isConnected) return stop();   // the box was removed or re-filled by someone else
     const w = el.clientWidth; if (!w || w === lastW) return;
     const first = lastW < 0 || !box.w, now = performance.now();
     if (pair && !pair.includes(w)) pair = null;
-    if (!pair && w === prevW && Math.abs(w - lastW) <= 30 && now - flipAt < 1000) pair = [Math.min(w, lastW), Math.max(w, lastW)];
+    flips = w === prevW && Math.abs(w - lastW) <= 30 && now - flipAt < 500 ? flips + 1 : 0;
+    if (!pair && flips >= 2) pair = [Math.min(w, lastW), Math.max(w, lastW)];
     prevW = lastW; lastW = w; flipAt = now;
     const use = pair ? pair[0] : w;
     if (use === laid && !first) return;
