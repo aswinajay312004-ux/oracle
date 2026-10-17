@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import json
 import re
 from .knowledge import norm
-from .query import compile_intent, QueryError, Dialect
+from .query import compile_intent, Dialect
 
 STOP = set('''a an the of for in on at to by with and or is are was were be been what which who whom whose how many much
 show list display give get find me all any each every per wise please do does did there their this that these those from

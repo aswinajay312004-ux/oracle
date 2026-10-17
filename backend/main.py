@@ -326,7 +326,7 @@ def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
     if not lower.endswith(readers.ACCEPT):
         raise HTTPException(415, 'Upload the buyer Excel file (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv, Excel XML/HTML export) or JSON data.')
     content = file.file.read(readers.MAX_BYTES + 1)
-    fmt = readers.sniff(content, name)
+    readers.sniff(content, name)   # rejects an empty, oversized or non-spreadsheet file (415) before anything is parsed
     fields = current_fields()
     parsed = workbooks.parse(content, store.templates(), name, fields); kind = 'excel'
     used = parsed.pop('templates_used', [])
