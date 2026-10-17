@@ -67,3 +67,16 @@ def test_commit_readback_retry_duplicate_and_quantity_reconciliation():
         cur.execute('''select sum(s.RQTY) from GARMENT_DEMO.ORDSIZE s join GARMENT_DEMO.ORDSTYLE l
             on s.ORDMASID=l.ORDMASID and s.SUB3_SUBNO=l.SUBNO where l.ORDMASID=:id''',id=orderid)
         assert cur.fetchone()[0]==10
+
+
+def test_live_readback_graph_matches_committed_rows():
+    from backend.erp import readback
+    d = draft()
+    with db.connect() as c:
+        p = db.plan(c, d['orders'], d['filehash'])
+    receipt = db.commit(d, p['hash'], 'integration-test')
+    m = db.current_mapping()
+    with db.connect() as c:
+        g = readback.graph(receipt, m, lambda t, pk, ids: db.live_rows(c, t, pk, ids, m))
+    assert g['verified'], [n['table'] for n in g['nodes'] if not n['verified']]
+    assert {'ORDMAS', 'ORDSTYLE', 'ORDSIZE'} <= {n['table'] for n in g['nodes']}

@@ -1,0 +1,152 @@
+"""End-to-end API workflow against the in-memory Oracle stand-in: upload → review → preview →
+approve → read-back graph, plus roles, four-eyes, duplicate protection and audit."""
+from copy import deepcopy
+import pytest
+from fastapi.testclient import TestClient
+from backend import local_store, main
+from fake_oracle import FakeOracle
+from fixtures import merch_bom, unknown_matrix, purchase_order_pdf
+
+PW = 'test-password-123'
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_store, 'DATA', tmp_path); monkeypatch.setattr(main, 'DATA', tmp_path)
+    oracle = FakeOracle(masters={'BUYMAS': [dict(id=7, label='TESTBUYER', cancelled=False)],
+                                 'UNITMAS': [dict(id=8, label='PCS', cancelled=False)]}).install(monkeypatch)
+    with TestClient(main.app) as c:
+        assert c.post('/api/setup', json={'username': 'admin', 'password': PW}).status_code == 200
+        yield c, oracle
+
+
+def login(c, user):
+    c.post('/api/logout'); assert c.post('/api/login', json={'username': user, 'password': PW}).status_code == 200
+
+
+def upload(c, content=None, name='bom.xlsx'):
+    r = c.post('/api/uploads', files={'file': (name, content or merch_bom())}); assert r.status_code == 200, r.text
+    return r.json()
+
+
+def ready(c, d, ref='TEST/ORD/1'):
+    o = deepcopy(d['orders'][0])
+    o.update(order_ref=ref, order_date='2026-10-17', quantity_basis='order_demo', lines=deepcopy(o['order_lines']))
+    o['accessories'] = [a for a in o['accessories'] if len(a['description']) <= 50]
+    r = c.put(f'/api/drafts/{d["id"]}', json={'version': d['version'], 'orders': [o]}); assert r.status_code == 200, r.text
+    r = c.post(f'/api/drafts/{d["id"]}/preview', json={'version': r.json()['version']}); assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_full_order_flow_with_readback_graph(env):
+    c, oracle = env
+    d = upload(c)
+    assert d['orders'][0]['exporter'] == 'POPPYS KNITWEAR PRIVATE LIMITED'
+    p = ready(c, d)
+    assert p['plan']['live'] and not p['plan']['errors'], p['plan']['errors']
+    r = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']})
+    assert r.status_code == 200, r.text
+    receipt = r.json(); assert receipt['orders'][0]['order_ref'] == 'TEST/ORD/1'
+    assert {row['table'] for row in receipt['rows']} >= {'ORDMAS', 'ORDSTYLE', 'ORDSIZE'}
+    assert any(x['table'] == 'BUYMAS' and x['pk'] == 7 for x in receipt['reused'])
+    g = c.get(f'/api/history/{d["id"]}/graph').json()
+    assert g['verified'] is True
+    tables = {n['table']: n for n in g['nodes']}
+    assert tables['ORDMAS']['kind'] == 'header' and tables['BUYMAS']['kind'] == 'master'
+    assert any(e['source'] == 'ORDSTYLE' and e['target'] == 'ORDSIZE' for e in g['edges'])
+    line = tables['ORDSTYLE']['records'][0]
+    assert line['decoded']['COMBO'] in ('WHITE AOP', 'PINK SOLID')
+    # retrying the same approval returns the stored receipt, never a second insert
+    again = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).json()
+    assert again['already_committed'] is True
+    assert c.put(f'/api/drafts/{d["id"]}', json={'version': p['version'] + 1, 'orders': []}).status_code == 409
+    # same file again is blocked at preview
+    p2 = ready(c, upload(c), ref='TEST/ORD/2')
+    assert any('already been committed' in e for e in p2['plan']['errors'])
+    assert [h['job_id'] for h in c.get('/api/history').json()] == [d['id']]
+    actions = [a['action'] for a in c.get('/api/audit').json()]
+    assert {'upload', 'edit', 'preview', 'approved_saved'} <= set(actions)
+    edit = next(a for a in c.get('/api/audit').json() if a['action'] == 'edit' and a['target'] == d['id'])
+    assert any(ch['field'].endswith('order_ref') and ch['after'] == 'TEST/ORD/1' for ch in edit['detail']['changes'])
+
+
+def test_stale_or_changed_preview_cannot_be_approved(env):
+    c, _ = env
+    d = upload(c); p = ready(c, d)
+    o = deepcopy(p['orders'][0]); o['description'] = 'CHANGED'
+    e = c.put(f'/api/drafts/{d["id"]}', json={'version': p['version'], 'orders': [o]}).json()
+    r = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': e['version'], 'plan_hash': p['plan']['hash']})
+    assert r.status_code == 409
+
+
+def test_roles_and_four_eyes(env):
+    c, _ = env
+    for user, role in (('op', 'operator'), ('appr', 'approver'), ('look', 'viewer')):
+        assert c.post('/api/users', json={'username': user, 'password': PW, 'role': role}).status_code == 200
+    assert c.put('/api/settings', json={'allow_self_approval': False}).status_code == 200
+    login(c, 'look')
+    assert c.post('/api/uploads', files={'file': ('x.xlsx', merch_bom())}).status_code == 403
+    login(c, 'op')
+    d = upload(c); p = ready(c, d)
+    assert c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).status_code == 403
+    assert c.post('/api/mapping/status', json={'table': 'ORDFAB', 'status': 'verified'}).status_code == 403
+    assert c.get('/api/users').status_code == 403
+    login(c, 'appr')
+    assert c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).status_code == 200
+    # the uploader approving their own upload is refused while four-eyes is on
+    d2 = upload(c, merch_bom(sample=(1, 1, 1, 1))); p2 = ready(c, d2, ref='TEST/ORD/9')
+    assert c.post(f'/api/drafts/{d2["id"]}/accept', json={'version': p2['version'], 'plan_hash': p2['plan']['hash']}).status_code == 403
+    login(c, 'admin')
+    assert c.patch('/api/users/admin', json={'role': 'viewer'}).status_code == 409   # last admin protected
+
+
+def test_bom_rows_saved_only_after_admin_verifies_mapping(env):
+    c, oracle = env
+    p = ready(c, upload(c))
+    assert {r['table'] for r in p['plan']['reference_only']} == {'ORDFAB', 'ORDYARN', 'ORDACC'}
+    m = c.get('/api/mapping').json()
+    for t in m['tables']:
+        if t['table'] in ('ORDFAB', 'ORDYARN', 'ORDACC'):
+            assert c.post('/api/mapping/status', json={'table': t['table'], 'status': 'verified'}).status_code == 200
+            for col in t['columns']:
+                if not col['fixed'] and col['status'] == 'proposed' and (not col['master'] or col['master_available']):
+                    assert c.post('/api/mapping/status', json={'table': t['table'], 'column': col['column'], 'status': 'verified'}).status_code == 200
+    d = upload(c, merch_bom(sample=(2, 2, 2, 2))); p = ready(c, d, ref='TEST/BOM/1')
+    assert not p['plan']['errors'], p['plan']['errors']
+    r = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).json()
+    saved = {row['table'] for row in r['rows']}
+    assert {'ORDFAB', 'ORDYARN', 'ORDACC'} <= saved
+    g = c.get(f'/api/history/{d["id"]}/graph').json()
+    assert g['verified'] and any(e['source'] == 'ORDFAB' and e['target'] == 'ORDYARN' for e in g['edges'])
+    assert any(a['action'] == 'mapping_status' for a in c.get('/api/audit').json())
+
+
+def test_mapping_new_layout_saves_template_for_next_upload(env):
+    c, _ = env
+    d = upload(c, unknown_matrix(), 'zen.xlsx')
+    assert d['orders'] == [] and d['suggestion']['definition']['table']['type'] == 'matrix'
+    r = c.post(f'/api/drafts/{d["id"]}/map', json={'version': d['version'], 'sheet': d['suggestion']['sheet'],
+                                                   'definition': d['suggestion']['definition'], 'save_template': True, 'template_name': 'Zen kids PO'})
+    assert r.status_code == 200, r.text
+    assert r.json()['orders'][0]['buyer'] == 'ZEN KIDS'
+    nxt = upload(c, unknown_matrix(), 'zen-2.xlsx')
+    assert nxt['format'] == 'Template: Zen kids PO' and nxt['orders'][0]['style'] == 'ZK-55'
+    assert c.get('/api/templates').json()[0]['uses'] == 1
+
+
+def test_pdf_upload(env):
+    c, _ = env
+    d = upload(c, purchase_order_pdf(), 'po.pdf')
+    assert d['kind'] == 'pdf' and d['orders'][0]['buyer'] == 'BABY SHOP'
+
+
+def test_offline_preview_is_marked_and_cannot_be_approved(env, monkeypatch):
+    c, _ = env
+    from backend import oracle_store
+    def down():
+        raise RuntimeError('down')
+    monkeypatch.setattr(oracle_store, 'connect', down)
+    d = upload(c); p = ready(c, d)
+    assert p['plan']['live'] is False and 'Oracle is not connected' in p['plan']['warnings'][0]
+    assert c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).status_code == 409
+    assert c.get('/api/health').json()['database']['connected'] is False

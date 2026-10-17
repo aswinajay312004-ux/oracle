@@ -1,0 +1,130 @@
+# POPPYS AI — Windows setup and run (local Oracle, fully offline)
+
+Everything runs on the laptop: the browser UI, the Python server, document reading, the optional local AI (Ollama) and the Oracle database in Docker. No internet or cloud API is used at runtime.
+
+## 0. What you need once
+
+| Item | Check |
+|---|---|
+| Docker Desktop running, container `oracle26ai` healthy | `docker ps --filter name=oracle26ai` |
+| Python 3.11+ | `py -3 --version` |
+| Git checkout of this repository | `git pull` on branch `claude/loving-mccarthy-9p0do9` |
+| Optional: Ollama for AI layout suggestions | `ollama --version` |
+
+## 1. Get the latest code
+
+```powershell
+cd C:\path\to\oracle
+git fetch origin
+git checkout claude/loving-mccarthy-9p0do9
+git pull
+```
+
+## 2. One-time setup (safe to run again)
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\setup.ps1
+```
+
+`setup.ps1` does four things:
+
+1. Creates `.venv` and installs the pinned packages.
+2. If `.env.poppys` does not exist yet, runs `scripts\bootstrap_local.py`. That script creates the limited `POPPYS_APP` account and the audit tables (`PP_IMPORT_LOG`, `PP_ORDER_KEYS`, `PP_WRITE_LOCK`, `PP_RECORD_SEQ`). **It never resets or deletes GARMENT_DEMO data.** If you already ran it earlier (your demo order `pk_123` exists), it is skipped.
+3. Runs `scripts\grant_bom_tables.py`. This grants `POPPYS_APP` read access to all GARMENT_DEMO tables (for the Database screen and read-back) and INSERT on `ORDFAB`, `ORDYARN` and `ORDACC`. The app still writes these only after you verify their mapping.
+4. Runs `scripts\check_oracle.py`, which prints what the app can see and write.
+
+## 3. Discover your real schema (read-only)
+
+```powershell
+.\.venv\Scripts\python.exe scripts\discover_schema.py
+```
+
+It asks for the **GARMENT_DEMO** password. Type it at the prompt; it is not stored anywhere. The script runs only `SELECT` statements and writes `data\schema_discovery.json` and `data\schema_discovery.md`. Both are git-ignored and never pushed. The results cover:
+
+- columns
+- PK/FK/unique constraints
+- triggers and their bodies
+- sequences
+- fill rates and sample values
+- whether child `SUBNO` values really link to `ORDSTYLE.SUBNO` within the same `ORDMASID`
+- whether reference columns (e.g. `ORDFAB.COLOUR`) resolve in the master tables
+
+## 4. Start the app
+
+```powershell
+.\start.ps1
+```
+
+Open **http://127.0.0.1:8008**. The first time, create the administrator account. Under **Setup → Users & roles** you can add:
+
+- **operators**: upload and prepare orders
+- **approvers**: save to Oracle
+- **viewers**: read-only access
+
+## 5. Optional: local AI
+
+```powershell
+ollama pull qwen2.5:7b
+ollama serve
+```
+
+The status light turns green. The AI only *suggests* where order fields sit in an unfamiliar layout, and explains drafts. It never writes SQL or saves. Everything else works without it.
+
+## 6. Verify fabric, yarn and accessory mappings (one time, admin)
+
+Out of the box, POPPYS AI saves the order header, style/colour lines and size quantities: `ORDMAS`, `ORDSTYLE` and `ORDSIZE`, plus masters. Fabric, yarn and accessory rows are read, calculated and validated, then shown as **"reference only — not saved"** until you verify their columns.
+
+To verify them, open **Setup → Database mapping** and compare each proposed column with the discovery evidence (fill %, example values, link match %). Then set the table, and each column you agree with, to **Verified**. Every change is recorded in the audit history. Columns whose master table is not in GARMENT_DEMO (fabric quality, yarn count, accessory item) cannot be verified and stay unwritten.
+
+## 7. Demo walkthrough
+
+1. **New order** → drop `Merch Dept Worked Manual Excel (2).xlsx`, or a buyer PDF.
+2. **Auto-read** shows what was found: header, sizes, packs, fabric kg and trim tables.
+3. **Review**: fill the order reference (OC No) and confirmation date, and choose the quantity source. Each question in the right panel has a **Fix** button that jumps to the field.
+4. **Check & prepare** validates against Oracle masters, existing orders, units, totals, column sizes and relationships.
+5. **Approve** shows every value, its Oracle `TABLE.COLUMN`, and the Excel cell it came from. **Approve & save to Oracle** writes everything in one transaction and reads every row back.
+6. **Saved** shows the table flowchart. Click any table to see the exact rows Oracle returned just now.
+
+## 8. Confirm in SQL Developer (as GARMENT_DEMO)
+
+Replace `PK/26-27/S/9001` with your order reference:
+
+```sql
+SELECT ORDMASID, DOCID, BUYER, STYLENO, BONO, ODATE, OQTY FROM ORDMAS WHERE DOCID = 'PK/26-27/S/9001';
+
+SELECT s.SNO, s.SUBNO, c.COLOR, s.ORDQTY, s.SHIPDT
+  FROM ORDSTYLE s LEFT JOIN COLORMAS c ON c.COLORMASID = s.COMBO
+ WHERE s.ORDMASID = (SELECT ORDMASID FROM ORDMAS WHERE DOCID = 'PK/26-27/S/9001') ORDER BY s.SNO;
+
+SELECT z.SUB3_SUBNO, m.SIZES, z.RQTY, z.PQTY
+  FROM ORDSIZE z JOIN SIZE_MAS m ON m.SIZE_MASID = z.GSIZE
+ WHERE z.ORDMASID = (SELECT ORDMASID FROM ORDMAS WHERE DOCID = 'PK/26-27/S/9001') ORDER BY z.SUB3_SUBNO, z.ORDSIZEROW;
+
+-- After verifying the BOM mapping:
+SELECT FSUBNO, DIA, FGSM, CADWT, COLPCS, POQTY FROM ORDFAB WHERE ORDMASID = (SELECT ORDMASID FROM ORDMAS WHERE DOCID = 'PK/26-27/S/9001');
+
+-- Audit receipt written in the same transaction:
+SELECT JOBID, APPROVER, COMMITTED_AT FROM POPPYS_APP.PP_IMPORT_LOG ORDER BY COMMITTED_AT DESC;
+```
+
+The same records are visible in the app under **Database** → *Find an order by record ID* (use the ORDMASID shown after saving).
+
+## 9. Tests
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+$env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q     # adds live Oracle tests (labelled TEST rows)
+```
+
+## Troubleshooting
+
+| Message | Fix |
+|---|---|
+| "Oracle offline" light | Start Docker Desktop, then `docker start oracle26ai`; wait until it is healthy, then refresh |
+| "Local Oracle configuration is missing" | Run `.\setup.ps1` (creates `.env.poppys`) |
+| "POPPYS_APP already exists. Restore its .env.poppys" | The account was created before but the config file is gone. Copy the old `.env.poppys` back. The password is never reset automatically |
+| "POPPYS AI has no INSERT permission" | Run `.\.venv\Scripts\python.exe scripts\grant_bom_tables.py` |
+| "formula cells have no calculated value" | Open the workbook in Excel, save, upload again |
+| "This exact workbook has already been committed" | Duplicate protection: that file was saved before. See **Saved orders** |
+| Port 8008 busy | Close the other POPPYS window, or end the old `python` process in Task Manager |

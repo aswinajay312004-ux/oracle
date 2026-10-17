@@ -1,0 +1,1490 @@
+{
+ "cases": {
+  "ok": [
+   {
+    "buyer": "NEXT",
+    "style": "N44441",
+    "description": "BODYSUIT",
+    "po_number": "VG1",
+    "order_ref": "S-1",
+    "ship_date": "2026-11-01",
+    "order_date": "2026-10-17",
+    "season": "",
+    "merch": "RAJ",
+    "sample_type": "DEVELOPMENT SAMPLE",
+    "pieces_per_unit": 1,
+    "quantity_basis": "sample",
+    "lines": [
+     {
+      "label": "G1",
+      "color": "WHITE",
+      "declared_total": 10,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 4
+       },
+       {
+        "size": "L",
+        "quantity": 6
+       }
+      ]
+     },
+     {
+      "label": "G2",
+      "color": "PINK",
+      "declared_total": null,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 2
+       },
+       {
+        "size": "XL",
+        "quantity": 3
+       }
+      ]
+     }
+    ],
+    "provenance": {},
+    "warnings": [],
+    "order_lines": [],
+    "sample_lines": []
+   }
+  ],
+  "two": [
+   {
+    "buyer": "NEXT",
+    "style": "N44441",
+    "description": "BODYSUIT",
+    "po_number": "VG1",
+    "order_ref": "S-1",
+    "ship_date": "2026-11-01",
+    "order_date": "2026-10-17",
+    "season": "",
+    "merch": "RAJ",
+    "sample_type": "DEVELOPMENT SAMPLE",
+    "pieces_per_unit": 1,
+    "quantity_basis": "sample",
+    "lines": [
+     {
+      "label": "G1",
+      "color": "WHITE",
+      "declared_total": 10,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 4
+       },
+       {
+        "size": "L",
+        "quantity": 6
+       }
+      ]
+     },
+     {
+      "label": "G2",
+      "color": "PINK",
+      "declared_total": null,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 2
+       },
+       {
+        "size": "XL",
+        "quantity": 3
+       }
+      ]
+     }
+    ],
+    "provenance": {},
+    "warnings": [],
+    "order_lines": [],
+    "sample_lines": []
+   },
+   {
+    "buyer": "NEW BUYER",
+    "style": "N44441",
+    "description": "BODYSUIT",
+    "po_number": "VG1",
+    "order_ref": "S-2",
+    "ship_date": "2026-11-01",
+    "order_date": "2026-10-17",
+    "season": "",
+    "merch": "",
+    "sample_type": "DEVELOPMENT SAMPLE",
+    "pieces_per_unit": 3,
+    "quantity_basis": "order_demo",
+    "lines": [
+     {
+      "label": "G1",
+      "color": "WHITE",
+      "declared_total": 10,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 4
+       },
+       {
+        "size": "L",
+        "quantity": 6
+       }
+      ]
+     },
+     {
+      "label": "G2",
+      "color": "PINK",
+      "declared_total": null,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 2
+       },
+       {
+        "size": "XL",
+        "quantity": 3
+       }
+      ]
+     }
+    ],
+    "provenance": {},
+    "warnings": [],
+    "order_lines": [],
+    "sample_lines": []
+   }
+  ],
+  "errors": [
+   {
+    "buyer": "NEXT",
+    "style": "N44441",
+    "description": "BODYSUIT",
+    "po_number": "",
+    "order_ref": "S-1",
+    "ship_date": "2026-01-01",
+    "order_date": "bad",
+    "season": "",
+    "merch": "RAJ",
+    "sample_type": "",
+    "pieces_per_unit": 1,
+    "quantity_basis": "x",
+    "lines": [
+     {
+      "label": "G1",
+      "color": "WHITE",
+      "declared_total": 10,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 4
+       },
+       {
+        "size": "L",
+        "quantity": 6
+       }
+      ]
+     },
+     {
+      "label": "G2",
+      "color": "PINK",
+      "declared_total": null,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 2
+       },
+       {
+        "size": "XL",
+        "quantity": 3
+       }
+      ]
+     }
+    ],
+    "provenance": {},
+    "warnings": [],
+    "order_lines": [],
+    "sample_lines": []
+   },
+   {
+    "buyer": "NEXT",
+    "style": "N44441",
+    "description": "BODYSUIT",
+    "po_number": "VG1",
+    "order_ref": "s-1",
+    "ship_date": "2026-11-01",
+    "order_date": "2026-10-17",
+    "season": "",
+    "merch": "RAJ",
+    "sample_type": "DEVELOPMENT SAMPLE",
+    "pieces_per_unit": 1,
+    "quantity_basis": "sample",
+    "lines": [
+     {
+      "label": "",
+      "color": "OLD",
+      "declared_total": 99,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": -1
+       },
+       {
+        "size": "m",
+        "quantity": 1.5
+       }
+      ]
+     }
+    ],
+    "provenance": {},
+    "warnings": [],
+    "order_lines": [],
+    "sample_lines": []
+   }
+  ],
+  "exists": [
+   {
+    "buyer": "NEXT",
+    "style": "N44441",
+    "description": "BODYSUIT",
+    "po_number": "VG1",
+    "order_ref": "EXIST",
+    "ship_date": "2026-11-01",
+    "order_date": "2026-10-17",
+    "season": "",
+    "merch": "RAJ",
+    "sample_type": "DEVELOPMENT SAMPLE",
+    "pieces_per_unit": 1,
+    "quantity_basis": "sample",
+    "lines": [
+     {
+      "label": "G1",
+      "color": "WHITE",
+      "declared_total": 10,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 4
+       },
+       {
+        "size": "L",
+        "quantity": 6
+       }
+      ]
+     },
+     {
+      "label": "G2",
+      "color": "PINK",
+      "declared_total": null,
+      "sizes": [
+       {
+        "size": "M",
+        "quantity": 2
+       },
+       {
+        "size": "XL",
+        "quantity": 3
+       }
+      ]
+     }
+    ],
+    "provenance": {},
+    "warnings": [],
+    "order_lines": [],
+    "sample_lines": []
+   }
+  ]
+ },
+ "out": {
+  "ok": {
+   "operations": [
+    {
+     "key": "m1",
+     "table": "BUYMAS",
+     "action": "reuse",
+     "values": {
+      "BUYMASID": 11,
+      "BUYERNAME": "NEXT"
+     },
+     "source": {}
+    },
+    {
+     "key": "m2",
+     "table": "STYLENUM",
+     "action": "insert",
+     "values": {
+      "STYLENUMID": "$m2",
+      "STYLENUMBER": "N44441"
+     },
+     "source": {}
+    },
+    {
+     "key": "m3",
+     "table": "STYLEMAS",
+     "action": "insert",
+     "values": {
+      "STYLEMASID": "$m3",
+      "SDESC": "BODYSUIT"
+     },
+     "source": {}
+    },
+    {
+     "key": "m4",
+     "table": "UNITMAS",
+     "action": "reuse",
+     "values": {
+      "UNITMASID": 41,
+      "UOM": "PCS"
+     },
+     "source": {
+      "derivation": "Quantities converted to pieces using reviewed pieces_per_unit"
+     }
+    },
+    {
+     "key": "m5",
+     "table": "MERCHMAS",
+     "action": "insert",
+     "values": {
+      "MERCHMASID": "$m5",
+      "NAME": "RAJ"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1",
+     "table": "ORDMAS",
+     "action": "insert",
+     "values": {
+      "ORDMASID": "$o1",
+      "DOCID": "S-1",
+      "BUYER": 11,
+      "STYLENO": "$m2",
+      "STYLEDESC": "$m3",
+      "BONO": "VG1",
+      "ODATE": "2026-10-17",
+      "UOM": 41,
+      "SAMPLETYPE": "DEVELOPMENT SAMPLE",
+      "ORDCATEGORY": "SAMPLE ORDER",
+      "REMARKS": "POPPYS demo sample import; quantity basis: sample",
+      "MERCH": "$m5",
+      "OQTY": 15
+     },
+     "source": {}
+    },
+    {
+     "key": "m6",
+     "table": "COLORMAS",
+     "action": "insert",
+     "values": {
+      "COLORMASID": "$m6",
+      "COLOR": "WHITE"
+     },
+     "source": {}
+    },
+    {
+     "key": "m7",
+     "table": "SIZE_MAS",
+     "action": "reuse",
+     "values": {
+      "SIZE_MASID": 21,
+      "SIZES": "M"
+     },
+     "source": {}
+    },
+    {
+     "key": "m8",
+     "table": "SIZE_MAS",
+     "action": "reuse",
+     "values": {
+      "SIZE_MASID": 22,
+      "SIZES": "L"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o1l1",
+      "ORDMASID": "$o1",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "S-1:1",
+      "COMBO": "$m6",
+      "ORDQTY": 10,
+      "PRODQTY": 10,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l1s1",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:1",
+      "GSIZE": 21,
+      "RQTY": 4,
+      "PQTY": 4,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l1s2",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:1",
+      "GSIZE": 22,
+      "RQTY": 6,
+      "PQTY": 6,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "m9",
+     "table": "COLORMAS",
+     "action": "insert",
+     "values": {
+      "COLORMASID": "$m9",
+      "COLOR": "PINK"
+     },
+     "source": {}
+    },
+    {
+     "key": "m10",
+     "table": "SIZE_MAS",
+     "action": "insert",
+     "values": {
+      "SIZE_MASID": "$m10",
+      "SIZES": "XL"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o1l2",
+      "ORDMASID": "$o1",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "S-1:2",
+      "COMBO": "$m9",
+      "ORDQTY": 5,
+      "PRODQTY": 5,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l2s1",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:2",
+      "GSIZE": 21,
+      "RQTY": 2,
+      "PQTY": 2,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l2s2",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:2",
+      "GSIZE": "$m10",
+      "RQTY": 3,
+      "PQTY": 3,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    }
+   ],
+   "errors": [],
+   "warnings": [],
+   "totals": {
+    "orders": 1,
+    "lines": 2,
+    "pieces": 15
+   }
+  },
+  "two": {
+   "operations": [
+    {
+     "key": "m1",
+     "table": "BUYMAS",
+     "action": "reuse",
+     "values": {
+      "BUYMASID": 11,
+      "BUYERNAME": "NEXT"
+     },
+     "source": {}
+    },
+    {
+     "key": "m2",
+     "table": "STYLENUM",
+     "action": "insert",
+     "values": {
+      "STYLENUMID": "$m2",
+      "STYLENUMBER": "N44441"
+     },
+     "source": {}
+    },
+    {
+     "key": "m3",
+     "table": "STYLEMAS",
+     "action": "insert",
+     "values": {
+      "STYLEMASID": "$m3",
+      "SDESC": "BODYSUIT"
+     },
+     "source": {}
+    },
+    {
+     "key": "m4",
+     "table": "UNITMAS",
+     "action": "reuse",
+     "values": {
+      "UNITMASID": 41,
+      "UOM": "PCS"
+     },
+     "source": {
+      "derivation": "Quantities converted to pieces using reviewed pieces_per_unit"
+     }
+    },
+    {
+     "key": "m5",
+     "table": "MERCHMAS",
+     "action": "insert",
+     "values": {
+      "MERCHMASID": "$m5",
+      "NAME": "RAJ"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1",
+     "table": "ORDMAS",
+     "action": "insert",
+     "values": {
+      "ORDMASID": "$o1",
+      "DOCID": "S-1",
+      "BUYER": 11,
+      "STYLENO": "$m2",
+      "STYLEDESC": "$m3",
+      "BONO": "VG1",
+      "ODATE": "2026-10-17",
+      "UOM": 41,
+      "SAMPLETYPE": "DEVELOPMENT SAMPLE",
+      "ORDCATEGORY": "SAMPLE ORDER",
+      "REMARKS": "POPPYS demo sample import; quantity basis: sample",
+      "MERCH": "$m5",
+      "OQTY": 15
+     },
+     "source": {}
+    },
+    {
+     "key": "m6",
+     "table": "COLORMAS",
+     "action": "insert",
+     "values": {
+      "COLORMASID": "$m6",
+      "COLOR": "WHITE"
+     },
+     "source": {}
+    },
+    {
+     "key": "m7",
+     "table": "SIZE_MAS",
+     "action": "reuse",
+     "values": {
+      "SIZE_MASID": 21,
+      "SIZES": "M"
+     },
+     "source": {}
+    },
+    {
+     "key": "m8",
+     "table": "SIZE_MAS",
+     "action": "reuse",
+     "values": {
+      "SIZE_MASID": 22,
+      "SIZES": "L"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o1l1",
+      "ORDMASID": "$o1",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "S-1:1",
+      "COMBO": "$m6",
+      "ORDQTY": 10,
+      "PRODQTY": 10,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l1s1",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:1",
+      "GSIZE": 21,
+      "RQTY": 4,
+      "PQTY": 4,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l1s2",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:1",
+      "GSIZE": 22,
+      "RQTY": 6,
+      "PQTY": 6,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "m9",
+     "table": "COLORMAS",
+     "action": "insert",
+     "values": {
+      "COLORMASID": "$m9",
+      "COLOR": "PINK"
+     },
+     "source": {}
+    },
+    {
+     "key": "m10",
+     "table": "SIZE_MAS",
+     "action": "insert",
+     "values": {
+      "SIZE_MASID": "$m10",
+      "SIZES": "XL"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o1l2",
+      "ORDMASID": "$o1",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "S-1:2",
+      "COMBO": "$m9",
+      "ORDQTY": 5,
+      "PRODQTY": 5,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l2s1",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:2",
+      "GSIZE": 21,
+      "RQTY": 2,
+      "PQTY": 2,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l2s2",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:2",
+      "GSIZE": "$m10",
+      "RQTY": 3,
+      "PQTY": 3,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "m11",
+     "table": "BUYMAS",
+     "action": "insert",
+     "values": {
+      "BUYMASID": "$m11",
+      "BUYERNAME": "NEW BUYER"
+     },
+     "source": {}
+    },
+    {
+     "key": "o2",
+     "table": "ORDMAS",
+     "action": "insert",
+     "values": {
+      "ORDMASID": "$o2",
+      "DOCID": "S-2",
+      "BUYER": "$m11",
+      "STYLENO": "$m2",
+      "STYLEDESC": "$m3",
+      "BONO": "VG1",
+      "ODATE": "2026-10-17",
+      "UOM": 41,
+      "SAMPLETYPE": "DEVELOPMENT SAMPLE",
+      "ORDCATEGORY": "SAMPLE ORDER",
+      "REMARKS": "POPPYS demo sample import; quantity basis: order_demo",
+      "OQTY": 45
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l1",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o2l1",
+      "ORDMASID": "$o2",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "S-2:1",
+      "COMBO": "$m6",
+      "ORDQTY": 30,
+      "PRODQTY": 30,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l1s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o2l1s1",
+      "ORDMASID": "$o2",
+      "SUB3_SUBNO": "S-2:1",
+      "GSIZE": 21,
+      "RQTY": 12,
+      "PQTY": 12,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l1s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o2l1s2",
+      "ORDMASID": "$o2",
+      "SUB3_SUBNO": "S-2:1",
+      "GSIZE": 22,
+      "RQTY": 18,
+      "PQTY": 18,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l2",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o2l2",
+      "ORDMASID": "$o2",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "S-2:2",
+      "COMBO": "$m9",
+      "ORDQTY": 15,
+      "PRODQTY": 15,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l2s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o2l2s1",
+      "ORDMASID": "$o2",
+      "SUB3_SUBNO": "S-2:2",
+      "GSIZE": 21,
+      "RQTY": 6,
+      "PQTY": 6,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l2s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o2l2s2",
+      "ORDMASID": "$o2",
+      "SUB3_SUBNO": "S-2:2",
+      "GSIZE": "$m10",
+      "RQTY": 9,
+      "PQTY": 9,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    }
+   ],
+   "errors": [],
+   "warnings": [
+    "Order 2: source order quantities will be imported as a DEMO SAMPLE order."
+   ],
+   "totals": {
+    "orders": 2,
+    "lines": 4,
+    "pieces": 60
+   }
+  },
+  "errors": {
+   "operations": [
+    {
+     "key": "m1",
+     "table": "BUYMAS",
+     "action": "reuse",
+     "values": {
+      "BUYMASID": 11,
+      "BUYERNAME": "NEXT"
+     },
+     "source": {}
+    },
+    {
+     "key": "m2",
+     "table": "STYLENUM",
+     "action": "insert",
+     "values": {
+      "STYLENUMID": "$m2",
+      "STYLENUMBER": "N44441"
+     },
+     "source": {}
+    },
+    {
+     "key": "m3",
+     "table": "STYLEMAS",
+     "action": "insert",
+     "values": {
+      "STYLEMASID": "$m3",
+      "SDESC": "BODYSUIT"
+     },
+     "source": {}
+    },
+    {
+     "key": "m4",
+     "table": "UNITMAS",
+     "action": "reuse",
+     "values": {
+      "UNITMASID": 41,
+      "UOM": "PCS"
+     },
+     "source": {
+      "derivation": "Quantities converted to pieces using reviewed pieces_per_unit"
+     }
+    },
+    {
+     "key": "m5",
+     "table": "MERCHMAS",
+     "action": "insert",
+     "values": {
+      "MERCHMASID": "$m5",
+      "NAME": "RAJ"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1",
+     "table": "ORDMAS",
+     "action": "insert",
+     "values": {
+      "ORDMASID": "$o1",
+      "DOCID": "S-1",
+      "BUYER": 11,
+      "STYLENO": "$m2",
+      "STYLEDESC": "$m3",
+      "BONO": "",
+      "ODATE": null,
+      "UOM": 41,
+      "SAMPLETYPE": "",
+      "ORDCATEGORY": "SAMPLE ORDER",
+      "REMARKS": "POPPYS demo sample import; quantity basis: x",
+      "MERCH": "$m5",
+      "OQTY": 15
+     },
+     "source": {}
+    },
+    {
+     "key": "m6",
+     "table": "COLORMAS",
+     "action": "insert",
+     "values": {
+      "COLORMASID": "$m6",
+      "COLOR": "WHITE"
+     },
+     "source": {}
+    },
+    {
+     "key": "m7",
+     "table": "SIZE_MAS",
+     "action": "reuse",
+     "values": {
+      "SIZE_MASID": 21,
+      "SIZES": "M"
+     },
+     "source": {}
+    },
+    {
+     "key": "m8",
+     "table": "SIZE_MAS",
+     "action": "reuse",
+     "values": {
+      "SIZE_MASID": 22,
+      "SIZES": "L"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o1l1",
+      "ORDMASID": "$o1",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "",
+      "SUBNO": "S-1:1",
+      "COMBO": "$m6",
+      "ORDQTY": 10,
+      "PRODQTY": 10,
+      "SHIPDT": "2026-01-01",
+      "PUOM": 41,
+      "SNO": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l1s1",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:1",
+      "GSIZE": 21,
+      "RQTY": 4,
+      "PQTY": 4,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l1s2",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:1",
+      "GSIZE": 22,
+      "RQTY": 6,
+      "PQTY": 6,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "m9",
+     "table": "COLORMAS",
+     "action": "insert",
+     "values": {
+      "COLORMASID": "$m9",
+      "COLOR": "PINK"
+     },
+     "source": {}
+    },
+    {
+     "key": "m10",
+     "table": "SIZE_MAS",
+     "action": "insert",
+     "values": {
+      "SIZE_MASID": "$m10",
+      "SIZES": "XL"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o1l2",
+      "ORDMASID": "$o1",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "",
+      "SUBNO": "S-1:2",
+      "COMBO": "$m9",
+      "ORDQTY": 5,
+      "PRODQTY": 5,
+      "SHIPDT": "2026-01-01",
+      "PUOM": 41,
+      "SNO": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l2s1",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:2",
+      "GSIZE": 21,
+      "RQTY": 2,
+      "PQTY": 2,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l2s2",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "S-1:2",
+      "GSIZE": "$m10",
+      "RQTY": 3,
+      "PQTY": 3,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "o2",
+     "table": "ORDMAS",
+     "action": "insert",
+     "values": {
+      "ORDMASID": "$o2",
+      "DOCID": "s-1",
+      "BUYER": 11,
+      "STYLENO": "$m2",
+      "STYLEDESC": "$m3",
+      "BONO": "VG1",
+      "ODATE": "2026-10-17",
+      "UOM": 41,
+      "SAMPLETYPE": "DEVELOPMENT SAMPLE",
+      "ORDCATEGORY": "SAMPLE ORDER",
+      "REMARKS": "POPPYS demo sample import; quantity basis: sample",
+      "MERCH": "$m5",
+      "OQTY": 0
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l1",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o2l1",
+      "ORDMASID": "$o2",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "s-1:1",
+      "COMBO": null,
+      "ORDQTY": 0,
+      "PRODQTY": 0,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l1s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o2l1s1",
+      "ORDMASID": "$o2",
+      "SUB3_SUBNO": "s-1:1",
+      "GSIZE": 21,
+      "RQTY": 0,
+      "PQTY": 0,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o2l1s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o2l1s2",
+      "ORDMASID": "$o2",
+      "SUB3_SUBNO": "s-1:1",
+      "GSIZE": 21,
+      "RQTY": 0,
+      "PQTY": 0,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    }
+   ],
+   "errors": [
+    "Order 1: confirm sample quantities or explicitly use order quantities for this demo.",
+    "Order 1: order date is required in YYYY-MM-DD format.",
+    "Order 1: PO / contract number is required.",
+    "Order 1: sample type is required.",
+    "Order 2: duplicate order reference in this workbook.",
+    "Order 2, line 1: color master \"OLD\" is cancelled.",
+    "Order 2, line 1, size M: enter a non-negative whole number.",
+    "Order 2, line 1: duplicate size m; review before combining quantities.",
+    "Order 2, line 1, size m: enter a non-negative whole number.",
+    "Order 2, line 1: size total 0 differs from source total 99.",
+    "Order 2, line 1: sample quantities total zero; enter sample quantities or select the order quantities explicitly for the demo."
+   ],
+   "warnings": [],
+   "totals": {
+    "orders": 2,
+    "lines": 3,
+    "pieces": 15
+   }
+  },
+  "exists": {
+   "operations": [
+    {
+     "key": "m1",
+     "table": "BUYMAS",
+     "action": "reuse",
+     "values": {
+      "BUYMASID": 11,
+      "BUYERNAME": "NEXT"
+     },
+     "source": {}
+    },
+    {
+     "key": "m2",
+     "table": "STYLENUM",
+     "action": "insert",
+     "values": {
+      "STYLENUMID": "$m2",
+      "STYLENUMBER": "N44441"
+     },
+     "source": {}
+    },
+    {
+     "key": "m3",
+     "table": "STYLEMAS",
+     "action": "insert",
+     "values": {
+      "STYLEMASID": "$m3",
+      "SDESC": "BODYSUIT"
+     },
+     "source": {}
+    },
+    {
+     "key": "m4",
+     "table": "UNITMAS",
+     "action": "reuse",
+     "values": {
+      "UNITMASID": 41,
+      "UOM": "PCS"
+     },
+     "source": {
+      "derivation": "Quantities converted to pieces using reviewed pieces_per_unit"
+     }
+    },
+    {
+     "key": "m5",
+     "table": "MERCHMAS",
+     "action": "insert",
+     "values": {
+      "MERCHMASID": "$m5",
+      "NAME": "RAJ"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1",
+     "table": "ORDMAS",
+     "action": "insert",
+     "values": {
+      "ORDMASID": "$o1",
+      "DOCID": "EXIST",
+      "BUYER": 11,
+      "STYLENO": "$m2",
+      "STYLEDESC": "$m3",
+      "BONO": "VG1",
+      "ODATE": "2026-10-17",
+      "UOM": 41,
+      "SAMPLETYPE": "DEVELOPMENT SAMPLE",
+      "ORDCATEGORY": "SAMPLE ORDER",
+      "REMARKS": "POPPYS demo sample import; quantity basis: sample",
+      "MERCH": "$m5",
+      "OQTY": 15
+     },
+     "source": {}
+    },
+    {
+     "key": "m6",
+     "table": "COLORMAS",
+     "action": "insert",
+     "values": {
+      "COLORMASID": "$m6",
+      "COLOR": "WHITE"
+     },
+     "source": {}
+    },
+    {
+     "key": "m7",
+     "table": "SIZE_MAS",
+     "action": "reuse",
+     "values": {
+      "SIZE_MASID": 21,
+      "SIZES": "M"
+     },
+     "source": {}
+    },
+    {
+     "key": "m8",
+     "table": "SIZE_MAS",
+     "action": "reuse",
+     "values": {
+      "SIZE_MASID": 22,
+      "SIZES": "L"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o1l1",
+      "ORDMASID": "$o1",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "EXIST:1",
+      "COMBO": "$m6",
+      "ORDQTY": 10,
+      "PRODQTY": 10,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l1s1",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "EXIST:1",
+      "GSIZE": 21,
+      "RQTY": 4,
+      "PQTY": 4,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l1s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l1s2",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "EXIST:1",
+      "GSIZE": 22,
+      "RQTY": 6,
+      "PQTY": 6,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "m9",
+     "table": "COLORMAS",
+     "action": "insert",
+     "values": {
+      "COLORMASID": "$m9",
+      "COLOR": "PINK"
+     },
+     "source": {}
+    },
+    {
+     "key": "m10",
+     "table": "SIZE_MAS",
+     "action": "insert",
+     "values": {
+      "SIZE_MASID": "$m10",
+      "SIZES": "XL"
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2",
+     "table": "ORDSTYLE",
+     "action": "insert",
+     "values": {
+      "ORDSTYLEID": "$o1l2",
+      "ORDMASID": "$o1",
+      "STNO": "$m2",
+      "STYLENAME": "$m3",
+      "PONUM": "VG1",
+      "SUBNO": "EXIST:2",
+      "COMBO": "$m9",
+      "ORDQTY": 5,
+      "PRODQTY": 5,
+      "SHIPDT": "2026-11-01",
+      "PUOM": 41,
+      "SNO": 2
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2s1",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l2s1",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "EXIST:2",
+      "GSIZE": 21,
+      "RQTY": 2,
+      "PQTY": 2,
+      "ORDSIZEROW": 1
+     },
+     "source": {}
+    },
+    {
+     "key": "o1l2s2",
+     "table": "ORDSIZE",
+     "action": "insert",
+     "values": {
+      "ORDSIZEID": "$o1l2s2",
+      "ORDMASID": "$o1",
+      "SUB3_SUBNO": "EXIST:2",
+      "GSIZE": "$m10",
+      "RQTY": 3,
+      "PQTY": 3,
+      "ORDSIZEROW": 2
+     },
+     "source": {}
+    }
+   ],
+   "errors": [
+    "Order 1: order reference EXIST already exists. Existing orders are not overwritten."
+   ],
+   "warnings": [],
+   "totals": {
+    "orders": 1,
+    "lines": 2,
+    "pieces": 15
+   }
+  }
+ },
+ "masters": {
+  "buyer": [
+   {
+    "id": 11,
+    "label": "NEXT",
+    "cancelled": false
+   }
+  ],
+  "style": [],
+  "description": [],
+  "size": [
+   {
+    "id": 21,
+    "label": "M",
+    "cancelled": false
+   },
+   {
+    "id": 22,
+    "label": "L",
+    "cancelled": false
+   }
+  ],
+  "color": [
+   {
+    "id": 31,
+    "label": "OLD",
+    "cancelled": true
+   }
+  ],
+  "uom": [
+   {
+    "id": 41,
+    "label": "PCS",
+    "cancelled": false
+   }
+  ],
+  "merch": []
+ }
+}
