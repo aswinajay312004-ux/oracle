@@ -21,6 +21,43 @@ def connect():
                             dsn=setting('ORACLE_DSN', '127.0.0.1:1521/FREEPDB1'), tcp_connect_timeout=4)
 
 
+READONLY_MISSING = ('The read-only Oracle account for Ask AI and the explorer is not set up. '
+                    'Run python scripts\\create_readonly_user.py once on this computer.')
+_VERIFIED_READONLY = set()
+
+
+def write_privileges(conn):
+    """Privileges of the connected account beyond reading (direct, through roles, or system-wide)."""
+    c = conn.cursor()
+    c.execute("""select privilege || ' on ' || table_name from user_tab_privs
+                  where grantee = user and privilege not in ('SELECT', 'READ')
+                 union all
+                 select privilege || ' on ' || table_name from role_tab_privs
+                  where privilege not in ('SELECT', 'READ')
+                 union all
+                 select privilege from session_privs
+                  where privilege not in ('CREATE SESSION', 'SET CONTAINER', 'ALTER SESSION')""")
+    return [r[0] for r in c.fetchmany(20)]
+
+
+def connect_readonly():
+    """The separate read-only account used by Ask AI, the explorer and the value index. The database itself
+    refuses writes from it; this function also refuses to hand out a connection whose account can write."""
+    user, password = setting('ORACLE_RO_USER'), setting('ORACLE_RO_PASSWORD')
+    if not (user and password):
+        raise RuntimeError(READONLY_MISSING)
+    conn = oracledb.connect(user=user, password=password,
+                            dsn=setting('ORACLE_DSN', '127.0.0.1:1521/FREEPDB1'), tcp_connect_timeout=4)
+    if user.upper() not in _VERIFIED_READONLY:
+        extra = write_privileges(conn)
+        if extra:
+            conn.close()
+            raise RuntimeError(f'The account {user} is not read-only ({", ".join(extra[:5])}). '
+                               'Ask AI and the explorer will not use it. Run scripts\\create_readonly_user.py.')
+        _VERIFIED_READONLY.add(user.upper())
+    return conn
+
+
 def current_mapping():
     from . import local_store
     return registry.effective(local_store.mapping_overrides())

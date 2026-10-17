@@ -30,7 +30,15 @@ def main():
         for obj in ('PP_IMPORT_LOG', 'PP_ORDER_KEYS', 'PP_WRITE_LOCK'):
             c.execute(f'select count(*) from {obj}')
             print(f'  {obj}: {c.fetchone()[0]} rows')
-        print('All checks were read-only.')
+    try:
+        ro = oracle.connect_readonly()
+    except Exception as exc:
+        print(f'Read-only account for Ask AI: NOT READY - {exc}')
+    else:
+        with ro:
+            c = ro.cursor(); c.execute("select count(*) from all_tables where owner = 'GARMENT_DEMO'")
+            print(f'Read-only account for Ask AI: {ro.username}, no write privileges, sees {c.fetchone()[0]} GARMENT_DEMO tables')
+    print('All checks were read-only.')
 
 
 if __name__ == '__main__':

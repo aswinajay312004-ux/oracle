@@ -242,7 +242,14 @@ def health(user=Depends(authenticated)):
     except Exception as exc:
         status['error'] = ('Local Oracle is not reachable. Start Docker Desktop and the oracle26ai container, '
                            'then refresh. Uploads and previews still work; saving needs Oracle.') if not isinstance(exc, RuntimeError) else str(exc)
-    return dict(database=status, ollama=ai.status(), settings=settings())
+    readonly = {'connected': False, 'user': setting('ORACLE_RO_USER') or None}
+    if status['connected']:
+        try:
+            with oracle.connect_readonly():
+                readonly['connected'] = True
+        except Exception as exc:
+            readonly['error'] = str(exc) if isinstance(exc, RuntimeError) else 'The read-only account could not sign in to Oracle.'
+    return dict(database=status, readonly=readonly, ollama=ai.status(), settings=settings())
 
 
 @app.get('/api/masters')
@@ -762,7 +769,7 @@ _LEX = {}
 
 
 def knowledge_base():
-    return insight.knowledge(oracle.connect, oracle.current_mapping())
+    return insight.knowledge(oracle.connect_readonly, oracle.current_mapping())
 
 
 def lexicon(kb):
@@ -774,15 +781,16 @@ def lexicon(kb):
 @contextmanager
 def query_sources():
     """{'db': (read-only executor, dialect) or None, 'local': uploaded-files source}. Tests replace this."""
-    conn = None
+    conn = None; why = None
     try:
-        conn = oracle.connect()
-    except Exception:
+        conn = oracle.connect_readonly()      # separate account: Oracle itself refuses writes from Ask AI
+    except Exception as exc:
         conn = None
+        why = str(exc) if isinstance(exc, RuntimeError) else None
     local = insight.uploads_db()
     try:
         yield {'db': (insight.OracleExecutor(conn), Dialect('oracle', OWNER)) if conn else None,
-               'local': (insight.SqliteExecutor(local), Dialect('sqlite'))}
+               'local': (insight.SqliteExecutor(local), Dialect('sqlite')), 'why': why}
     finally:
         local.close()
         if conn:
@@ -791,7 +799,7 @@ def query_sources():
 
 def _require_db(sources):
     if not sources.get('db'):
-        raise QueryError('Oracle is not connected, so database questions cannot be answered right now. '
+        raise QueryError(sources.get('why') or 'Oracle is not connected, so database questions cannot be answered right now. '
                          'Start Docker Desktop and the oracle26ai container. Questions about uploaded files still work.')
     return sources['db']
 
@@ -969,7 +977,7 @@ def knowledge_edit(data: KnowledgeEdit, user=Depends(require('mapping'))):
 @app.post('/api/knowledge/refresh')
 def knowledge_refresh(user=Depends(require('mapping'))):
     try:
-        phys = insight.refresh_physical(oracle.connect)
+        phys = insight.refresh_physical(oracle.connect_readonly)
     except Exception as exc:
         raise HTTPException(503, f'Could not read the Oracle data dictionary: {str(exc)[:200]}')
     kb = knowledge_base()

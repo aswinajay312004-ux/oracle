@@ -27,5 +27,7 @@ if (-not (Test-Path '.env.poppys')) {
 }
 Write-Host 'Granting read access for the explorer and insert access for verified BOM tables...' -ForegroundColor Cyan
 .\.venv\Scripts\python.exe scripts\grant_bom_tables.py
+Write-Host 'Creating the separate read-only POPPYS_RO account for Ask AI and the explorer...' -ForegroundColor Cyan
+.\.venv\Scripts\python.exe scripts\create_readonly_user.py
 .\.venv\Scripts\python.exe scripts\check_oracle.py
 Write-Host 'Setup finished. Next: python scripts\discover_schema.py (asks for the GARMENT_DEMO password), then .\start.ps1' -ForegroundColor Green
