@@ -99,6 +99,7 @@ function draw(aid) {
       <span><i style="background:#d39a2c"></i>Unconfirmed link</span><span class="muted">Click a table to preview it and add its columns · ＋ shows linked tables</span></div>
     <div class="answer-summary">${esc(r.summary)}</div>
     ${checkStrip(r.checks)}
+    ${(r.alternatives || []).length ? `<div class="alternatives"><span class="muted small-text">Did you mean</span>${r.alternatives.map((a, i) => `<button class="secondary small" data-alt="${esc(aid)}" data-alt-i="${i}" title="${esc(a.summary || '')}">${esc(a.understood)}</button>`).join('')}</div>` : ''}
     ${answerChart(cols, rows)}
     <div class="answer-body">
       <div class="answer-tools"><span>${plural(r.row_count, 'row')}${r.truncated ? ` (first ${r.limit} shown)` : ''} · ${r.elapsed_ms} ms</span><span class="spacer"></span>
@@ -240,6 +241,8 @@ export function bindChat() {
       catch (err) { notify(err.message, 'error'); }
       return;
     }
+    const alt = e.target.closest('[data-alt]');
+    if (alt) { const a = answers.get(alt.dataset.alt).result.alternatives[Number(alt.dataset.altI)]; return rerun(alt.dataset.alt, a.intent, 'Answered with the other reading.'); }
     const rm = e.target.closest('[data-remove-col]'); if (rm) { e.stopPropagation(); return removeColumn(rm.dataset.aid, rm.dataset.removeCol); }
     const th = e.target.closest('th[data-sort]');
     if (th) { const aid = th.closest('.answer').id.slice(4); const entry = answers.get(aid); const i = Number(th.dataset.sort); entry.sort = { i, dir: entry.sort?.i === i ? -entry.sort.dir : -1 }; return draw(aid); }

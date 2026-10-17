@@ -785,3 +785,4 @@ details.ex-more > summary { cursor: pointer; font-weight: 600; font-size: 12.5px
 .bench-score.err { background: var(--err-soft); border-color: var(--err-line); }
 .bench-score.err b { color: var(--err); }
 ul.plain { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+.alternatives { margin: 0 16px 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

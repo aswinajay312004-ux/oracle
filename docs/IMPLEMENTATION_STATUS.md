@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-17 (session 2, batch 10) | **432 passed, 0 failed, 18 skipped**; ruff clean | Two readings compared (rules vs. local AI), M-Schema cards for the model, "orders NEXT ZARA" fixed (was AND of two buyers → 0 rows) |
 | 2026-10-17 (session 2, batch 9) | **426 passed, 0 failed, 18 skipped**; ruff clean | Local read-only MCP server; repository assessment written |
 | 2026-10-17 (session 2, batch 8) | **420 passed, 0 failed, 18 skipped**; ruff clean | Ask AI accuracy benchmark (golden questions + hand-written SQL). It found and fixed: lines/sizes of cancelled orders were counted (241 instead of 240) |
 | 2026-10-17 (session 2, batch 7) | **413 passed, 0 failed, 18 skipped**; ruff clean | Expert data team, part 1: independent SQL safety review (SQLGlot), join check, total cross-check, check trace in the UI. Found and fixed a wrong "All groups together" figure when one record sits in several groups |
@@ -50,6 +51,8 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | B11 | Accuracy benchmark: golden questions asked as a user would, compared with hand-written SQL on the same DB (rows / ordered / scalar / values); params pick real values so the shipped set fits any ERP copy; runs saved + audited; Overview shows the last score; Setup → Answer accuracy; `scripts/run_benchmark.py` | Implemented, Cloud-tested (demo 15/15, shipped 12/12). **Needs a run on the laptop** | `backend/insight/benchmark.py`, `config/golden_questions.json`, `tests/golden/demo.json`, `tests/test_benchmark.py` |
 | B12 | Detail rows (order lines, sizes) of cancelled orders are excluded through their order's CANCEL flag (many-to-one links only); "cancelled" questions on lines filter the order's flag | Fixed (found by B11) | `query.cancel_owner()` |
 | B13 | Local read-only MCP server (stdio, protocol 2025-11-25 + `server/discover`): search_catalog, describe_table, relationship_path, evidence, ask, run_intent, accuracy_report; `run_select` only with `--allow-sql` and still safety-reviewed + row-capped; every call audited; no write tool | Implemented, Cloud-tested (incl. stdio subprocess) | `backend/mcp_server.py`, `scripts/mcp_server.py`, `tests/test_mcp.py` |
+| B14 | Weak questions read twice (rules + local AI): same compiled SQL or same result → confidence up; different result → AI reading shown with the rules reading as a "Did you mean" button. The model sees M-Schema catalog cards (types, keys, example values, link lines) | Implemented, Cloud-tested with a stand-in model; **needs a run with the real Ollama model** | `engine.ask`, `understand.schema_cards`, `tests/test_agreement.py` |
+| B15 | Two values for the same column mean either (`IN`), also in saved examples | Fixed | `understand._either`, `engine.generalize/specialize` |
 | B10 | Oracle sessions named MODULE='POPPYS AI', ACTION='read-only questions' / 'writer account' (visible in V$SESSION) | Implemented | `backend/oracle_store.py` `_tag()`; needs Local Oracle check |
 | C1 | Explorer: search, rows, keyset paging, linked records | Implemented, Cloud-tested | `/api/explorer/*`, `frontend/js/explorer.js` |
 | C2 | Relationship graph / flowchart (no CDN, SVG) | Implemented | `frontend/js/graph.js`, `flow.js` |
@@ -70,7 +73,8 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
    - ~~Accuracy benchmark~~ (batch 8). On the laptop: `python scripts\run_benchmark.py`, then add the company's own questions to `data\golden_questions.json`.
    - ~~Local read-only MCP server~~ (batch 9).
    - ~~Adopt/adapt/reject table~~ (batch 9, `docs/OPEN_SOURCE_RESEARCH.md` → "Expert data team").
-   - Optional next: M-Schema-style catalog cards for the local model; candidate agreement (rules vs. model) as in XiYan-SQL.
+   - ~~M-Schema cards; candidate agreement (XiYan-SQL)~~ (batch 10).
+   - Optional next: Valentine-style one-to-one column-matching suggestions for unfamiliar Excel layouts.
 
 ## Local verification
 

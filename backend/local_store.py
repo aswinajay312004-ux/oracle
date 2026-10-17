@@ -385,6 +385,12 @@ def find_values(normalized, limit=12):
                 for r in c.execute('SELECT * FROM value_index WHERE norm=? ORDER BY n DESC LIMIT ?', (normalized, limit))]
 
 
+def sample_values(table, column, n=3):
+    """The most common stored values of a column (from the value index): examples for the local model's catalog cards."""
+    with db() as c:
+        return [r[0] for r in c.execute('SELECT value FROM value_index WHERE tbl=? AND col=? ORDER BY n DESC LIMIT ?', (table, column, n))]
+
+
 def value_stats():
     with db() as c:
         return [dict(table=r[0], column=r[1], values=r[2]) for r in c.execute('SELECT tbl,col,count(*) FROM value_index GROUP BY tbl,col ORDER BY tbl,col')]

@@ -30,5 +30,7 @@
    "sql": "SELECT b.BUYERNAME FROM {ORDMAS} o JOIN {BUYMAS} b ON b.BUYMASID = o.BUYER WHERE o.DOCID = 'PK/26-27/S/9003'"},
   {"id": "newest-order-sizes", "question": "size wise quantity for order {p_order}", "compare": "rows",
    "params": {"p_order": "SELECT DOCID FROM {ORDMAS} WHERE CANCEL IS NULL OR CANCEL <> 'T' ORDER BY ORDMASID DESC"},
-   "sql": "SELECT z.SIZES, SUM(s.RQTY) FROM {ORDSIZE} s JOIN {ORDMAS} o ON o.ORDMASID = s.ORDMASID JOIN {SIZE_MAS} z ON z.SIZE_MASID = s.GSIZE WHERE o.DOCID = :p_order GROUP BY z.SIZES"}
+   "sql": "SELECT z.SIZES, SUM(s.RQTY) FROM {ORDSIZE} s JOIN {ORDMAS} o ON o.ORDMASID = s.ORDMASID JOIN {SIZE_MAS} z ON z.SIZE_MASID = s.GSIZE WHERE o.DOCID = :p_order GROUP BY z.SIZES"},
+  {"id": "orders-two-buyers", "question": "orders NEXT ZARA", "compare": "values",
+   "sql": "SELECT o.DOCID FROM {ORDMAS} o JOIN {BUYMAS} b ON b.BUYMASID = o.BUYER WHERE b.BUYERNAME IN ('NEXT', 'ZARA') AND (o.CANCEL IS NULL OR o.CANCEL <> 'T')"}
 ]

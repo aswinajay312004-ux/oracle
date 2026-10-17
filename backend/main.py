@@ -1146,7 +1146,7 @@ def _ask(q, kb, sources):
     safe = dict(sources, db=db or (_offline, Dialect('oracle', OWNER)))
     live = insight.live_finder(kb, *db) if db else None
     return engine.ask(q, kb, safe, finder=insight.finder(kb), live_finder=live, examples=store.examples(),
-                      ai_chat=ai.json_chat if ai.available() else None, lex=lexicon(kb))
+                      ai_chat=ai.json_chat if ai.available() else None, lex=lexicon(kb), samples=store.sample_values)
 
 
 @app.post('/api/chat/ask')

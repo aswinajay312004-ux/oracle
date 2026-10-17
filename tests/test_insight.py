@@ -251,3 +251,15 @@ def test_accuracy_benchmark_api_runs_saves_and_reports_on_the_overview(api, tmp_
     assert any(e['action'] == 'benchmark' for e in api.get('/api/audit').json())
     (tmp_path / 'golden_questions.json').write_text('[{"question": "x"}]', encoding='utf-8')
     assert api.post('/api/benchmark/run').status_code == 422
+
+
+def test_two_values_of_the_same_column_mean_either(world):
+    r = ask(world, 'orders NEXT ZARA')
+    assert r['intent']['filters'] == [dict(column='BUYMAS.BUYERNAME', op='in', value=['NEXT', 'ZARA'])]
+    assert len(r['rows']) == 3 and 'Buyer name is NEXT or ZARA' in r['understood']
+    # a confirmed example generalises both values and is reused for other buyers
+    ex = dict(id=1, question='orders NEXT ZARA', masked=engine.mask('orders NEXT ZARA', ['NEXT', 'ZARA']),
+              intent=engine.generalize(r['intent'], r['linked_values']))
+    assert ex['intent']['filters'][0]['value'] == ['{v0}', '{v1}']
+    again = ask(world, 'orders H&M KIDS ZARA', examples=[ex])
+    assert again['source'] == 'saved example' and again['intent']['filters'][0]['value'] == ['H&M KIDS', 'ZARA'] and len(again['rows']) == 1
