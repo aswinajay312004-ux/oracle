@@ -42,6 +42,12 @@ def init():
         CREATE TABLE IF NOT EXISTS mapping_overrides(table_name TEXT NOT NULL,column_name TEXT NOT NULL DEFAULT '',status TEXT NOT NULL,
             actor TEXT,at TEXT,note TEXT,PRIMARY KEY(table_name,column_name));
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS knowledge_overrides(object TEXT PRIMARY KEY,data TEXT NOT NULL,actor TEXT,at TEXT);
+        CREATE TABLE IF NOT EXISTS value_index(tbl TEXT NOT NULL,col TEXT NOT NULL,value TEXT NOT NULL,norm TEXT NOT NULL,n INTEGER);
+        CREATE INDEX IF NOT EXISTS value_index_norm ON value_index(norm);
+        CREATE TABLE IF NOT EXISTS nl_examples(id INTEGER PRIMARY KEY,masked TEXT NOT NULL,question TEXT NOT NULL,intent TEXT NOT NULL,
+            actor TEXT,at TEXT,uses INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS chat_log(id TEXT PRIMARY KEY,username TEXT,at TEXT,question TEXT,payload TEXT,feedback TEXT);
         ''')
         cols = {r['name'] for r in c.execute('PRAGMA table_info(users)')}
         # Additive migration: the original single account becomes the administrator.
@@ -163,13 +169,25 @@ def save(draft, actor, expected=None):
         c.execute('INSERT INTO revisions(draft_id,version,actor,payload) VALUES (?,?,?,?)', (draft['id'], draft['version'], actor, payload))
 
 
+def _pieces(orders):
+    total = 0
+    for o in orders:
+        try:
+            per = int(o.get('pieces_per_unit') or 1)
+            total += per * sum(int(float(s.get('quantity') or 0)) for line in o.get('lines', []) for s in line.get('sizes', []))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 def summaries():
     with db() as c:
         return [dict(id=d['id'], version=d['version'], filename=d['filename'], format=d['format'], kind=d.get('kind', 'excel'),
                      created_at=d.get('created_at'), uploaded_by=d.get('uploaded_by'),
                      status='Saved to Oracle' if d.get('result') else 'Preview ready' if d.get('plan') else 'Draft',
                      committed=bool(d.get('result')), orders=len(d['orders']),
-                     styles=[o.get('style') for o in d['orders']][:5])
+                     styles=[o.get('style') for o in d['orders']][:5], buyers=[o.get('buyer') for o in d['orders']][:5],
+                     order_refs=[o.get('order_ref') for o in d['orders']][:5], pieces=_pieces(d['orders']))
                 for r in c.execute('SELECT payload FROM drafts ORDER BY rowid DESC LIMIT 100') for d in [json.loads(r[0])]]
 
 
@@ -255,3 +273,88 @@ def changes(old_orders, new_orders):
             out.append(dict(field=path, before=a, after=b))
     walk({'orders': old_orders}, {'orders': new_orders}, '')
     return out[:200]
+
+
+# --- data intelligence: metadata edits, value index, saved examples, chat log --------------------
+def knowledge_overrides():
+    with db() as c:
+        return {r['object']: json.loads(r['data']) for r in c.execute('SELECT * FROM knowledge_overrides')}
+
+
+def set_knowledge_override(obj, data, actor):
+    with db() as c:
+        old = c.execute('SELECT data FROM knowledge_overrides WHERE object=?', (obj,)).fetchone()
+        merged = {**(json.loads(old['data']) if old else {}), **data}
+        c.execute('INSERT INTO knowledge_overrides VALUES (?,?,?,?) ON CONFLICT(object) DO UPDATE SET data=excluded.data,actor=excluded.actor,at=excluded.at',
+                  (obj, json.dumps(merged, ensure_ascii=False), actor, now()))
+        return merged
+
+
+def replace_values(rows, tables=None):
+    """rows: iterable of (table, column, value, norm, count). Replaces the index for the given tables."""
+    with db() as c:
+        if tables is None:
+            c.execute('DELETE FROM value_index')
+        else:
+            c.executemany('DELETE FROM value_index WHERE tbl=?', [(t,) for t in tables])
+        c.executemany('INSERT INTO value_index VALUES (?,?,?,?,?)', rows)
+
+
+def find_values(normalized, limit=12):
+    with db() as c:
+        return [dict(table=r['tbl'], column=r['col'], value=r['value'], n=r['n'])
+                for r in c.execute('SELECT * FROM value_index WHERE norm=? ORDER BY n DESC LIMIT ?', (normalized, limit))]
+
+
+def value_stats():
+    with db() as c:
+        return [dict(table=r[0], column=r[1], values=r[2]) for r in c.execute('SELECT tbl,col,count(*) FROM value_index GROUP BY tbl,col ORDER BY tbl,col')]
+
+
+def examples():
+    with db() as c:
+        return [dict(id=r['id'], masked=r['masked'], question=r['question'], intent=json.loads(r['intent']), actor=r['actor'], at=r['at'], uses=r['uses'])
+                for r in c.execute('SELECT * FROM nl_examples ORDER BY id DESC')]
+
+
+def save_example(masked, question, intent, actor):
+    with db() as c:
+        c.execute('DELETE FROM nl_examples WHERE masked=?', (masked,))
+        cur = c.execute('INSERT INTO nl_examples(masked,question,intent,actor,at) VALUES (?,?,?,?,?)',
+                        (masked, question, json.dumps(intent, ensure_ascii=False), actor, now()))
+        return cur.lastrowid
+
+
+def delete_example(eid):
+    with db() as c:
+        c.execute('DELETE FROM nl_examples WHERE id=?', (eid,))
+
+
+def example_used(eid):
+    with db() as c:
+        c.execute('UPDATE nl_examples SET uses=uses+1 WHERE id=?', (eid,))
+
+
+def log_chat(cid, username, question, payload):
+    with db() as c:
+        c.execute('INSERT OR REPLACE INTO chat_log(id,username,at,question,payload) VALUES (?,?,?,?,?)',
+                  (cid, username, now(), question, json.dumps(payload, ensure_ascii=False, default=str)))
+
+
+def chat_entry(cid):
+    with db() as c:
+        r = c.execute('SELECT * FROM chat_log WHERE id=?', (cid,)).fetchone()
+        if not r:
+            raise KeyError(cid)
+        return dict(id=r['id'], username=r['username'], at=r['at'], question=r['question'], payload=json.loads(r['payload']), feedback=r['feedback'])
+
+
+def chat_feedback(cid, value):
+    with db() as c:
+        c.execute('UPDATE chat_log SET feedback=? WHERE id=?', (value, cid))
+
+
+def chat_history(username, limit=30):
+    with db() as c:
+        return [dict(id=r['id'], at=r['at'], question=r['question'], feedback=r['feedback'])
+                for r in c.execute('SELECT id,at,question,feedback FROM chat_log WHERE username=? ORDER BY rowid DESC LIMIT ?', (username, limit))]

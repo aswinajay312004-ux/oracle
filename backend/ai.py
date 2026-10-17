@@ -121,3 +121,18 @@ def assist(facts, question):
             num_predict=450)
     except Exception:
         return None
+
+
+_AVAILABLE = {'at': 0.0, 'ok': False}
+
+
+def available():
+    """Cached availability check (avoids a network wait on every question)."""
+    import time
+    if time.time() - _AVAILABLE['at'] > 30:
+        _AVAILABLE.update(at=time.time(), ok=status()['available'])
+    return _AVAILABLE['ok']
+
+
+def json_chat(messages):
+    return _chat(messages, num_predict=500, fmt='json')

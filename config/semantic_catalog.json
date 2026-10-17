@@ -1,0 +1,1104 @@
+{
+  "version": 1,
+  "owner": "GARMENT_DEMO",
+  "notes": "Curated business meaning for GARMENT_DEMO tables and columns. Merged on top of the live data dictionary and the write-mapping registry; admins can extend it in Setup -> Data dictionary. Column roles: label (human name of a record), measure (summable number), date, reference (holds another table's ID), key, attribute, system (Axpert audit/workflow column, hidden from answers).",
+  "system_columns": [
+    "CANCEL",
+    "SOURCEID",
+    "MAPNAME",
+    "USERNAME",
+    "MODIFIEDON",
+    "CREATEDBY",
+    "CREATEDON",
+    "WKID",
+    "APP_LEVEL",
+    "APP_DESC",
+    "APP_SLEVEL",
+    "CANCELREMARKS",
+    "WFROLES",
+    "STMUSER",
+    "RECID",
+    "EXIST",
+    "SVCTRL",
+    "DELCTRL",
+    "DB_USERNAME",
+    "ODUSER",
+    "ODSYSTIME"
+  ],
+  "cancel_rule": {
+    "column": "CANCEL",
+    "cancelled_value": "T",
+    "note": "Axpert marks cancelled records with CANCEL = 'T'. Answers exclude them unless the question asks for cancelled records."
+  },
+  "tables": {
+    "ORDMAS": {
+      "business": "Order",
+      "plural": "orders",
+      "kind": "header",
+      "description": "Order Entry header: one row per sample or buyer order (OC).",
+      "synonyms": [
+        "order",
+        "orders",
+        "sample order",
+        "sample orders",
+        "order entry",
+        "oc",
+        "ocs",
+        "order header",
+        "job"
+      ],
+      "label": "DOCID",
+      "date": "ODATE",
+      "display": [
+        "DOCID",
+        "ODATE",
+        "BUYER",
+        "STYLENO",
+        "STYLEDESC",
+        "BONO",
+        "OQTY",
+        "SAMPLETYPE"
+      ],
+      "columns": {
+        "DOCID": {
+          "business": "Order reference",
+          "synonyms": [
+            "order reference",
+            "order ref",
+            "oc number",
+            "oc no",
+            "order number",
+            "order no",
+            "doc id"
+          ],
+          "role": "label",
+          "searchable": true
+        },
+        "ODATE": {
+          "business": "Order date",
+          "synonyms": [
+            "order date",
+            "confirmation date",
+            "confirmed date",
+            "date"
+          ],
+          "role": "date"
+        },
+        "BONO": {
+          "business": "Buyer PO number",
+          "synonyms": [
+            "po",
+            "po number",
+            "po no",
+            "buyer po",
+            "contract number",
+            "contract no"
+          ],
+          "role": "attribute",
+          "searchable": true
+        },
+        "OQTY": {
+          "business": "Order quantity (pcs)",
+          "synonyms": [
+            "order quantity",
+            "order qty",
+            "quantity",
+            "qty",
+            "pieces",
+            "pcs"
+          ],
+          "role": "measure",
+          "unit": "pcs"
+        },
+        "SAMPLETYPE": {
+          "business": "Sample type",
+          "synonyms": [
+            "sample type"
+          ],
+          "role": "attribute",
+          "searchable": true
+        },
+        "ORDCATEGORY": {
+          "business": "Order category",
+          "synonyms": [
+            "order category",
+            "category"
+          ],
+          "role": "attribute",
+          "searchable": true
+        },
+        "DEPARTMENT": {
+          "business": "Department",
+          "synonyms": [
+            "department",
+            "dept"
+          ],
+          "role": "attribute"
+        },
+        "GENDER": {
+          "business": "Gender",
+          "synonyms": [
+            "gender"
+          ],
+          "role": "attribute"
+        },
+        "REMARKS": {
+          "business": "Remarks",
+          "synonyms": [
+            "remarks",
+            "notes"
+          ],
+          "role": "attribute"
+        },
+        "DDATE": {
+          "business": "Delivery date",
+          "synonyms": [
+            "delivery date"
+          ],
+          "role": "date"
+        },
+        "EXFACDT": {
+          "business": "Ex-factory date",
+          "synonyms": [
+            "ex factory date",
+            "exfactory date"
+          ],
+          "role": "date"
+        },
+        "FIRSTSHIPDT": {
+          "business": "First ship date",
+          "synonyms": [
+            "first ship date"
+          ],
+          "role": "date"
+        },
+        "PRICE": {
+          "business": "Price",
+          "synonyms": [
+            "price",
+            "rate"
+          ],
+          "role": "attribute"
+        },
+        "CURR": {
+          "business": "Currency",
+          "synonyms": [
+            "currency"
+          ],
+          "role": "attribute"
+        },
+        "ORDMASID": {
+          "business": "Order record ID",
+          "role": "key"
+        }
+      }
+    },
+    "ORDSTYLE": {
+      "business": "Order line",
+      "plural": "order lines",
+      "kind": "detail",
+      "description": "Style / colour (combo) lines of an order. SUBNO links each line to its sizes, fabric and yarn.",
+      "synonyms": [
+        "line",
+        "lines",
+        "order line",
+        "order lines",
+        "style line",
+        "colour line",
+        "color line",
+        "combo line",
+        "combos"
+      ],
+      "label": "COMBO",
+      "date": "SHIPDT",
+      "display": [
+        "SNO",
+        "COMBO",
+        "PONUM",
+        "ORDQTY",
+        "SHIPDT"
+      ],
+      "columns": {
+        "SNO": {
+          "business": "Line number",
+          "synonyms": [
+            "line number",
+            "line no",
+            "sno"
+          ],
+          "role": "attribute"
+        },
+        "COMBO": {
+          "business": "Colour / combo",
+          "synonyms": [
+            "combo",
+            "colour",
+            "color"
+          ],
+          "role": "reference"
+        },
+        "PONUM": {
+          "business": "PO number",
+          "synonyms": [
+            "po",
+            "po number"
+          ],
+          "role": "attribute"
+        },
+        "ORDQTY": {
+          "business": "Line quantity (pcs)",
+          "synonyms": [
+            "line quantity",
+            "line qty",
+            "combo quantity",
+            "colour quantity",
+            "color quantity"
+          ],
+          "role": "measure",
+          "unit": "pcs"
+        },
+        "PRODQTY": {
+          "business": "Production quantity (pcs)",
+          "synonyms": [
+            "production quantity",
+            "prod qty"
+          ],
+          "role": "measure",
+          "unit": "pcs"
+        },
+        "SHIPDT": {
+          "business": "Ship date",
+          "synonyms": [
+            "ship date",
+            "shipment date",
+            "shipping date"
+          ],
+          "role": "date"
+        },
+        "SUBNO": {
+          "business": "Line link number",
+          "role": "key"
+        }
+      }
+    },
+    "ORDSIZE": {
+      "business": "Size quantity",
+      "plural": "size quantities",
+      "kind": "detail",
+      "description": "Quantity per size for each order line (size breakdown).",
+      "synonyms": [
+        "size quantity",
+        "size quantities",
+        "size breakdown",
+        "size details",
+        "size rows"
+      ],
+      "label": "GSIZE",
+      "display": [
+        "SUB3_SUBNO",
+        "GSIZE",
+        "RQTY"
+      ],
+      "columns": {
+        "GSIZE": {
+          "business": "Size",
+          "synonyms": [
+            "size"
+          ],
+          "role": "reference"
+        },
+        "RQTY": {
+          "business": "Size quantity (pcs)",
+          "synonyms": [
+            "size quantity",
+            "size qty",
+            "required quantity",
+            "quantity",
+            "qty",
+            "pieces",
+            "pcs"
+          ],
+          "role": "measure",
+          "unit": "pcs"
+        },
+        "PQTY": {
+          "business": "Size production quantity (pcs)",
+          "synonyms": [
+            "production quantity"
+          ],
+          "role": "measure",
+          "unit": "pcs"
+        },
+        "SUB3_SUBNO": {
+          "business": "Line link number",
+          "role": "key"
+        },
+        "ORDSIZEROW": {
+          "business": "Size row",
+          "role": "attribute"
+        }
+      }
+    },
+    "ORDFAB": {
+      "business": "Fabric requirement",
+      "plural": "fabric requirements",
+      "kind": "detail",
+      "description": "Fabric planning rows per garment line and portion: consumption and fabric kg.",
+      "synonyms": [
+        "fabric",
+        "fabrics",
+        "fabric requirement",
+        "fabric planning",
+        "fabric plan"
+      ],
+      "label": "FABRIC",
+      "display": [
+        "FSUBNO",
+        "FABRIC",
+        "COLOUR",
+        "FGSM",
+        "DIA",
+        "CADWT",
+        "POQTY"
+      ],
+      "columns": {
+        "COLOUR": {
+          "business": "Fabric colour",
+          "synonyms": [
+            "fabric colour",
+            "fabric color"
+          ],
+          "role": "reference"
+        },
+        "FGSM": {
+          "business": "GSM",
+          "synonyms": [
+            "gsm"
+          ],
+          "role": "attribute"
+        },
+        "DIA": {
+          "business": "Dia",
+          "synonyms": [
+            "dia",
+            "diameter"
+          ],
+          "role": "attribute"
+        },
+        "CADWT": {
+          "business": "Consumption (g / piece)",
+          "synonyms": [
+            "consumption",
+            "cad weight",
+            "grams per piece"
+          ],
+          "role": "attribute"
+        },
+        "POQTY": {
+          "business": "Fabric required (kg)",
+          "synonyms": [
+            "fabric kg",
+            "fabric quantity",
+            "fabric required",
+            "kg",
+            "fabric weight"
+          ],
+          "role": "measure",
+          "unit": "kg"
+        },
+        "FABRIC": {
+          "business": "Fabric quality",
+          "synonyms": [
+            "fabric quality",
+            "quality"
+          ],
+          "role": "attribute"
+        }
+      }
+    },
+    "ORDYARN": {
+      "business": "Yarn requirement",
+      "plural": "yarn requirements",
+      "kind": "detail",
+      "description": "Yarn split of each fabric row: count, colour, percentage and kg.",
+      "synonyms": [
+        "yarn",
+        "yarns",
+        "yarn requirement",
+        "yarn split"
+      ],
+      "label": "COUNTS",
+      "display": [
+        "SUB9_FSUBNO",
+        "COUNTS",
+        "YCOLOR",
+        "YPER",
+        "YQTY"
+      ],
+      "columns": {
+        "COUNTS": {
+          "business": "Yarn count",
+          "synonyms": [
+            "yarn count",
+            "count"
+          ],
+          "role": "attribute"
+        },
+        "YCOLOR": {
+          "business": "Yarn colour",
+          "synonyms": [
+            "yarn colour",
+            "yarn color"
+          ],
+          "role": "reference"
+        },
+        "YPER": {
+          "business": "Yarn %",
+          "synonyms": [
+            "yarn percentage",
+            "yarn percent"
+          ],
+          "role": "attribute"
+        },
+        "YQTY": {
+          "business": "Yarn quantity (kg)",
+          "synonyms": [
+            "yarn kg",
+            "yarn quantity",
+            "yarn qty"
+          ],
+          "role": "measure",
+          "unit": "kg"
+        }
+      }
+    },
+    "ORDACC": {
+      "business": "Accessory requirement",
+      "plural": "accessory requirements",
+      "kind": "detail",
+      "description": "Trims and accessories required for an order.",
+      "synonyms": [
+        "accessory",
+        "accessories",
+        "trim",
+        "trims",
+        "accessory requirement"
+      ],
+      "label": "ACCDESC",
+      "display": [
+        "ACCDESC",
+        "ACCCOLOR",
+        "ACCSIZES",
+        "AUOM",
+        "APOQTY"
+      ],
+      "columns": {
+        "ACCDESC": {
+          "business": "Accessory description",
+          "synonyms": [
+            "accessory description",
+            "trim description"
+          ],
+          "role": "label",
+          "searchable": true
+        },
+        "ACCCOLOR": {
+          "business": "Accessory colour",
+          "synonyms": [
+            "accessory colour",
+            "trim colour"
+          ],
+          "role": "reference"
+        },
+        "ACCSIZES": {
+          "business": "Accessory size",
+          "synonyms": [
+            "accessory size"
+          ],
+          "role": "reference"
+        },
+        "AUOM": {
+          "business": "Accessory unit",
+          "synonyms": [
+            "accessory unit"
+          ],
+          "role": "reference"
+        },
+        "APOQTY": {
+          "business": "Accessory quantity",
+          "synonyms": [
+            "accessory quantity",
+            "trim quantity",
+            "accessory qty"
+          ],
+          "role": "measure"
+        },
+        "ACCNAME": {
+          "business": "Accessory item",
+          "synonyms": [
+            "accessory item"
+          ],
+          "role": "attribute"
+        }
+      }
+    },
+    "ORDCOMP": {
+      "business": "Order component",
+      "plural": "order components",
+      "kind": "detail",
+      "description": "Components of a pack / garment set per order line.",
+      "synonyms": [
+        "component",
+        "components",
+        "pack component"
+      ],
+      "display": [
+        "SUB5_SUBNO",
+        "COMPONENT",
+        "CNOPCS"
+      ]
+    },
+    "ORDSHIP": {
+      "business": "Shipment split",
+      "plural": "shipment splits",
+      "kind": "detail",
+      "description": "Shipment-wise split of order quantities.",
+      "synonyms": [
+        "shipment",
+        "shipments",
+        "shipment split",
+        "ship split"
+      ],
+      "display": [
+        "SUB6_SUBNO",
+        "SPDESC",
+        "SSIZES",
+        "SHIPQTY"
+      ],
+      "columns": {
+        "SHIPQTY": {
+          "business": "Shipment quantity",
+          "synonyms": [
+            "shipment quantity",
+            "ship quantity"
+          ],
+          "role": "measure"
+        }
+      }
+    },
+    "ORDDOC": {
+      "business": "Order document",
+      "plural": "order documents",
+      "kind": "detail",
+      "description": "Documents attached to an order.",
+      "synonyms": [
+        "order document",
+        "attachment",
+        "attachments"
+      ],
+      "display": [
+        "DOCNAME",
+        "DOCATT"
+      ]
+    },
+    "ORDCMTFAB": {
+      "business": "CMT fabric",
+      "plural": "CMT fabric rows",
+      "kind": "detail",
+      "description": "Fabric rows for CMT (cut-make-trim) orders.",
+      "synonyms": [
+        "cmt fabric"
+      ],
+      "display": [
+        "SUB8_SUBNO",
+        "FABRIC",
+        "COLOUR",
+        "POQTY"
+      ]
+    },
+    "ORDERENTRY": {
+      "business": "Order entry report",
+      "plural": "order entry report rows",
+      "kind": "other",
+      "description": "Flattened Axpert order entry report table (one row per order / style / size).",
+      "synonyms": [
+        "order entry report"
+      ],
+      "display": [
+        "IONO",
+        "BUYERNAME",
+        "STYLENO",
+        "COMBO",
+        "SIZES",
+        "ORDERQTY"
+      ]
+    },
+    "BUYMAS": {
+      "business": "Buyer",
+      "plural": "buyers",
+      "kind": "master",
+      "description": "Buyer (customer) master.",
+      "synonyms": [
+        "buyer",
+        "buyers",
+        "customer",
+        "customers",
+        "brand",
+        "client"
+      ],
+      "label": "BUYERNAME",
+      "display": [
+        "BUYERNAME",
+        "BUYERCODE",
+        "COUNTRY",
+        "CURR"
+      ],
+      "columns": {
+        "BUYERNAME": {
+          "business": "Buyer name",
+          "synonyms": [
+            "buyer name",
+            "buyer",
+            "customer"
+          ],
+          "role": "label",
+          "searchable": true
+        },
+        "BUYERCODE": {
+          "business": "Buyer code",
+          "synonyms": [
+            "buyer code"
+          ],
+          "role": "attribute",
+          "searchable": true
+        },
+        "COUNTRY": {
+          "business": "Buyer country",
+          "synonyms": [
+            "country"
+          ],
+          "role": "attribute",
+          "searchable": true
+        },
+        "CURR": {
+          "business": "Currency",
+          "synonyms": [
+            "currency"
+          ],
+          "role": "attribute"
+        }
+      }
+    },
+    "STYLENUM": {
+      "business": "Style number",
+      "plural": "style numbers",
+      "kind": "master",
+      "description": "Style number master.",
+      "synonyms": [
+        "style",
+        "styles",
+        "style number",
+        "style no",
+        "style numbers"
+      ],
+      "label": "STYLENUMBER",
+      "display": [
+        "STYLENUMBER"
+      ],
+      "columns": {
+        "STYLENUMBER": {
+          "business": "Style number",
+          "synonyms": [
+            "style number",
+            "style no",
+            "style"
+          ],
+          "role": "label",
+          "searchable": true
+        }
+      }
+    },
+    "STYLEMAS": {
+      "business": "Garment description",
+      "plural": "garment descriptions",
+      "kind": "master",
+      "description": "Style / garment description master.",
+      "synonyms": [
+        "description",
+        "garment description",
+        "style description",
+        "garment"
+      ],
+      "label": "SDESC",
+      "display": [
+        "SDESC",
+        "STYLECATEGORY"
+      ],
+      "columns": {
+        "SDESC": {
+          "business": "Garment description",
+          "synonyms": [
+            "description",
+            "garment description",
+            "style description"
+          ],
+          "role": "label",
+          "searchable": true
+        }
+      }
+    },
+    "SIZE_MAS": {
+      "business": "Size",
+      "plural": "sizes",
+      "kind": "master",
+      "description": "Size master.",
+      "synonyms": [
+        "size",
+        "sizes"
+      ],
+      "label": "SIZES",
+      "display": [
+        "SIZES"
+      ],
+      "columns": {
+        "SIZES": {
+          "business": "Size",
+          "synonyms": [
+            "size"
+          ],
+          "role": "label",
+          "searchable": true,
+          "short_values": true
+        }
+      }
+    },
+    "COLORMAS": {
+      "business": "Colour",
+      "plural": "colours",
+      "kind": "master",
+      "description": "Colour / combo master.",
+      "synonyms": [
+        "colour",
+        "colours",
+        "color",
+        "colors",
+        "combo",
+        "combos"
+      ],
+      "label": "COLOR",
+      "display": [
+        "COLOR",
+        "COLORNAME",
+        "PANTNO"
+      ],
+      "columns": {
+        "COLOR": {
+          "business": "Colour",
+          "synonyms": [
+            "colour",
+            "color",
+            "combo"
+          ],
+          "role": "label",
+          "searchable": true
+        }
+      }
+    },
+    "UNITMAS": {
+      "business": "Unit",
+      "plural": "units",
+      "kind": "master",
+      "description": "Unit of measure master.",
+      "synonyms": [
+        "unit",
+        "units",
+        "uom"
+      ],
+      "label": "UOM",
+      "display": [
+        "UOM",
+        "UOMNAME"
+      ],
+      "columns": {
+        "UOM": {
+          "business": "Unit",
+          "synonyms": [
+            "unit",
+            "uom"
+          ],
+          "role": "label",
+          "searchable": true,
+          "short_values": true
+        }
+      }
+    },
+    "MERCHMAS": {
+      "business": "Merchandiser",
+      "plural": "merchandisers",
+      "kind": "master",
+      "description": "Merchandiser master.",
+      "synonyms": [
+        "merchandiser",
+        "merchandisers",
+        "merch"
+      ],
+      "label": "NAME",
+      "display": [
+        "NAME"
+      ],
+      "columns": {
+        "NAME": {
+          "business": "Merchandiser name",
+          "synonyms": [
+            "merchandiser",
+            "merch"
+          ],
+          "role": "label",
+          "searchable": true
+        }
+      }
+    },
+    "PARTYMAS": {
+      "business": "Party",
+      "plural": "parties",
+      "kind": "master",
+      "description": "Party / ledger master (exporters, suppliers).",
+      "synonyms": [
+        "party",
+        "parties",
+        "supplier",
+        "suppliers",
+        "exporter",
+        "ledger",
+        "vendor"
+      ],
+      "label": "LEDGER",
+      "display": [
+        "LEDGER",
+        "SHORTNAME",
+        "STATE",
+        "COUNTRY",
+        "GSTNO"
+      ],
+      "columns": {
+        "LEDGER": {
+          "business": "Party name",
+          "synonyms": [
+            "party",
+            "ledger",
+            "supplier",
+            "exporter"
+          ],
+          "role": "label",
+          "searchable": true
+        }
+      }
+    }
+  },
+  "relationships": [
+    {
+      "child": "ORDSTYLE",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → lines",
+      "status": "verified"
+    },
+    {
+      "child": "ORDSIZE",
+      "parent": "ORDSTYLE",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ],
+        [
+          "SUB3_SUBNO",
+          "SUBNO"
+        ]
+      ],
+      "label": "line → sizes",
+      "status": "verified"
+    },
+    {
+      "child": "ORDSIZE",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → sizes",
+      "status": "verified"
+    },
+    {
+      "child": "ORDFAB",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → fabric",
+      "status": "verified"
+    },
+    {
+      "child": "ORDFAB",
+      "parent": "ORDSTYLE",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ],
+        [
+          "FSUBNO",
+          "SUBNO"
+        ]
+      ],
+      "label": "line → fabric",
+      "status": "proposed"
+    },
+    {
+      "child": "ORDYARN",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → yarn",
+      "status": "verified"
+    },
+    {
+      "child": "ORDYARN",
+      "parent": "ORDFAB",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ],
+        [
+          "SUB9_YDET",
+          "YDET"
+        ]
+      ],
+      "label": "fabric → yarn",
+      "status": "proposed"
+    },
+    {
+      "child": "ORDACC",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → accessories",
+      "status": "verified"
+    },
+    {
+      "child": "ORDCOMP",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → components",
+      "status": "verified"
+    },
+    {
+      "child": "ORDSHIP",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → shipment splits",
+      "status": "verified"
+    },
+    {
+      "child": "ORDDOC",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → documents",
+      "status": "verified"
+    },
+    {
+      "child": "ORDCMTFAB",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → CMT fabric",
+      "status": "verified"
+    },
+    {
+      "child": "ORDERENTRY",
+      "parent": "ORDMAS",
+      "pairs": [
+        [
+          "ORDMASID",
+          "ORDMASID"
+        ]
+      ],
+      "label": "order → report rows",
+      "status": "proposed"
+    },
+    {
+      "child": "ORDSTYLE",
+      "parent": "STYLENUM",
+      "pairs": [
+        [
+          "STNO",
+          "STYLENUMID"
+        ]
+      ],
+      "label": "Style number (ORDSTYLE.STNO, copied from the order)",
+      "status": "verified"
+    },
+    {
+      "child": "ORDSTYLE",
+      "parent": "STYLEMAS",
+      "pairs": [
+        [
+          "STYLENAME",
+          "STYLEMASID"
+        ]
+      ],
+      "label": "Garment description (ORDSTYLE.STYLENAME, copied from the order)",
+      "status": "verified"
+    },
+    {
+      "child": "ORDSTYLE",
+      "parent": "UNITMAS",
+      "pairs": [
+        [
+          "PUOM",
+          "UNITMASID"
+        ]
+      ],
+      "label": "Line unit (ORDSTYLE.PUOM, copied from the order)",
+      "status": "verified"
+    }
+  ]
+}
