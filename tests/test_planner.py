@@ -1,6 +1,7 @@
 """Planner accuracy: registry-driven mapping, business validation, BOM arithmetic, relationships."""
 import json
 from copy import deepcopy
+from decimal import Decimal
 from pathlib import Path
 import pytest
 from backend import workbooks
@@ -85,7 +86,7 @@ def test_fabric_kg_yarn_split_and_relationships_when_verified():
     assert {f['values']['FSUBNO'] for f in fab} <= subnos                     # fabric → its garment line
     assert [y['values']['YQTY'] for y in yarn] == [f['values']['POQTY'] for f in fab]  # 100% yarn reconciles exactly
     assert {(y['values']['SUB9_FSUBNO'], y['values']['SUB9_YDET']) for y in yarn} == {(f['values']['FSUBNO'], f['values']['YDET']) for f in fab}
-    assert all(op['values']['ORDMASID'] == '$o1' for op in fab + yarn + by('ORDACC'))
+    assert all(op['values']['ORDMASID'] == planner.Ref('o1') for op in fab + yarn + by('ORDACC'))
     assert 'FABRIC' not in fab[0]['values']   # fabric master unavailable → column stays unwritten
     acc = by('ORDACC')
     tape = [a for a in acc if a['values']['AUOM'] and 'TWILL' in a['values']['ACCDESC']]
@@ -129,9 +130,10 @@ def test_accessory_quantities_scale_to_saved_pieces_and_too_long_text_is_grouped
             s['quantity'] = s['quantity'] // 10
     o['quantity_basis'] = 'sample'
     p = planner.plan(snapshot(), [o], 'f' * 64, verified_bom())
-    long = [e for e in p['errors'] if 'allows 50' in e]
+    long = [e for e in p['errors'] if 'at most 50 characters' in e]
     assert len(long) == 1 and 'A VERY LONG ACCESSORY NAME' in long[0]
-    assert [i for i in p['issues'] if 'allows 50' in i['message']][0]['path'] == 'orders.0.accessories.6.description'
+    assert 'Accessory description / code can hold at most 50 characters in Axpert' in long[0] and '(Oracle ORDACC.ACCDESC)' in long[0]
+    assert [i for i in p['issues'] if 'at most 50' in i['message']][0]['path'] == 'orders.0.accessories.6.description'
     assert any('scaled' in w for w in p['warnings'])
     saved = sum(s['quantity'] for l in o['lines'] for s in l['sizes'])
     care = [op for op in p['operations'] if op['table'] == 'ORDACC'][0]
@@ -153,7 +155,7 @@ def test_missing_insert_grant_is_reported():
 def test_duplicate_file_and_existing_order_reference_are_blocked():
     o = order_from_fixture(order_ref='pk/1')
     p = planner.plan(snapshot(existing_refs={'PK/1'}, committed_hashes={'f' * 64}), [o], 'f' * 64, mapping.effective())
-    assert any('already been committed' in e for e in p['errors'])
+    assert any('already been saved to Oracle. Open Saved orders' in e for e in p['errors'])
     assert any('already exists' in e for e in p['errors'])
 
 
@@ -177,3 +179,70 @@ def test_semantic_model_lists_entities_and_scoped_joins():
     join = next(j for j in sm['joins'] if j['left'] == 'ORDSTYLE' and j['right'] == 'ORDSIZE')
     assert 'ORDSTYLE.ORDMASID = ORDSIZE.ORDMASID' in join['condition']
     assert any(j['right'] == 'BUYMAS' and j['verified'] for j in sm['joins'])
+
+
+# --- review findings: numbers, packs, table status ------------------------------------------------------------
+@pytest.mark.parametrize('value,whole', [('2.000', '2000'), ('12.000', '12000'), ('1.500', '1500'), ('1,500', '1500'), ('1.000.000', '1000000')])
+def test_grouped_whole_numbers_are_never_guessed_whatever_reader_kept_them(value, whole):
+    errors = []
+    assert planner.count(value, 'Order 1, line 1, size M', errors) == 0
+    assert errors == [f'Order 1, line 1, size M: “{value}” could mean {whole} — type the quantity as a whole number.']
+    assert planner.count('2.0', 'x', []) == 2 and planner.count(2000, 'x', []) == 2000 and planner.count(' 12 ', 'x', []) == 12
+
+
+def test_a_matrix_cell_written_with_a_dot_between_thousands_is_refused():
+    o = order_from_fixture(accessories=[], fabrics=[])
+    o['lines'][0]['sizes'][1]['quantity'] = '2.000'           # as a reader keeps it, without the "unclear" marker
+    o['lines'][0]['declared_total'] = '10.000'
+    p = planner.plan(snapshot(), [o], 'f' * 64, mapping.effective())
+    bad = {i['path']: i['message'] for i in p['issues'] if i['severity'] == 'error'}
+    assert '“2.000” could mean 2000' in bad['orders.0.lines.0.sizes.1.quantity'] and '“10.000” could mean 10000' in bad['orders.0.lines.0']
+
+
+def test_decimal_removes_only_commas_that_separate_thousands():
+    assert planner.decimal('1,234.5', 'x', []) == Decimal('1234.5') and planner.decimal('1,20,000', 'x', []) == 120000
+    assert planner.decimal('180.5', 'x', []) == Decimal('180.5')
+    for value in ('180,5', '1,03', '12,34,5', '1,2'):
+        errors = []
+        assert planner.decimal(value, 'Order 1, fabric 1 consumption', errors) is None
+        assert errors == [f'Order 1, fabric 1 consumption: “{value}” has a comma that does not separate thousands — type it with a '
+                          'decimal point (for example 180.5).']
+
+
+@pytest.mark.parametrize('basis', ['order_demo', 'sample'])
+def test_pieces_per_pack_must_agree_with_the_workbook_header(basis):
+    """Header: 100 packs = 200 pieces, so a pack is 2 pieces whether sample or order quantities are saved."""
+    for unit, per, refused in (('PACK', 7, True), ('PACK', 3, True), ('PACK', 2, False), ('PCS', 1, False)):
+        o = order_from_fixture(qty_unit=unit, pieces_per_unit=per, accessories=[], fabrics=[], quantity_basis=basis)
+        p = planner.plan(snapshot(), [o], 'f' * 64, mapping.effective())
+        found = [i for i in p['issues'] if i['severity'] == 'error' and 'pieces per pack' in i['message']]
+        assert bool(found) is refused, (unit, per, found)
+        if refused:
+            assert found[0]['path'] == 'orders.0.pieces_per_unit'
+            assert f'you chose {per} pieces per pack, but the workbook header says 100 packs = 200 pieces (2 per pack)' in found[0]['message']
+
+
+def test_pack_orders_do_not_multiply_trims_and_say_how_fabric_is_worked_out():
+    pcs, pack = (order_from_fixture(qty_unit=u, pieces_per_unit=n) for u, n in (('PCS', 1), ('PACK', 2)))
+    for o in (pcs, pack):
+        o['accessories'] = [a for a in o['accessories'] if len(a['description']) <= 50]
+    a, b = (planner.plan(snapshot(), [o], 'f' * 64, verified_bom()) for o in (pcs, pack))
+    acc = lambda p: [op['values']['APOQTY'] for op in p['operations'] if op['table'] == 'ORDACC']
+    assert acc(a) == acc(b) and not [w for w in b['warnings'] if 'scaled' in w]      # the same order: the workbook's trims
+    assert any('packs of 2, so fabric is worked out for the pieces being saved' in w and '12.36 kg, not 6.18 kg' in w for w in b['warnings'])
+    for l in pack['lines']:                                    # sample quantities: a tenth of the order, in packs
+        for s in l['sizes']:
+            s['quantity'] //= 10
+    pack['quantity_basis'] = 'sample'
+    p = planner.plan(snapshot(), [pack], 'f' * 64, verified_bom())
+    pieces = 2 * sum(s['quantity'] for l in pack['lines'] for s in l['sizes'])
+    assert acc(p)[0] == pytest.approx(round(15.45 * pieces / 300, 3))      # of the workbook's 150 packs × 2 pieces
+    assert any(f'scaled from the workbook’s 150 packs (300 pieces) to the {pieces} pieces being saved' in w for w in p['warnings'])
+
+
+def test_order_tables_must_be_verified_to_be_saved():
+    m = mapping.effective([dict(table='ORDSIZE', column='', status='proposed')])
+    p = planner.plan(snapshot(), [order_from_fixture(accessories=[], fabrics=[])], 'f' * 64, m)
+    assert any('size quantities (ORDSIZE) is not verified for saving' in e for e in p['errors'])
+    assert all(mapping.effective()['tables'][t]['status'] == 'verified' for t in ('ORDMAS', 'ORDSTYLE', 'ORDSIZE'))
+    assert not planner.plan(snapshot(), [order_from_fixture(accessories=[], fabrics=[])], 'f' * 64, mapping.effective())['errors']

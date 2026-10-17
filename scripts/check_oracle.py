@@ -158,7 +158,7 @@ def check_readonly(conn, report, owner, app_user, app_tables):
     if row.get('READ_ONLY') == 'YES':
         report.ok('It is a READ ONLY user (Oracle 23ai): Oracle refuses any write by it (ORA-28194).')
     c.execute('SELECT COUNT(*) FROM PP_IMPORT_LOG')
-    report.info(f'Import history readable: {c.fetchone()[0]} receipts.')
+    report.info(f'Saved orders history (PP_IMPORT_LOG) readable: {c.fetchone()[0]} receipts.')
 
 
 def main():

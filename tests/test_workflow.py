@@ -75,7 +75,7 @@ def test_full_order_flow_with_readback_graph(env):
     assert c.put(f'/api/drafts/{d["id"]}', json={'version': p['version'] + 1, 'orders': []}).status_code == 409
     # same file again is blocked at preview
     p2 = ready(c, upload(c), ref='TEST/ORD/2')
-    assert any('already been committed' in e for e in p2['plan']['errors'])
+    assert any('already been saved to Oracle' in e for e in p2['plan']['errors'])
     assert [h['job_id'] for h in c.get('/api/history').json()] == [d['id']]
     actions = [a['action'] for a in c.get('/api/audit').json()]
     assert {'upload', 'edit', 'preview', 'approved_saved'} <= set(actions)

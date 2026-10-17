@@ -423,8 +423,8 @@ def commit(draft, expected_hash, approver, mapping=None, required=()):
         problem = write_problem(conn)
         if problem:
             raise RuntimeError(problem)
-        c = conn.cursor(); c.execute('SELECT ID FROM PP_WRITE_LOCK WHERE ID=1 FOR UPDATE WAIT 10')
-        if c.fetchone() is None:
+        c = conn.cursor(); c.execute('SELECT ID FROM PP_WRITE_LOCK WHERE ID=1 FOR UPDATE WAIT 10'); locked = c.fetchone()
+        if locked is None:
             raise RuntimeError('Nothing was saved: the save lock (row 1 of POPPYS_APP.PP_WRITE_LOCK) is missing, so two saves could '
                                'overlap. Ask the database administrator to run: INSERT INTO POPPYS_APP.PP_WRITE_LOCK VALUES (1); COMMIT;')
         previous = read_result(c, draft['id'])
