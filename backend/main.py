@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
-from . import local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
+from . import evidence, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
 from .config import DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
@@ -40,6 +40,7 @@ DEFAULT_SETTINGS = dict(allow_self_approval=True, company_exporter='POPPYS KNITW
 @asynccontextmanager
 async def lifespan(app):
     store.init()
+    evidence.init()
     start_value_index()   # background: the server answers at once, the first question does not pay for the build
     yield
 
@@ -706,11 +707,83 @@ def semantic_model(user=Depends(authenticated)):
     return semantic.model(m, cols, _discovery())
 
 
+def _discovery_claim(found):
+    parts = []
+    if found.get('filled') is not None or found.get('fill_rate') is not None:
+        parts.append(f'filled in {found.get("fill_rate", found.get("filled"))}')
+    if found.get('resolves_in'):
+        r = found['resolves_in']; parts.append(f'{r.get("matched")}/{r.get("rows")} values found in {r.get("table")}.{r.get("key")}')
+    if found.get('examples'):
+        parts.append('examples ' + ', '.join(str(x) for x in found['examples'][:3]))
+    return '; '.join(parts) or 'Seen in schema discovery on the live database'
+
+
+def _record_or_409(bundle, user):
+    try:
+        return evidence.record(bundle, user['username'])
+    except evidence.EvidenceError as exc:
+        raise HTTPException(409, str(exc))
+
+
+class EvidenceIn(BaseModel):
+    subject: str = Field(max_length=300)
+    kind: str = Field(max_length=40)
+    claim: str = Field(max_length=1000)
+    source: str | None = Field(default=None, max_length=200)
+    detail: dict | None = None
+    supersedes: str | None = Field(default=None, max_length=64)
+
+
+class QuestionIn(BaseModel):
+    subject: str = Field(max_length=300)
+    question: str = Field(max_length=1000)
+
+
+class AnswerIn(BaseModel):
+    evidence_id: str = Field(max_length=64)
+
+
+@app.get('/api/evidence')
+def get_evidence(subject: str = Query(max_length=300), history: bool = False, user=Depends(authenticated)):
+    return dict(subject=subject, records=evidence.for_subject(subject, include_superseded=history),
+                questions=evidence.questions(subject, open_only=False), kinds=evidence.KINDS)
+
+
+@app.post('/api/evidence')
+def add_evidence(data: list[EvidenceIn], user=Depends(require('mapping'))):
+    rows = _record_or_409([dict(r.model_dump(), source=r.source or f'reviewer:{user["username"]}') for r in data], user)
+    store.audit(user['username'], 'evidence_recorded', rows[0]['subject'], count=len(rows))
+    return rows
+
+
+@app.get('/api/evidence/questions')
+def open_questions(user=Depends(authenticated)):
+    return evidence.questions()
+
+
+@app.post('/api/evidence/questions')
+def ask_question(data: QuestionIn, user=Depends(require('mapping'))):
+    try:
+        return dict(id=evidence.ask(data.subject, data.question, user['username']))
+    except evidence.EvidenceError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.post('/api/evidence/questions/{qid}/answer')
+def answer_question(qid: int, data: AnswerIn, user=Depends(require('mapping'))):
+    try:
+        evidence.answer(qid, data.evidence_id, user['username'])
+    except evidence.EvidenceError as exc:
+        raise HTTPException(409, str(exc))
+    return dict(ok=True)
+
+
 class MappingStatus(BaseModel):
     table: str
     column: str | None = None
     status: str = Field(pattern='^(verified|proposed)$')
     note: str | None = Field(default='', max_length=500)
+    evidence: str | None = Field(default=None, max_length=1000)   # required to verify: what shows this is right
 
 
 @app.post('/api/mapping/status')
@@ -720,8 +793,18 @@ def set_mapping_status(data: MappingStatus, user=Depends(require('mapping'))):
         raise HTTPException(404, 'Unknown table or column.')
     if data.column and (m['tables'][data.table]['columns'][data.column].get('key') or 'parent' in m['tables'][data.table]['columns'][data.column]):
         raise HTTPException(409, 'Keys and parent links are fixed by the registry.')
-    store.set_mapping_status(data.table, data.column, data.status, user['username'], data.note or '')
-    store.audit(user['username'], 'mapping_status', f'{data.table}.{data.column or "*"}', status=data.status, note=data.note)
+    if data.status == 'verified':
+        spec = m['tables'][data.table]
+        subject = f'column:{data.table}.{data.column}' if data.column else f'table:{data.table}'
+        note = (spec['columns'][data.column] if data.column else spec).get('evidence')
+        facts = [dict(kind='erp_screen', source='config/oracle_mapping.json', claim=note)] if note else []
+        found = (_discovery() or {}).get('columns', {}).get(f'{data.table}.{data.column}') if data.column else None
+        if found:
+            facts.append(dict(kind='discovery', source=f'discover_schema {(_discovery() or {}).get("generated_at", "")}',
+                              claim=_discovery_claim(found), detail=found))
+        _record_or_409(evidence.verification_bundle(subject, data.evidence or '', user['username'], facts), user)
+    store.set_mapping_status(data.table, data.column, data.status, user['username'], data.note or data.evidence or '')
+    store.audit(user['username'], 'mapping_status', f'{data.table}.{data.column or "*"}', status=data.status, note=data.note, evidence=data.evidence)
     return get_mapping(user)
 
 
@@ -981,6 +1064,7 @@ class KnowledgeEdit(BaseModel):
     role: str | None = Field(default=None, pattern='^(label|measure|date|reference|attribute|key|system)$')
     status: str | None = Field(default=None, pattern='^(verified|proposed|rejected|unreviewed)$')
     searchable: bool | None = None
+    evidence: str | None = Field(default=None, max_length=1000)   # required to verify a relationship or a table
 
 
 @app.put('/api/knowledge/objects')
@@ -993,7 +1077,17 @@ def knowledge_edit(data: KnowledgeEdit, user=Depends(require('mapping'))):
         t, _, c = obj.partition('.')
         if not kb.table(t) or (c and not kb.column(obj)):
             raise HTTPException(404, 'Unknown table or column.')
-    change = {k: v for k, v in data.model_dump().items() if v is not None and k != 'object'}
+    if obj.startswith('join:') and data.status == 'verified':
+        j = next(j for j in kb.data['joins'] if j['id'] == obj[5:])
+        facts = {'constraint': [dict(kind='declared_fk', source='Oracle data dictionary', claim=j['label'])],
+                 'registry': [dict(kind='application_code', source='config/oracle_mapping.json', claim=f'The order writer links {j["label"]}')],
+                 'curated': [dict(kind='application_code', source='config/semantic_catalog.json', claim=f'Curated relationship: {j["label"]}')]}.get(j['source'], [])
+        _record_or_409(evidence.verification_bundle(obj, data.evidence or '', user['username'], facts), user)
+    elif obj.startswith('join:') and data.status == 'rejected' and data.evidence:
+        _record_or_409(evidence.verification_bundle(obj, 'Rejected: ' + data.evidence, user['username'], []), user)
+    elif data.status == 'verified' and '.' not in obj:
+        _record_or_409(evidence.verification_bundle(f'table:{obj}', data.evidence or '', user['username'], []), user)
+    change = {k: v for k, v in data.model_dump().items() if v is not None and k not in ('object', 'evidence')}
     merged = store.set_knowledge_override(obj, change, user['username'])
     insight.invalidate()
     store.audit(user['username'], 'knowledge_edit', obj, **change)

@@ -4,6 +4,20 @@ import { api, id, orderFields } from './api.js';
 
 let section = 'mapping';
 
+// Evidence ledger (backend/evidence.py): verifying needs a statement of what proves it; earlier records are shown.
+async function askEvidence(subject, title, intro, { required = true, ok = 'Verify' } = {}) {
+  let past = [];
+  try { past = (await api(`/api/evidence?subject=${encodeURIComponent(subject)}`)).records; } catch (_) { /* ledger optional to display */ }
+  const html = `${intro}${past.length ? `<div class="ev-list"><b>Evidence already recorded</b>${past.map(r => `<div class="ev-item"><span class="pill">${esc(r.kind_text)}</span> ${esc(r.claim)}<div class="muted small-text">${esc(r.source)} · ${esc(r.actor)} · ${esc(new Date(r.at).toLocaleString())}</div></div>`).join('')}</div>` : ''}
+    <label class="field" style="margin-top:10px">${required ? 'What shows this is correct? *' : 'Reason (optional)'}
+      <textarea id="ev-text" rows="3" maxlength="1000" placeholder="${required ? 'e.g. Axpert Order Entry → Buyer PO field fills BONO; checked on order PK/26-27/S/1320' : ''}"></textarea></label>
+    <p class="muted small-text">Saved permanently with your name. Similar column names are not proof.</p>`;
+  if (!await confirmDialog(title, html, ok)) return null;
+  const text = ($('#ev-text')?.value || '').trim();
+  if (required && text.length < 15) { notify('Write what shows this is correct (at least 15 characters). Nothing was changed.', 'warning'); return null; }
+  return text;
+}
+
 export function bindAdmin() {
   $$('.subnav [data-admin]').forEach(b => b.addEventListener('click', () => { section = b.dataset.admin; loadAdmin(); }));
 }
@@ -58,8 +72,13 @@ async function mapping(body) {
   body.onclick = async e => {
     const b = e.target.closest('[data-status]'); if (!b || b.classList.contains('on')) return;
     const table = b.dataset.mapTable, column = b.dataset.mapCol, status = b.dataset.status;
-    if (status === 'verified' && !await confirmDialog(`Verify ${table}${column ? '.' + column : ''}?`, `<p>From now on POPPYS AI may write ${column ? 'this column' : 'this table'} on approved imports. Confirm that the evidence shows this is the correct business meaning in Axpert.</p>`, 'Verify')) return;
-    await busy('Saving…', async () => { await api('/api/mapping/status', { method: 'POST', body: { table, column: column || null, status } }); notify(`${table}${column ? '.' + column : ''} is now ${status}. Prepare previews again to use it.`, 'success'); await mapping(body); });
+    let proof = null;
+    if (status === 'verified') {
+      proof = await askEvidence(column ? `column:${table}.${column}` : `table:${table}`, `Verify ${table}${column ? '.' + column : ''}?`,
+        `<p>From now on POPPYS AI may write ${column ? 'this column' : 'this table'} on approved imports.</p>`);
+      if (proof === null) return;
+    }
+    await busy('Saving…', async () => { await api('/api/mapping/status', { method: 'POST', body: { table, column: column || null, status, evidence: proof } }); notify(`${table}${column ? '.' + column : ''} is now ${status}. Prepare previews again to use it.`, 'success'); await mapping(body); });
   };
 }
 
@@ -270,7 +289,16 @@ async function dictionary(body) {
     const r = await api('/api/knowledge/refresh', { method: 'POST' }); notify(`Read ${r.tables} tables · indexed ${fmt(r.values.values, 0)} values in ${r.values.columns} columns.`, 'success'); await dictionary(body); }));
   body.onclick = async e => {
     const j = e.target.closest('[data-join]');
-    if (j && !j.classList.contains('on')) { await busy('Saving…', async () => { await api('/api/knowledge/objects', { method: 'PUT', body: { object: 'join:' + j.dataset.join, status: j.dataset.status } }); const x = joins.find(y => y.id === j.dataset.join); x.status = j.dataset.status; drawRels(); notify('Link updated.', 'success'); }); return; }
+    if (j && !j.classList.contains('on')) {
+      let proof = null;
+      if (j.dataset.status !== 'proposed') {
+        const verify = j.dataset.status === 'verified';
+        proof = await askEvidence('join:' + j.dataset.join, verify ? 'Verify this link?' : 'Reject this link?',
+          verify ? '<p>Ask AI and the explorer will join these tables this way without warning.</p>' : '<p>Ask AI will never join these tables this way.</p>',
+          { required: verify, ok: verify ? 'Verify' : 'Reject' });
+        if (proof === null) return;
+      }
+      await busy('Saving…', async () => { await api('/api/knowledge/objects', { method: 'PUT', body: { object: 'join:' + j.dataset.join, status: j.dataset.status, evidence: proof || null } }); const x = joins.find(y => y.id === j.dataset.join); x.status = j.dataset.status; drawRels(); notify('Link updated.', 'success'); }); return; }
     const d = e.target.closest('[data-dict]'); if (d) { dictTable = d.dataset.dict; drawList(); return openDict(dictTable, edit); }
     const x = e.target.closest('[data-del-example]'); if (x) { await busy('Removing…', async () => { await api(`/api/chat/examples/${x.dataset.delExample}`, { method: 'DELETE' }); await dictionary(body); }); }
   };

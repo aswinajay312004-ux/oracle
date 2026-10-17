@@ -127,3 +127,11 @@ Repository: `morluto/rea` (MIT). I read the repository, including `.agents/skill
 - REA is an MCP server and CLI for analysing **shipped artifacts without source**: binaries, Electron bundles, APKs, firmware and packet captures. Its own skill says to skip it for ordinary source-repository analysis. The open-source products above publish their source, so REA's tooling does not apply.
 - Its official installer downloads unpinned code (`npx rea-agents@latest`, `curl | bash`). That conflicts with this project's offline and pinned-dependency rules, so it was not installed into the project.
 - **Its method was adopted.** Each finding above is a claim backed by evidence: the repository and licence, the mechanism, and what we took from it. What we observed is kept separate from our own design choices. Unknowns stay open: real-Oracle behaviour of the new screens is verified only by the opt-in tests on the client's machine (`tests/test_oracle_insight.py`).
+
+### REA reuse in the product (session 2)
+
+The user asked to reuse whatever helps from REA. Re-checked: REA analyses shipped binaries/APKs/firmware, which this
+product never receives, and its installer fetches unpinned code, which breaks the offline rule. Cloning it into the
+cloud session was also blocked by the session's code-safety policy, so nothing from REA is vendored. What transfers is
+its **evidence ledger design**, now implemented natively in `backend/evidence.py` (tests: `tests/test_evidence.py`) and
+enforced on every "Verified" decision in Setup.

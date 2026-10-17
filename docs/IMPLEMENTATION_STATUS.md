@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-17 (session 2, batch 4) | **388 passed, 0 failed, 18 skipped**; ruff clean | Evidence ledger; docs no longer claim PDF support |
 | 2026-10-17 (session 2, batch 3) | **382 passed, 0 failed, 18 skipped**; ruff clean | Overview + work queue, Ask AI charts, phone layout |
 | 2026-10-17 (session 2, batch 2) | **381 passed, 0 failed, 18 skipped**; ruff clean | Ask AI, explorer, value index and dictionary harvest moved to the separate read-only account |
 | 2026-10-17 (session 2, batch 1) | **377 passed, 0 failed, 18 skipped**; ruff clean | Root cause of 6: formulas saved without a result (script/export files) read as empty, so pack/piece totals and workbook arithmetic were missing. Added `backend/formulas.py` (safe subset: + − × ÷ ^, refs, SUM/MIN/MAX/AVERAGE/COUNT/ROUND*; nothing executed; cells marked `computed`, sheet note added). 1 stale test updated for the intentional `words` rule in `closed_lists()`. The 18 skips are opt-in local-Oracle tests and client workbooks that exist only on the laptop |
@@ -41,14 +42,15 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | C2 | Relationship graph / flowchart (no CDN, SVG) | Implemented | `frontend/js/graph.js`, `flow.js` |
 | E1 | Overview screen (default landing): work queue, real counts, recent Oracle saves from receipts, connection lights; nothing estimated (offline → "—") | Implemented, Cloud-tested (rendered desktop + phone) | `GET /api/overview`, `frontend/js/dashboard.js` |
 | E2 | Phone layout: no horizontal page scroll on any screen | Fixed (was broken on New order, Database, Overview) | `minmax(0,1fr)` grids in `frontend/styles.css` |
+| B6 | Evidence ledger (REA design): immutable, idempotent, conflict-refusing, atomic bundles, open questions; "Verified" requires a reviewer statement + auto-recorded facts | Implemented, Cloud-tested (dialog exercised in browser) | `backend/evidence.py`, `/api/evidence*`, Setup dialogs, `tests/test_evidence.py` |
 | D1 | Windows service, backup/restore, upgrade/rollback | Implemented, Cloud-tested | `deploy/windows/`, `scripts/backup.py` |
 | D2 | Offline packaging (wheelhouse, no CDN) | Needs check | — |
 
 ## Next steps (in order)
 
 1. ~~Fix the failing tests~~ (done, batch 1).
-2. Remove leftover PDF wording in docs (PDF is out of scope).
-3. Re-audit gaps against the master prompt; implement missing pieces. Done so far: read-only account, charts, overview. Still open: undo/redo in the draft editor; REA review (user asked to reuse what helps from https://github.com/morluto/rea).
+2. ~~Remove leftover PDF wording in docs~~ (done, batch 4).
+3. Re-audit gaps against the master prompt; implement missing pieces. Done so far: read-only account, charts, overview. Still open: undo/redo in the draft editor. REA reviewed and its evidence-ledger design adopted (batch 4).
 4. Produce exact local Oracle verification commands and record results here.
 
 ## Local verification

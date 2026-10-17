@@ -1,4 +1,4 @@
-# POPPYS AI — Excel/PDF to Oracle ERP order entry
+# POPPYS AI — Excel to Oracle ERP order entry
 
 POPPYS AI is a local, approval-controlled automation tool for POPPYS Garments (Axpert ERP on Oracle). An employee drops a buyer or merchandising file. POPPYS AI then:
 
@@ -12,7 +12,7 @@ POPPYS AI is a local, approval-controlled automation tool for POPPYS Garments (A
 
 ## What it does
 
-- **Documents:** Excel `.xlsx`/`.xlsm` and text PDFs.
+- **Documents:** Excel workbooks (`.xlsx`/`.xlsm`, plus `.xls`, `.xlsb`, `.ods`, CSV and ERP HTML exports). PDF, Word, images and scans are deliberately out of scope.
   - Built-in recognition: merch BOM workbooks (order / sample / summary blocks, packs, fabric requirement, trim tables) and buyer contract confirmation reports.
   - Simple tables are matched by column headings.
   - For a new layout, the user shows the fields once (local AI or layout analysis suggests them), and it is saved as a template.
@@ -46,10 +46,12 @@ See **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)**. In short:
 backend/
   main.py            API: auth & roles, uploads, drafts, preview, approval, history, mapping, explorer, audit
   workbooks.py       Excel understanding: detectors, BOM extraction, templates
-  pdfdocs.py         PDF → virtual sheets
+  readers.py         every spreadsheet format → one cell model (isolated worker, size caps)
+  formulas.py        results for simple formulas saved without them
+  evidence.py        evidence ledger for mapping / relationship verification
   ai.py              local layout suggestions (Ollama) + deterministic layout analysis
   local_store.py     SQLite workspace: users, drafts, revisions, audit, templates, mapping verification
-  oracle_store.py    Oracle connection, transactional writer, live row reads
+  oracle_store.py    Oracle connections (write account + read-only account), transactional writer, live row reads
   erp/
     mapping.py       registry loader + verified/proposed overrides
     catalog.py       live Oracle dictionary vs offline snapshot

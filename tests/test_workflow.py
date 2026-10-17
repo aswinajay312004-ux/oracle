@@ -108,10 +108,12 @@ def test_bom_rows_saved_only_after_admin_verifies_mapping(env):
     m = c.get('/api/mapping').json()
     for t in m['tables']:
         if t['table'] in ('ORDFAB', 'ORDYARN', 'ORDACC'):
-            assert c.post('/api/mapping/status', json={'table': t['table'], 'status': 'verified'}).status_code == 200
+            proof = 'Checked against the Axpert BOM screen for this test order'
+            assert c.post('/api/mapping/status', json={'table': t['table'], 'status': 'verified'}).status_code == 409   # no evidence: refused
+            assert c.post('/api/mapping/status', json={'table': t['table'], 'status': 'verified', 'evidence': proof}).status_code == 200
             for col in t['columns']:
                 if not col['fixed'] and col['status'] == 'proposed' and (not col['master'] or col['master_available']):
-                    assert c.post('/api/mapping/status', json={'table': t['table'], 'column': col['column'], 'status': 'verified'}).status_code == 200
+                    assert c.post('/api/mapping/status', json={'table': t['table'], 'column': col['column'], 'status': 'verified', 'evidence': proof}).status_code == 200
     d = upload(c, merch_bom(sample=(2, 2, 2, 2))); p = ready(c, d, ref='TEST/BOM/1')
     assert not p['plan']['errors'], p['plan']['errors']
     r = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).json()

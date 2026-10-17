@@ -3,7 +3,7 @@
 Goal: an order document goes in, and the correct rows land in the correct Oracle tables and columns. Every value can be explained, nothing is written without approval, and every save is proven by reading it back. The same foundation must later support natural-language questions over a much larger schema without being rebuilt.
 
 ```
-Excel / PDF ──► 1 Document layer ──► 2 Business draft ──► 3 ERP planner ──► 4 Approval ──► 5 Writer ──► 6 Read-back
+Excel ───────► 1 Document layer ──► 2 Business draft ──► 3 ERP planner ──► 4 Approval ──► 5 Writer ──► 6 Read-back
                 (cells + provenance)   (orders, lines,      (registry +        (exact plan     (one txn,    (fresh SELECT,
                                         sizes, fabric,       catalog +          hash)           bind vars,   flowchart,
                                         trims)               rules)                             lock)        explorer)
@@ -16,7 +16,7 @@ Excel / PDF ──► 1 Document layer ──► 2 Business draft ──► 3 ER
 
 | # | Layer | Code | Responsibility | Never does |
 |---|---|---|---|---|
-| 1 | Document | `backend/workbooks.py`, `backend/pdfdocs.py` | Reads every cell with value, formula, hidden state and source address. Detects layouts by structure, in order: saved templates, merch BOM, buyer contract, flat table. Extracts fabric and accessory tables. Text PDFs become virtual sheets that go through the same detectors | Guess from filenames or sheet titles, or execute workbook content |
+| 1 | Document | `backend/readers.py`, `backend/workbooks.py`, `backend/formulas.py` | Reads every cell with value, formula, hidden state and source address (all spreadsheet formats → one cell model, parsed in an isolated worker). Calculates simple formulas a file saved without results. Detects layouts by structure, in order: saved templates, merch BOM, buyer contract, flat table. Extracts fabric and accessory tables | Guess from filenames or sheet titles, or execute workbook content |
 | 1b | Assistance | `backend/ai.py` | Deterministic layout guesser plus local Ollama proposals for unfamiliar layouts, validated against real cells | Produce SQL or values that skip review |
 | 2 | Draft | `backend/local_store.py` | Versioned drafts, field-level correction log. Workbook provenance is kept server-side even when a user edits | Lose the original source cell |
 | 3 | Planner | `backend/erp/planner.py` | Business rules: required fields, whole quantities, size and total reconciliation, pack checks, duplicates (file hash, order reference, sizes), cancelled or ambiguous masters, fabric kg = pieces × g ÷ 1000 × rejection, yarn % = 100 with an exact kg split, composition mismatch, accessory scaling, size-name alignment, live column length/precision/scale/nullability. Produces a hashable list of row operations | Write anything |
@@ -79,6 +79,8 @@ See `docs/OPEN_SOURCE_RESEARCH.md` (React Spreadsheet Import, TableFlow, Docling
 
 - Their interaction patterns were adopted: column matching, confirm-before-import, evidence ledgers.
 - Their code was not embedded. None provides garment business rules, Axpert relationships or approval-bound Oracle transactions, and adding them would bring heavy runtime dependencies that conflict with the offline requirement.
-- The runtime uses only permissive, pinned libraries: FastAPI, openpyxl, pdfplumber, python-oracledb, and optionally Ollama.
+- The runtime uses only permissive, pinned libraries: FastAPI, openpyxl, xlrd, python-calamine, defusedxml, python-oracledb, and optionally Ollama.
 
-REA's evidence-ledger idea is reflected in two places: the discovery evidence, and the "source cell → value → Oracle column" chain shown in the preview.
+REA's evidence ledger is implemented in `backend/evidence.py`: immutable records, idempotent re-recording, conflicting claims from the same source refused unless they supersede, all-or-nothing bundles, and open questions closed only by evidence. Verifying a column mapping, a table or a relationship requires a reviewer statement; the Oracle constraint, discovery match rates and the registry's ERP-screen note are recorded with it. The same idea shows in the "source cell → value → Oracle column" chain of the preview.
+
+Ask AI, the explorer and the value index connect with the separate read-only account `POPPYS_RO` (`oracle_store.connect_readonly()`), which refuses any account holding write privileges; only the approval-bound writer uses `POPPYS_APP`.
