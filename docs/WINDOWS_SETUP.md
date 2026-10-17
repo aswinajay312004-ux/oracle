@@ -35,6 +35,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 3. Runs `scripts\grant_bom_tables.py`. This grants `POPPYS_APP` read access to all GARMENT_DEMO tables (for the Database screen and read-back) and INSERT on `ORDFAB`, `ORDYARN` and `ORDACC`. The app still writes these only after you verify their mapping.
 4. Runs `scripts\check_oracle.py`, which prints what the app can see and write.
 
+Before steps 2–4 it checks that Docker runs and that the `oracle26ai` container is up. Each step checks its result: when one fails, the script stops with a red `FAILED: ...` line that says what to do, and never prints "Setup finished". Fix what it says, then run `.\setup.ps1` again.
+
 ### Optional: a read-only account for the reading pages
 
 The Database screen, Ask AI, Saved orders (history) and the read-back flowchart only read. You can give them their own Oracle account, `POPPYS_RO`, which can read but never insert, update or delete. Then even a mistake on those pages cannot change data. Saving orders still uses `POPPYS_APP`.
@@ -45,6 +47,7 @@ The Database screen, Ask AI, Saved orders (history) and the read-back flowchart 
 ```
 
 - The script creates `POPPYS_RO` with a generated password and adds `ORACLE_RO_USER` and `ORACLE_RO_PASSWORD` to `.env.poppys`. The password is never printed.
+- After the Windows service is installed (docs/RUNBOOK.md, section 1), the settings that count are in `C:\ProgramData\PoppysAI\config\.env.poppys`. The script then adds the lines there too and says which files it wrote. Run it in an administrator PowerShell, then run `C:\ProgramData\PoppysAI\current\deploy\windows\install-service.ps1` to copy the settings into the running version.
 - `POPPYS_RO` gets `CREATE SESSION` plus `READ` on the GARMENT_DEMO tables `POPPYS_APP` can read, and on `PP_IMPORT_LOG`. `READ` is like `SELECT` but cannot lock rows. On Oracle 23ai it is also made a READ ONLY user, so Oracle refuses any write by it.
 - It never resets an existing user or password. Run it again after `grant_bom_tables.py` to give `POPPYS_RO` the same tables.
 - If your container is not called `oracle26ai`, set `$env:POPPYS_ORACLE_CONTAINER='<name>'` first.
@@ -155,6 +158,8 @@ The same records are visible in the app under **Database** → *Find an order by
 $env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q     # adds live Oracle tests (labelled TEST rows)
 $env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q tests\test_oracle_insight.py   # Ask AI + explorer SQL on your Oracle (read-only)
 ```
+
+With `POPPYS_TEST_ORACLE=1` the tests save and commit TEST orders. They run only when the Oracle address is this computer (`127.0.0.1`, `localhost` or `::1`, as in `.env.poppys` from `setup.ps1`); for any other address pytest stops before the first test.
 
 ## Troubleshooting
 

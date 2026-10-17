@@ -4,7 +4,8 @@ The same checks CI runs (.github/workflows/ci.yml), for the Windows laptop. Mirr
   .\scripts\check.ps1                  secret scan, lint, JavaScript syntax and unit tests
   .\scripts\check.ps1 lint             one step: secrets | lint | js | tests | oracle
   .\scripts\check.ps1 tests -k api     anything after the step name goes to pytest
-  .\scripts\check.ps1 oracle           the suite with the real-Oracle tests on (needs .env.poppys)
+  .\scripts\check.ps1 oracle           the suite with the real-Oracle tests on (needs .env.poppys; they commit TEST
+                                       orders, so tests/conftest.py refuses an Oracle address that is not this computer)
 
 $env:PYTHON picks the interpreter (default: the .venv one). Dev tools: pip install -r requirements-dev.txt
 Keep this file ASCII-only: Windows PowerShell 5.1 reads scripts without a BOM as ANSI.

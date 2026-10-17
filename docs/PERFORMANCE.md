@@ -238,7 +238,7 @@ POPPYS_REPLICA_DSN=127.0.0.1:1522/FREEPDB1 POPPYS_REPLICA_PASSWORD=<garment pw> 
   .venv/bin/python tests/oracle_replica.py --orders 3000000
 # create POPPYS_APP there with the statements in scripts/bootstrap_local.py (SELECT grants are enough to measure)
 POPPYS_ORACLE_DSN=127.0.0.1:1522/FREEPDB1 POPPYS_ORACLE_USER=POPPYS_APP POPPYS_ORACLE_PASSWORD=<pw> \
-  .venv/bin/python -m uvicorn backend.main:app --port 8023
+  .venv/bin/python -m uvicorn backend.main:app --port 8023 --no-proxy-headers
 POPPYS_ORACLE_DSN=127.0.0.1:1522/FREEPDB1 POPPYS_DISCOVERY_PASSWORD=<garment pw> \
   .venv/bin/python scripts/discover_schema.py --out /tmp/discovery
 POPPYS_TEST_ORACLE=1 POPPYS_ORACLE_DSN=... .venv/bin/python -m pytest -q tests/test_oracle.py tests/test_oracle_insight.py tests/test_large_db.py

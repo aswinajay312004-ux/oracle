@@ -867,7 +867,7 @@ def test_command_lines_survive_windows_argument_splitting(tmp_path, script, func
     assert argv_split('--copy-to "E:\\" --include-uploads') == ['--copy-to', 'E:" --include-uploads']
     join = (f'{function} $values' if function else "(@($values | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join ' ')")
     out = ps_run(tmp_path, DEPLOY / script, ['ConvertTo-CommandLineArgument'] + ([function] if function else []),
-                 f'$values = @($env:PS_VALUES | ConvertFrom-Json)\nWrite-Output ({join})', env={'PS_VALUES': json.dumps(ARG_VALUES)})
+                 f'$values = $env:PS_VALUES | ConvertFrom-Json\nWrite-Output ({join})', env={'PS_VALUES': json.dumps(ARG_VALUES)})
     line = out.rstrip('\r\n')
     assert argv_split(line) == ARG_VALUES, line
     assert ' E:\\ ' in line, 'a drive root needs no quotes at all'
@@ -878,7 +878,7 @@ def test_backup_task_refresh_reads_the_old_second_copy_folder(tmp_path):
     cases = ['-E -s -X utf8 "C:\\p\\backup.py" --dest "C:\\d" --copy-to "E:\\" --include-uploads',   # written before the fix
              '--dest C:\\d --copy-to E:\\ --include-uploads', '--copy-to "D:\\Poppys Backups\\\\"', '--dest C:\\d']
     out = ps_run(tmp_path, DEPLOY / 'backup-task.ps1', ['Get-CopyToOption'],
-                 "foreach ($a in @($env:PS_CASES | ConvertFrom-Json)) { Write-Output ('[' + (Get-CopyToOption $a) + ']') }",
+                 "$cases = $env:PS_CASES | ConvertFrom-Json\nforeach ($a in $cases) { Write-Output ('[' + (Get-CopyToOption $a) + ']') }",
                  env={'PS_CASES': json.dumps(cases)})
     assert out.split() == ['[E:\\]', '[E:\\]', '[D:\\Poppys', 'Backups\\]', '[]']
 
@@ -975,7 +975,7 @@ def test_release_copy_of_docs_takes_only_the_files_git_tracks(tmp_path):
 
 # --- setup.ps1: every step's exit code is checked -------------------------------------------------------------------------------------
 FAKE_PYTHON = '''#!/bin/sh
-echo "$*" >> "$SETUP_LOG"
+printf '%s\n' "$*" >> "$SETUP_LOG"
 if [ -n "$FAIL_ON" ]; then
   case "$*" in *"$FAIL_ON"*) echo "stand-in failure for: $*" >&2; exit 1 ;; esac
 fi
@@ -1167,3 +1167,98 @@ def test_readonly_account_settings_go_into_the_service_master_copy(tmp_path, mon
     cru.main()
     assert dotenv_values(master)['ORACLE_RO_PASSWORD'] == c['ORACLE_RO_PASSWORD'] and len(state['created']) == 1
     assert str(master) in capsys.readouterr().out
+
+
+# --- rollback.ps1 end to end, with only its Windows-specific helpers replaced (service, junction, sc.exe, icacls) ----------------
+ROLLBACK_STUBS = {
+    'Get-JunctionTarget': 'function Get-JunctionTarget([string]$Path) { $f = $Path + ".junction"; if (Test-Path -LiteralPath $f) { return [string](Get-Content -LiteralPath $f -TotalCount 1) }; return "" }',
+    'Set-Junction': 'function Set-Junction([string]$Path, [string]$Target) { Add-Content $env:SIM_LOG "junction $(Split-Path -Leaf $Target)"; Set-Content -LiteralPath ($Path + ".junction") -Value $Target }',
+    'Wait-PortFree': 'function Wait-PortFree([int]$Seconds) { return $true }',
+    'Wait-PoppysReady': 'function Wait-PoppysReady([int]$Seconds) { Add-Content $env:SIM_LOG "ready"; return "/readyz" }',
+    'Invoke-Native': ('function Invoke-Native([string]$FilePath, [string[]]$ArgumentList) {\n'
+                      "  if ($FilePath -match '(sc|icacls)\\.exe$') { Add-Content $env:SIM_LOG ($FilePath + ' ' + ($ArgumentList -join ' ')); return 0 }\n"
+                      "  $saved = $ErrorActionPreference; $ErrorActionPreference = 'Continue'\n"
+                      "  try { & $FilePath @ArgumentList 2>&1 | ForEach-Object { Write-Host ('   ' + $_) }; return $LASTEXITCODE } finally { $ErrorActionPreference = $saved }\n}"),
+}
+ROLLBACK_PRELUDE = '''function Get-Service { param([string]$Name, $ErrorAction) return [pscustomobject]@{ Name = $Name; Status = [string](Get-Content $env:SIM_STATE -TotalCount 1) } }
+function Stop-Service { param([string]$Name, [switch]$Force) Add-Content $env:SIM_LOG 'stop'; Set-Content $env:SIM_STATE 'Stopped' }
+function Start-Service { param([string]$Name) Add-Content $env:SIM_LOG 'start'; Set-Content $env:SIM_STATE 'Running' }
+'''
+
+
+@pytest.fixture
+def rollback_sim(tmp_path):
+    """An install folder with releases 0.8 (database schema 3) and 0.9 (schema 4, active) and rollback.ps1 in a source
+    folder next to the real scripts/backup.py. Returns run(*args) -> (exit code, output, log of service actions)."""
+    if os.name == 'nt' or not POWERSHELL:
+        pytest.skip('simulated on Linux/macOS with PowerShell 7 (stand-in releases link the test Python)')
+    inst, src = tmp_path / 'PoppysAI', tmp_path / 'source'
+    for d in ('releases', 'data/backups/pre-upgrade', 'logs', 'config'):
+        (inst / d).mkdir(parents=True)
+    (inst / 'PoppysAI.exe').write_text('WinSW stand-in')
+    shutil.copy(DEPLOY / 'PoppysAI.xml', inst / 'PoppysAI.xml')
+    for version, schema in (('0.8', 3), ('0.9', 4)):
+        release = inst / 'releases' / version
+        (release / 'backend').mkdir(parents=True)
+        (release / 'backend' / 'main.py').write_text('')
+        (release / 'backend' / 'local_store.py').write_text(f'SCHEMA_VERSION = {schema}\n')
+        (release / '.venv' / 'Scripts').mkdir(parents=True)
+        os.symlink(sys.executable, release / '.venv' / 'Scripts' / 'python.exe')
+    (inst / 'current.junction').write_text(str(inst / 'releases' / '0.9'))
+    (inst / 'previous.txt').write_text('0.8\n')
+    (src / 'deploy' / 'windows').mkdir(parents=True)
+    (src / 'scripts').mkdir()
+    shutil.copy(ROOT / 'scripts' / 'backup.py', src / 'scripts' / 'backup.py')
+    text = (DEPLOY / 'rollback.ps1').read_text(encoding='utf-8').replace('#Requires -RunAsAdministrator', '').replace('$Port = 8008', f'$Port = {free_port()}', 1)
+    for name, stub in ROLLBACK_STUBS.items():
+        m = re.search(r'^function ' + re.escape(name) + r'\b.*?^\}\n', text, re.S | re.M)
+        text = text[:m.start()] + stub + '\n' + text[m.end():]
+    i = text.index("$ErrorActionPreference = 'Stop'")
+    (src / 'deploy' / 'windows' / 'rollback.ps1').write_text(text[:i] + ROLLBACK_PRELUDE + text[i:], encoding='utf-8')
+    log, state = tmp_path / 'sim.log', tmp_path / 'state.txt'
+    db = inst / 'data' / 'poppys.sqlite3'
+
+    def run_rollback(*args):
+        log.write_text('')
+        state.write_text('Running')
+        env = {**os.environ, 'SIM_LOG': str(log), 'SIM_STATE': str(state)}
+        r = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-File', str(src / 'deploy' / 'windows' / 'rollback.ps1'), '-InstallRoot', str(inst),
+                            *map(str, args)], capture_output=True, text=True, env=env, timeout=300)
+        return r.returncode, r.stdout + r.stderr, log.read_text().splitlines()
+    app_data(inst / 'data', entries=2)
+    set_user_version(db, 3)                                        # as 0.8 left it
+    r = subprocess.run([sys.executable, str(src / 'scripts' / 'backup.py'), '--data-dir', str(inst / 'data'), '--app-root', str(inst / 'releases' / '0.8'),
+                        '--dest', str(inst / 'data' / 'backups' / 'pre-upgrade'), '--label', 'pre-upgrade-0.8', '--no-prune', '--log', 'none'],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout
+    set_user_version(db, 4)                                        # 0.9 upgraded the database
+    return SimpleNamespace(run=run_rollback, inst=inst, src=src, db=db, zip=only_zip(inst / 'data' / 'backups' / 'pre-upgrade'))
+
+
+def test_rollback_to_a_release_that_cannot_open_the_database_changes_nothing(rollback_sim):
+    code, out, log = rollback_sim.run()
+    assert code == 1 and log == [], 'refused before the service was stopped'
+    assert 'release 0.8 cannot open it' in out and f"-To 0.8 -RestoreDatabase '{rollback_sim.zip}'" in out, out
+    with closing(sqlite3.connect(rollback_sim.db)) as c:
+        assert c.execute('PRAGMA user_version').fetchone()[0] == 4
+
+
+def test_automatic_rollback_restores_the_pre_upgrade_backup_when_the_database_is_too_new(rollback_sim):
+    code, out, log = rollback_sim.run('-To', '0.8', '-PreUpgradeBackup', rollback_sim.zip, '-Reason', 'automatic')
+    assert code == 0, out
+    assert log[0].endswith('failure PoppysAI reset= 0 actions= ""') and log[1] == 'stop', 'restarts paused before the stop'
+    assert log[2:] == ['junction 0.8', 'sc.exe failure PoppysAI reset= 3600 actions= restart/10000/restart/30000/restart/60000', 'start', 'ready']
+    with closing(sqlite3.connect(rollback_sim.db)) as c:
+        assert c.execute('PRAGMA user_version').fetchone()[0] == 3, 'the pre-upgrade database is back'
+    assert list(rollback_sim.db.parent.glob('poppys.sqlite3.before-restore-*')), 'the newer one is kept aside'
+
+
+def test_rollback_does_not_start_the_service_when_a_failed_restore_left_no_database(rollback_sim):
+    backup_py = rollback_sim.src / 'scripts' / 'backup.py'          # a restore that dies after moving the database aside
+    backup_py.write_text(backup_py.read_text(encoding='utf-8').replace(
+        "if __name__ == '__main__':\n    sys.exit(main())",
+        "if __name__ == '__main__':\n    if '--restore' in sys.argv:\n        to = Path(sys.argv[sys.argv.index('--to') + 1])\n"
+        "        (to / DB_NAME).rename(to / (DB_NAME + '.before-restore-x'))\n        sys.exit(1)\n    sys.exit(main())"), encoding='utf-8')
+    code, out, log = rollback_sim.run('-To', '0.9', '-RestoreDatabase', rollback_sim.zip)
+    assert code == 1 and 'start' not in log, log
+    assert 'sc.exe config PoppysAI start= demand' in log and 'was NOT started' in out

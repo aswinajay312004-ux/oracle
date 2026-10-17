@@ -358,7 +358,7 @@ function Copy-Doc([string]$From, [string]$To) {
   $src = Join-Path $From 'docs'
   if (-not (Test-Path -LiteralPath $src -PathType Container)) { return }
   $dest = Join-Path $To 'docs'
-  $tracked = Get-GitOutput $From @('-c', 'core.quotepath=off', 'ls-files', '--', 'docs')
+  $tracked = Get-GitOutput $From @('-c', 'core.quotepath=off', 'ls-files', 'docs')
   if ($tracked.Ok -and $tracked.Lines.Count -gt 0) {
     if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
     $copied = 0

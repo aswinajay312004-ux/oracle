@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
 JOBS = WORKFLOW['jobs']
 BASH, GIT, NODE = shutil.which('bash'), shutil.which('git'), shutil.which('node')
-PWSH = shutil.which('pwsh') or shutil.which('powershell')
+# On Windows the laptop's Windows PowerShell 5.1 (powershell.exe), so check.ps1 is tested as it runs there; else PowerShell 7.
+PWSH = (shutil.which('powershell') or shutil.which('pwsh')) if os.name == 'nt' else (shutil.which('pwsh') or shutil.which('powershell'))
 PW = 'PASS' + 'WORD'   # test values are built, so this file itself passes the secret scan
 needs_bash_git = pytest.mark.skipif(not (BASH and GIT) or os.name == 'nt', reason='needs bash and git (Linux/macOS)')
 

@@ -69,7 +69,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 You should see six numbered steps and, at the end, **Installed and running: POPPYS AI <version> at http://127.0.0.1:8008**. What it did:
 
 - copied the app into `C:\ProgramData\PoppysAI\releases\<version>` and pointed `C:\ProgramData\PoppysAI\current` at it;
-- copied your database from the repository's `data` folder into `C:\ProgramData\PoppysAI\data` with a checked backup and restore. The original stays where it was, and a copy of that backup is in `data\backups\first-install`;
+- copied your database, with its audit key and anchor (`audit.key`, `audit.anchor`: they prove the audit history was not changed), from the repository's `data` folder into `C:\ProgramData\PoppysAI\data` with a checked backup and restore. The original stays where it was, and a copy of that backup is in `data\backups\first-install`;
 - copied `.env.poppys` into `C:\ProgramData\PoppysAI\config`;
 - locked down the folders (only administrators can change the program; the service can write only to `data` and `logs`);
 - registered and started the service.
@@ -82,7 +82,12 @@ Then register the nightly backup (section 4) and run it once:
 
 Open http://127.0.0.1:8008 and sign in with your usual account; your users, drafts and templates are there. From now on, **do not use `start.ps1`** on this laptop: the service already uses port 8008, and the repository's `data` folder is no longer used.
 
-Running `install-service.ps1` again is safe. It repairs the installation: permissions, settings copy, service registration. To move to a new version, use `upgrade.ps1` (section 6), not the install script.
+Running `install-service.ps1` again is safe. It repairs the installation: permissions, settings copy, service registration. It never copies files over the version that is running: if the repository has changed files under the same version name, it stops and says so. To move to a new version, use `upgrade.ps1` (section 6), not the install script.
+
+If both the repository's `data` folder and `C:\ProgramData\PoppysAI\data` hold a database and the repository's one was changed later (you used `start.ps1` after removing the service, section 8), the script stops before changing anything, shows what each database holds and asks you to choose. Run it again with one of:
+
+- `-UseDatabase Source`: use the repository's database. The service's current database is moved aside (`poppys.sqlite3.before-restore-<time>`), not deleted.
+- `-UseDatabase Installed`: keep the service's database. The repository's one is not used.
 
 ---
 
@@ -133,15 +138,15 @@ Each log file is rolled over at 10 MB and the last 8 are kept, so logs cannot fi
 
 ### What happens every night
 
-At **01:30** Task Scheduler runs `scripts\backup.py` as LOCAL SERVICE (task `\POPPYS AI\Nightly backup`). If the laptop was off at 01:30, it runs as soon as the laptop is on again. The backup:
+At **01:30** Task Scheduler runs `C:\ProgramData\PoppysAI\nightly-backup.cmd` as LOCAL SERVICE (task `\POPPYS AI\Nightly backup`). That small file, written by `backup-task.ps1`, starts `scripts\backup.py` with the Python of the version that is active at that moment, so the task keeps working after an upgrade. If the laptop was off at 01:30, it runs as soon as the laptop is on again. The backup:
 
-1. copies the database with SQLite's online backup function, so the app can keep running (a plain file copy could catch a half-written file);
+1. copies the database with SQLite's online backup function, in one go, so the app can keep running (a plain file copy could catch a half-written file). While the copy runs, a save in the app waits a moment;
 2. checks the copy: `integrity_check` must say `ok`, and `foreign_key_check` must find nothing;
-3. writes `poppys-backup-<date>-<time>.zip` containing the database, `config\oracle_mapping.json`, `config\semantic_catalog.json`, `data\schema_discovery.json` and a manifest with the SHA-256 of every file. Next to it, it writes `<name>.zip.sha256`;
+3. writes `poppys-backup-<date>-<time>.zip` containing the database, the audit key and anchor (`data\audit.key`, `data\audit.anchor`), `config\oracle_mapping.json`, `config\semantic_catalog.json`, `data\schema_discovery.json` and a manifest with the SHA-256 of every file. Next to it, it writes `<name>.zip.sha256`;
 4. opens the finished zip and checks everything again;
-5. deletes old backups, keeping the newest backup of each of the last **14 days**, **8 weeks** and **12 months**. It deletes only after a new backup has passed its checks, so a failing backup never eats the good ones.
+5. deletes old backups, keeping the newest backup of each of the last **14 days**, **8 weeks** and **12 months**. It deletes only after a new backup has passed its checks, so a failing backup never eats the good ones. Backups in `data\backups\pre-upgrade` and `data\backups\first-install` are never deleted automatically.
 
-Never in a backup: `.env.poppys` (the Oracle password) or any other secret. Keep a copy of `.env.poppys` somewhere safe and separate, for example an encrypted USB stick in a locked drawer. Without it, a rebuilt laptop needs a new Oracle password (section 10).
+Never in a backup: `.env.poppys` (the Oracle password) or any other secret. The audit key is not a password: it only proves that nobody rewrote the audit history, and a restore needs it. Keep a copy of `.env.poppys` somewhere safe and separate, for example an encrypted USB stick in a locked drawer. Without it, a rebuilt laptop needs a new Oracle password (section 10).
 
 **The Oracle database is not in this backup.** The orders saved to the ERP live in Oracle. On this laptop Oracle Free in Docker is a rehearsal system. The production Oracle server must have its own backups, made by the DBA (or Agile Labs).
 
@@ -151,7 +156,7 @@ Never in a backup: `.env.poppys` (the Oracle password) or any other secret. Keep
 C:\ProgramData\PoppysAI\current\deploy\windows\backup-task.ps1 -RunNow
 ```
 
-Options: `-At 02:15` (another time), `-SecondCopy D:\PoppysBackups` (also copy every backup to a second drive), `-IncludeUploads` (also back up the uploaded buyer files), `-Remove` (unregister; backups are kept). Without the service (only `start.ps1`), add `-AppRoot C:\path\to\oracle`.
+Options: `-At 02:15` (another time), `-SecondCopy D:\PoppysBackups` (also copy every backup to a second drive; a drive root such as `E:\` works too), `-IncludeUploads` (also back up the uploaded buyer files), `-Remove` (unregister; backups are kept). Without the service (only `start.ps1`), add `-AppRoot C:\path\to\oracle`. Every upgrade registers the task again with the same time and options (`backup-task.ps1 -Refresh`).
 
 **Second location.** Keep a copy away from the laptop's disk: `-SecondCopy` to a second internal drive or an always-connected USB disk, or once a week copy the newest zip and its `.sha256` file to an encrypted USB stick (BitLocker To Go), and keep the stick in another room. The backups contain order details and password hashes: treat them as confidential.
 
@@ -165,7 +170,7 @@ Options: `-At 02:15` (another time), `-SecondCopy D:\PoppysBackups` (also copy e
    & $py $bk --data-dir $data --verify latest
    ```
 
-   Expected: five `ok` lines and **OK: the backup is complete and readable.**
+   Expected: six `ok` lines (the last one: `audit key and anchor ... ok`) and **OK: the backup is complete and readable.** A line `WARNING: this backup has no audit key` means the backup was made by an older version: the data is complete, but after restoring it the audit history cannot be proven untouched. Make a new backup now (below).
 
 | Result / exit code | Meaning | What to do |
 |---|---|---|
@@ -174,6 +179,7 @@ Options: `-At 02:15` (another time), `-SecondCopy D:\PoppysBackups` (also copy e
 | 2 | Set-up problem (wrong folder, missing file) | Run `backup-task.ps1` again; read the message |
 | 3 | REFUSED (only for restores) | See section 5 |
 | 4 | Backup fine, but the copy to the second location failed | Connect the second drive; the next night copies again |
+| 5 | Restored, but the audit history of the restored data cannot be proven untouched (only for restores) | Read the warning. Usually the backup had no `audit.key`. The data is restored; tell support, and keep the output |
 
 To make a backup **now** (before maintenance, or after a big day): `& $py $bk --data-dir $data`. To list the backups and see which ones retention keeps: `& $py $bk --data-dir $data --list`.
 
@@ -195,6 +201,7 @@ A backup is only proven when it has been restored. Do this on the first working 
    - five `ok` lines (the backup file is complete);
    - `Restored into the scratch folder ...`;
    - `Restored database: integrity_check ok, foreign keys ok, row counts match`;
+   - `Audit history of the restored data: ok (... entries, keyed chain and anchor match)`;
    - `Starting the restored app on http://127.0.0.1:8018 ...`;
    - `The restored app answered ... with 200.` and `The restored app reads its users from the restored database (needs_setup=False)`;
    - **OK: restore drill passed for poppys-backup-....zip**
@@ -205,28 +212,30 @@ Optional, to look at the restored data yourself: add `--keep-scratch` to step 3.
 
 ```powershell
 cd <the scratch folder>\app
-& $py -E -s -m uvicorn backend.main:app --host 127.0.0.1 --port 8018
+& $py -E -s -m uvicorn backend.main:app --host 127.0.0.1 --port 8018 --no-proxy-headers
 ```
 
 Open http://127.0.0.1:8018 and sign in with your normal account. Check that **Setup → Audit history** and the drafts show yesterday's work. Saving and **Saved orders** do not work here, because Oracle is deliberately switched off. Press Ctrl+C in PowerShell, then delete the scratch folder.
 
-**If the drill fails:** the live system is not affected. Run `& $py $bk --data-dir $data --verify <path of an older backup>` on the previous two backups. If those pass, the newest file is damaged: check the disk (section 9.4, step 6) and watch the next night's backup. Keep the failing zip and the drill output for support.
+**If the drill fails:** the live system is not affected. Run `& $py $bk --data-dir $data --verify <path of an older backup>` on the previous two backups. If those pass, the newest file is damaged: check the disk (section 9.4, step 6) and watch the next night's backup. If the drill says the restored audit history did not pass the check, the backup's audit key is missing or does not match: make a new backup now and drill that one. Keep the failing zip and the drill output for support.
 
 ### Restore for real
 
 Use this when the live database is lost or damaged, or support asks you to go back to a backup. Anything entered in POPPYS AI after the backup was made is lost; orders already saved to Oracle stay in Oracle. *Not yet tested on real Windows.*
 
-1. `Stop-Service PoppysAI`
-2. Choose the backup: `& $py $bk --data-dir $data --list`. Normally the newest one; for a failed upgrade, the one in `data\backups\pre-upgrade`.
-3. Restore it into the live data folder:
+1. Choose the backup: `& $py $bk --data-dir $data --list`. Normally the newest one; for a failed upgrade, the one in `data\backups\pre-upgrade`.
+2. Find the active version: `C:\ProgramData\PoppysAI\current\deploy\windows\rollback.ps1 -List` (the line marked `<- active`).
+3. Restore it. This stops the service (with restart-after-crash paused, so Windows cannot start it in the middle), restores, starts it again and waits until it answers:
 
    ```powershell
-   & $py $bk --data-dir $data --restore latest --to $data --force
+   C:\ProgramData\PoppysAI\current\deploy\windows\rollback.ps1 -To <active version> -RestoreDatabase "<full path of the zip>"
    ```
 
-   (or put the full path of a zip in place of `latest`). The current database is **moved aside, never deleted**: `poppys.sqlite3.before-restore-<time>`. The script refuses (`REFUSED`, exit code 3) while POPPYS AI is still running or another program has the database open. Stop it and run the command again.
-4. `Start-Service PoppysAI`, open the app, sign in, and check the newest drafts and **Setup → Audit history**.
+   The current database, its audit key and anchor are **moved aside, never deleted**: `poppys.sqlite3.before-restore-<time>` and so on. If anything goes wrong half-way, every file is put back and the service starts again on the old data. The restore refuses (`REFUSED`) a backup made by a newer POPPYS AI version than the active one, because that version would refuse to start on it.
+4. Open the app, sign in, and check the newest drafts and **Setup → Audit history**.
 5. Re-upload the buyer files of any work done after the backup time. The duplicate checks stop an order that is already in Oracle from being saved twice ("This exact workbook has already been committed").
+
+Without the service (only `start.ps1`): close the `start.ps1` window, then `.\.venv\Scripts\python.exe scripts\backup.py --restore <zip> --to .\data --force` in the repository folder, then `.\start.ps1`. The script refuses (`REFUSED`, exit code 3) while POPPYS AI is still running or another program has the database open.
 
 On a **new or rebuilt laptop**: set up Docker/Oracle and Python as in WINDOWS_SETUP.md, install the service from the release folder (section 1; without an old database it starts empty), put your safe copy of `.env.poppys` into `C:\ProgramData\PoppysAI\config`, run `install-service.ps1` again, then restore the newest backup from the second location with the steps above, giving `--restore` the full path of the zip on that drive.
 
@@ -239,7 +248,7 @@ On a **new or rebuilt laptop**: set up Docker/Oracle and Python as in WINDOWS_SE
 1. Get the new release folder:
    - from a release zip: unpack it to, for example, `C:\Temp\poppys-ai-1.3.0`, then unblock the files:
      `Get-ChildItem -Recurse C:\Temp\poppys-ai-1.3.0 | Unblock-File`;
-   - or from git: `git pull` in the repository, then `.\setup.ps1` (it updates `.venv`).
+   - or from git: `git pull` in the repository, then `.\setup.ps1` (it updates `.venv`). From git, every commit is its own version: the `VERSION` file plus the short commit, for example `0.9.0-abc1234` (and `-dirty-<hash>` when files were changed without a commit). So an upgrade after `git pull` always installs the new code, even when `VERSION` did not change.
 2. In an administrator PowerShell, run the **new** release's upgrade script:
 
    ```powershell
@@ -248,9 +257,10 @@ On a **new or rebuilt laptop**: set up Docker/Oracle and Python as in WINDOWS_SE
 
 3. What it does, in order:
    1. checks the release (`SHA256SUMS` when the release has one) and copies it into `releases\<version>`, while the old version keeps running;
-   2. makes a checked backup into `data\backups\pre-upgrade`. If that fails, it stops and nothing has changed;
+   2. makes a checked backup into `data\backups\pre-upgrade` (database, audit key and anchor). It gets 30 minutes (`-BackupMinutes` to change that). If it fails or takes longer, the upgrade stops and nothing has changed. Pre-upgrade backups are never deleted automatically, so a second attempt on the same day keeps the first backup too;
    3. stops the service, points `current` at the new version, starts it, and waits up to 60 seconds for it to answer (`/readyz`, or the home page and `/api/session` in versions without `/readyz`);
-   4. **if the new version does not answer, it rolls back by itself** to the version that was running, and keeps the failed start's error log in `logs\failed-upgrade-...err.log`.
+   4. **if the new version does not answer, it rolls back by itself** to the version that was running, and keeps the failed start's error log in `logs\failed-upgrade-...err.log`. If the new version had already upgraded the database (a newer database version that the old version cannot open), the rollback also puts the pre-upgrade backup back; nothing was entered in the meantime, because the new version never answered;
+   5. after a successful upgrade, registers the nightly backup task again with the same time and options.
 4. Results:
    - exit code 0 and **Upgrade finished**: done. Open the app and check that it works.
    - exit code 1: the upgrade failed. Either it stopped before changing anything, or it rolled back and the old version runs again. Send the `logs` folder to support.
@@ -265,6 +275,8 @@ cmd /c rmdir /s /q "C:\ProgramData\PoppysAI\releases\<old version>"
 
 Never delete the version that `rollback.ps1 -List` marks active or previous.
 
+Pre-upgrade backups stay in `data\backups\pre-upgrade` until you delete them. Keep at least the ones of the active and the previous version; older ones can be moved to the second location or deleted (with their `.sha256` file).
+
 ---
 
 ## 7. Rollback
@@ -278,18 +290,20 @@ cd C:\ProgramData\PoppysAI\current\deploy\windows
 .\rollback.ps1 -To <version>        # or to a version from the list
 ```
 
-It stops the service, points `current` at that version, starts it and waits up to 60 seconds for it to answer. The database is not changed. That is right in nearly every case: a new version only adds to the database.
+It pauses restart-after-crash, stops the service, checks that the older version can open the database, points `current` at that version, starts it and waits up to 60 seconds for it to answer. The database itself is kept as it is when the older version can open it.
 
-Only if support says the new version changed the data in a way the old version cannot read, also put the pre-upgrade backup back. You lose what was entered since the upgrade:
+**When the newer version upgraded the database.** Some versions change how the database is laid out (a newer database version, numbered inside the file). An older version refuses to start on such a database. `rollback.ps1` checks this before it stops anything; if so, it changes nothing and prints the exact command to go back **with** the backup made before the upgrade. That command loses everything entered in POPPYS AI since the upgrade (orders already saved to Oracle stay in Oracle):
 
 ```powershell
-.\rollback.ps1 -RestoreDatabase "C:\ProgramData\PoppysAI\data\backups\pre-upgrade\poppys-backup-<date>-<time>-pre-upgrade-<old version>.zip"
+.\rollback.ps1 -To <old version> -RestoreDatabase "C:\ProgramData\PoppysAI\data\backups\pre-upgrade\poppys-backup-<date>-<time>-pre-upgrade-<old version>.zip"
 ```
+
+Talk to support before you run it: the problem in the new version can often be fixed without losing that work. The automatic rollback during an upgrade (section 6) restores this backup by itself, because nothing was entered in between.
 
 ### If the rollback does not start either
 
 1. Read the last lines of `C:\ProgramData\PoppysAI\logs\PoppysAI.err.log`. The most common causes are Python problems after a Windows or Python update, a full disk (section 9.2) or another program on port 8008.
-2. Try the version before, with the pre-upgrade database. The upgrade message printed the exact `rollback.ps1 -To ... -RestoreDatabase ...` command.
+2. Try the version before, with the pre-upgrade database. The upgrade message printed the exact command, with the full path of `rollback.ps1` (`& 'C:\ProgramData\PoppysAI\releases\<new version>\deploy\windows\rollback.ps1' -To ... -RestoreDatabase ...`).
 3. Still down after 30 minutes: use the app without the service until support helps ([Going back to start.ps1](#going-back-to-startps1)). That keeps you within the 1-hour recovery target.
 
 ---
@@ -313,9 +327,11 @@ Nothing is deleted: data, backups, logs, settings and releases stay in `C:\Progr
    .\.venv\Scripts\python.exe scripts\backup.py --dest C:\ProgramData\PoppysAI\data\backups --restore latest --to .\data --force
    ```
 
-   (the older database in `.\data` is moved aside, not deleted).
+   (the older database in `.\data`, with its audit key and anchor, is moved aside, not deleted).
 3. If `.env.poppys` is no longer in the repository folder, copy it back from `C:\ProgramData\PoppysAI\config`.
 4. `.\start.ps1`. For nightly backups in this mode: `.\deploy\windows\backup-task.ps1 -AppRoot C:\path\to\oracle`.
+
+To go back to the service later, run `install-service.ps1` from the repository (section 1). Because the repository's database is now the newer one, it asks which database to use: answer with `-UseDatabase Source` to take the work done with `start.ps1` into the service.
 
 ---
 
@@ -409,23 +425,29 @@ $bytes = New-Object byte[] 24
 [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
 $new = 'Pp' + (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
 
-# 3. Change it in Oracle. It is sent through a pipe, so it does not appear on screen or in the process list.
-"alter session set container=FREEPDB1;`nalter user POPPYS_APP identified by `"$new`";`nexit" | docker exec -i oracle26ai sqlplus -s / as sysdba
-#    Expected: "Session altered." and "User altered."
+# 3. Change it in Oracle. It is sent through a pipe and SQL*Plus's output is thrown away, so the password appears
+#    nowhere: not on screen (SQL*Plus repeats a failing statement in its error message), not in the process list.
+$sql = "whenever sqlerror exit failure`nwhenever oserror exit failure`nalter session set container=FREEPDB1;`nalter user POPPYS_APP identified by `"$new`";`nexit"
+$sql | docker exec -i oracle26ai sqlplus -s / as sysdba | Out-Null
+$ok = ($LASTEXITCODE -eq 0)
+Remove-Variable sql
+if ($ok) { Write-Host 'OK: Oracle has the new password.' -ForegroundColor Green } else { Write-Host 'FAILED: Oracle did not take the new password. Nothing was changed: run Start-Service PoppysAI and read below.' -ForegroundColor Red }
 
-# 4. Put it into the settings file (the other lines stay as they are).
+# 4. Only if step 3 said OK: put it into the settings file (the other lines stay as they are).
 $file = 'C:\ProgramData\PoppysAI\config\.env.poppys'
-$keep = Get-Content $file | Where-Object { $_ -notmatch '^ORACLE_PASSWORD=' }
-Set-Content $file -Value ($keep + "ORACLE_PASSWORD=$new") -Encoding ASCII
+if ($ok) {
+  $keep = Get-Content $file | Where-Object { $_ -notmatch '^ORACLE_PASSWORD=' }
+  Set-Content $file -Value ($keep + "ORACLE_PASSWORD=$new") -Encoding ASCII
+}
 Remove-Variable new, bytes
 
 # 5. Copy the settings into the running version (with the right permissions) and start the service.
-C:\ProgramData\PoppysAI\current\deploy\windows\install-service.ps1
+if ($ok) { C:\ProgramData\PoppysAI\current\deploy\windows\install-service.ps1 }
 ```
 
 Then check: open the app and confirm the Oracle status light is green, then prepare a preview. Close the PowerShell window. Update your safe offline copy of `.env.poppys` (section 4). If an old copy of `.env.poppys` is still in the repository folder, delete it or update it the same way.
 
-If step 3 says `ORA-01017` or the app cannot connect after step 5, the file and Oracle do not match. Repeat steps 2–5.
+If step 3 says FAILED: check that Docker and `oracle26ai` run (section 9.1), then start again at step 2 (the old password still works, so start the service first). If the app cannot connect after step 5, the file and Oracle do not match. Repeat steps 1–5.
 
 ---
 
@@ -442,7 +464,8 @@ Everything below was written and checked on Linux only. Rehearse it on a clean W
 
 What was checked:
 
-- `scripts\backup.py` passes its unit tests (`tests\test_backup.py`: corrupted zips are detected, retention keeps the right files, a restore equals the source rows, the drill starts a restored app).
+- `scripts\backup.py` passes its unit tests (`tests\test_backup.py`: corrupted zips are detected, retention keeps the right files, a restore equals the source rows, a restore that fails half-way puts every file back, a backup from a newer database version is refused, the audit key and anchor travel with the database so the audit history still verifies after a restore, a backup finishes while the app writes every few milliseconds, the drill starts a restored app).
+- Functions of the `.ps1` scripts were run on their own under PowerShell 7 on Linux: the command-line quoting of the nightly task (`E:\`), the version name of a git checkout (`0.9.0-abc1234`), the docs copy (only files git tracks), the restart-after-crash settings read from `PoppysAI.xml`, the nightly task's `.cmd` file. `setup.ps1` was run with stand-in programs: it stops at the first failing step.
 - The tests also run on the Windows CI job (Windows PowerShell 5.1, through `scripts\check.ps1`), including a parse of every `deploy\windows\*.ps1` file, once they are pushed.
 - The `.ps1` scripts were parsed with PowerShell 7.4 and analysed with PSScriptAnalyzer 1.23 against the Windows PowerShell 5.1 command set. Their checksum, version, port and readiness functions were exercised under PowerShell 7 on Linux.
 - `PoppysAI.xml` is well-formed and uses the WinSW 2.12.0 element names from its v2.12.0 documentation.
@@ -455,8 +478,13 @@ Not yet run on Windows:
 4. The `icacls` permissions with well-known SIDs: the service can write only to `data` and `logs`, and ordinary users cannot read `data` or `config`.
 5. Task Scheduler: a task registered for `S-1-5-19` with LogonType ServiceAccount; "run as soon as possible after a missed start"; the S4U task without the service.
 6. `backup.py` on Windows: replacing files, refusing while the database is open, and the drill's stop of the restored app through the `.venv` launcher.
-7. Section 10 (password rotation), sections 9.1 and 9.2 (Docker auto-start, `docker update --restart`), and the junction-safe release deletion in section 6.
+7. Section 10 (password rotation, including that `whenever sqlerror exit failure` makes `docker exec ... sqlplus` exit non-zero on Windows), sections 9.1 and 9.2 (Docker auto-start, `docker update --restart`), and the junction-safe release deletion in section 6.
 8. Release packaging (embeddable Python 3.13.16, hashed wheelhouse, SHA256SUMS, Authenticode signing; checklist item 47) does not exist yet. The scripts already verify `SHA256SUMS` and use `python\python.exe` when a release ships them.
+9. `rollback.ps1`: `sc.exe failure PoppysAI reset= 0 actions= ""` pauses restart-after-crash (also for a restart Windows had already scheduled before the pause?), and the settings from `PoppysAI.xml` come back afterwards (`sc.exe qfailure PoppysAI`); the database check and the automatic restore after an upgrade whose new version changed the database; `sc.exe config PoppysAI start= demand` when a restore leaves no database.
+10. `upgrade.ps1`: the backup time limit (`System.Diagnostics.Process` and `taskkill /T` stopping the `.venv` launcher and its child Python), and `backup-task.ps1 -Refresh` after the upgrade.
+11. The nightly task running `nightly-backup.cmd` as LOCAL SERVICE (Task Scheduler starting a `.cmd` file with arguments, its exit code as `LastTaskResult`).
+12. `install-service.ps1`: the version name from git run as an administrator on a checkout owned by another Windows user (git's "dubious ownership" check; the script then uses a hash of the files), the `-UseDatabase` question after section 8, the `.env.poppys` copy staged in `config\` and moved into the release with its permissions kept (`icacls <release>\.env.poppys` must show no Users entry).
+13. `setup.ps1` with the real `py`, pip, Docker and Oracle (only stand-ins were used).
 
 ---
 
@@ -464,23 +492,25 @@ Not yet run on Windows:
 
 ### Exit codes
 
-| Script | 0 | 1 | 2 | 3 | 4 |
-|---|---|---|---|---|---|
-| `scripts\backup.py` | OK | FAILED | set-up problem | REFUSED (restore) | second copy failed |
-| `install-service.ps1` | OK | failed | – | (`-StageOnly`) already active | – |
-| `upgrade.ps1` | upgraded | failed (stopped early or rolled back) | upgrade and rollback failed | – | – |
-| `rollback.ps1` | OK | failed | – | nothing to do | – |
-| `backup-task.ps1`, `uninstall-service.ps1` | OK | failed | – | – | – |
+| Script | 0 | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|---|
+| `scripts\backup.py` | OK | FAILED | set-up problem | REFUSED (restore; `--db-info`: the database is newer than that version) | second copy failed | restored, audit history unproven |
+| `install-service.ps1` | OK | failed | – | (`-StageOnly`) already active | – | – |
+| `upgrade.ps1` | upgraded | failed (stopped early or rolled back) | upgrade and rollback failed | – | – | – |
+| `rollback.ps1` | OK | failed (also: the database is too new for that version; nothing changed) | – | nothing to do | – | – |
+| `backup-task.ps1`, `uninstall-service.ps1` | OK | failed | – | – | – | – |
 
 ### The install folder
 
 ```
 C:\ProgramData\PoppysAI\
   PoppysAI.exe, PoppysAI.xml    the service wrapper (WinSW 2.12.0) and its settings (copied from the release)
+  nightly-backup.cmd            what the nightly backup task runs (written by backup-task.ps1)
   current\                      link to the active version in releases\
   previous.txt                  the version before the last upgrade (default for rollback.ps1)
   releases\<version>\           one folder per installed version (its data\ is a link to ..\..\data)
-  data\                         poppys.sqlite3, uploaded files, backups\
+  data\                         poppys.sqlite3, audit.key and audit.anchor (they belong with the database),
+                                uploaded files, backups\ (backups\pre-upgrade and backups\first-install are never pruned)
   logs\                         service logs, deploy-history.log
   config\.env.poppys            Oracle settings (administrators and the service only)
 ```
