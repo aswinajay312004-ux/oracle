@@ -9,10 +9,12 @@ from io import BytesIO
 from pathlib import Path
 import json
 import quopri
+import re
 import struct
 import sys
 import time
 import zipfile
+import zlib
 import pytest
 from backend import isolation, numfmt, readers, workbooks
 from fixtures import merch_bom, flat_orders, as_xls, as_xml2003, as_html, as_csv, as_json_records
@@ -936,3 +938,347 @@ def test_native_reader_panics_become_plain_messages(monkeypatch):
     with pytest.raises(readers.Unreadable) as err:                 # xlrd fails, then calamine panics
         readers.read(LAYOUT['xls'], 'x.xls')
     assert str(err.value) == readers.MSG_XLS_DAMAGED
+
+
+# --- adversarial corpus: regressions found by the hostile-input review ---------------------------------
+def small_xlsx(sheet_patch=None, extra=None):
+    """An openpyxl workbook (sheet 'PO': TITLE / Style, Qty / ZK-1, 5) with its sheet XML patched."""
+    from openpyxl import Workbook
+    wb = Workbook(); ws = wb.active; ws.title = 'PO'
+    ws['A1'], ws['A2'], ws['B2'], ws['A3'], ws['B3'] = 'TITLE', 'Style', 'Qty', 'ZK-1', 5
+    if extra:
+        extra(wb)
+    buf = BytesIO(); wb.save(buf)
+    if sheet_patch is None:
+        return buf.getvalue()
+    return rezip(buf.getvalue(), lambda n, d: (n, sheet_patch(d)) if n == 'xl/worksheets/sheet1.xml' else (n, d))
+
+
+def with_merges(*refs):
+    block = (f'<mergeCells count="{len(refs)}">' + ''.join(f'<mergeCell ref="{r}"/>' for r in refs) + '</mergeCells>').encode()
+    return small_xlsx(lambda d: d.replace(b'</sheetData>', b'</sheetData>' + block, 1))
+
+
+@pytest.mark.parametrize('refs,merged,note', [
+    (['A1:XFD1048576'], [], '1 merged areas larger than 10,000 cells were ignored.'),     # 17 billion MergedCells in openpyxl
+    (['A1:Z60000'], [], '1 merged areas larger than 10,000 cells were ignored.'),         # 1.5 million: 37 s, "too large"
+    (['1:1'], [], '1 merged areas larger than 10,000 cells were ignored.'),               # LibreOffice row reference
+    (['A:B'], [], '1 merged areas larger than 10,000 cells were ignored.'),               # whole columns
+    (['C1:A1'], ['A1:C1'], None), (['$A$1:$C$1'], ['A1:C1'], None), (['A1:B1', 'A1:B1'], ['A1:B1'], None),
+    (['A1:C1 E1:F1'], ['A1:C1', 'E1:F1'], None), (['garbage', 'A1:B1'], ['A1:B1'], '1 merged areas could not be read and were ignored.'),
+])
+def test_ooxml_merged_ranges_are_made_safe_before_openpyxl_loads(refs, merged, note):
+    started = time.monotonic()
+    po = read_one(with_merges(*refs), 'm.xlsx')
+    assert time.monotonic() - started < 5
+    assert po['reader'] == 'openpyxl' and cells_of(po) == {'A1': 'TITLE', 'A2': 'Style', 'B2': 'Qty', 'A3': 'ZK-1', 'B3': 5}
+    assert po['merged'] == merged and (po['notes'] == [note] if note else po['notes'] == [])
+
+
+def test_libreoffice_whole_sheet_merge_is_ignored_with_a_note():
+    content = (FORMATS / 'merge_rows_libreoffice.xlsx').read_bytes()
+    assert b'ref="1:1048576"' in zipfile.ZipFile(BytesIO(content)).read('xl/worksheets/sheet1.xml')
+    sheet = read_one(content, 'merge.xlsx')
+    assert sheet['reader'] == 'openpyxl' and cells_of(sheet) == {'A1': 'everything'} and sheet['merged'] == []
+    assert sheet['notes'] == ['1 merged areas larger than 10,000 cells were ignored.']
+    strict = rezip(content, lambda n, d: (n, d.replace(b'<workbook ', b'<workbook conformance="strict" ', 1)) if n == 'xl/workbook.xml' else (n, d))
+    backup = read_one(strict, 'merge.xlsx')                   # calamine gets the cleaned file too
+    assert backup['reader'] == 'calamine' and cells_of(backup) == {'A1': 'everything'} and '1 merged areas larger' in backup['notes'][-1]
+
+
+def test_merged_area_is_bounded_in_total_and_merges_are_sorted():
+    b = readers.Builder('S')
+    for r in range(1, 40_001, 4):                              # 10,000 ranges of 3 x 3 = 90,000 cells
+        b.merge(r + 1, 1, r + 3, 3)
+    b.merge(1, 1, 1, 2); b.merge(1, 1, 1, 2)
+    for c in range(10, 400):                                   # 390 ranges of 1,000 cells: the area cap stops them
+        b.merge(1, c, 1000, c)
+    sheet = b.sheet()
+    assert sheet['merged'][:2] == ['A1:B1', 'J1:J1000'] and len(set(sheet['merged'])) == len(sheet['merged'])
+    assert len(sheet['merged']) < 10_000 + 1 + 390 and b.merged_area <= readers.MAX_MERGED_CELLS
+    assert any('too many' in n and '250,000 cells' in n for n in sheet['notes'])
+
+
+@pytest.mark.parametrize('element', ['<c r="A{r}"/>', '<row r="{r}" hidden="1"/>'])
+def test_absurd_cell_or_row_counts_are_refused_before_openpyxl_runs(element):
+    body = ''.join(element.format(r=r) for r in range(1, readers.MAX_CELLS * 4 + 2)).encode()
+    content = small_xlsx(lambda d: d.replace(b'</sheetData>', body + b'</sheetData>', 1) if b'</sheetData>' in d else d)
+    started = time.monotonic()
+    with pytest.raises(readers.Unreadable, match='PO: sheet is too large; trim unused formatting'):
+        readers.read(content, 'big.xlsx')
+    assert time.monotonic() - started < 10                      # openpyxl took 26 s on 1M hidden rows
+
+
+def test_one_long_shared_string_in_many_cells_is_refused_before_it_reaches_the_server():
+    """A 33 KB file whose one 32,767-character shared string fills 14,000 cells made the server process
+    peak at 1.4 GB decoding the worker's answer."""
+    sst = ('<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>'
+           + 'X' * 32767 + '</t></si></sst>').encode()
+    rows = ''.join(f'<row r="{r}">' + ''.join(f'<c r="{readers.address(c, r)}" t="s"><v>0</v></c>' for c in range(1, 101)) + '</row>'
+                   for r in range(1, 141)).encode()
+
+    def patch(name, data):
+        if name == 'xl/worksheets/sheet1.xml':
+            data = re.sub(rb'<sheetData>.*</sheetData>|<sheetData/>', b'<sheetData>' + rows + b'</sheetData>', data, flags=re.S)
+        elif name == '[Content_Types].xml':
+            data = data.replace(b'</Types>', b'<Override PartName="/xl/sharedStrings.xml" ContentType="application/'
+                                b'vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>')
+        elif name == 'xl/_rels/workbook.xml.rels':
+            data = data.replace(b'</Relationships>', b'<Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/'
+                                b'2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>')
+        return name, data
+    content = rezip(small_xlsx(), patch)
+    content = zip_of({**{n: zipfile.ZipFile(BytesIO(content)).read(n) for n in zipfile.ZipFile(BytesIO(content)).namelist()}, 'xl/sharedStrings.xml': sst})
+    assert len(content) < 100_000
+    with pytest.raises(readers.Unreadable) as err:
+        readers.read(content, 'amp.xlsx')
+    assert str(err.value) == readers.MSG_TOO_MUCH_TEXT
+    assert readers._text_size([{'cells': [{'value': 'abc', 'formula': '=A1', 'fmt': '0000'}, {'value': 5, 'formula': None}]}]) == 10
+
+
+def test_isolated_answer_travels_as_utf8_and_keeps_every_character():
+    text = 'ಕೆಂಪು नीला \U0001F600 "q" \\ \x01 \ud800'
+    assert isolation.run(str, (text,), timeout=60) == text            # lone surrogate kept (surrogatepass)
+
+
+def test_sniff_reports_an_oversized_upload_as_too_large_not_damaged():
+    cut = LAYOUT['xlsx'] + b'\0' * (readers.MAX_BYTES + 1 - len(LAYOUT['xlsx']))     # the server reads MAX_BYTES + 1
+    with pytest.raises(readers.Unreadable) as err:
+        readers.sniff(cut, 'big.xlsx')
+    assert str(err.value) == readers.MSG_TOO_BIG
+
+
+def test_zip_with_more_records_than_its_declared_count_is_refused_while_sniffing():
+    out, central = BytesIO(), BytesIO()
+    for i in range(readers.MAX_ZIP_ENTRIES + 5):
+        name = (f'xl/workbook.bin' if i == 0 else f'x/{i}').encode(); offset = out.tell()
+        out.write(struct.pack('<4sHHHHHIIIHH', b'PK\x03\x04', 20, 0, 0, 0, 0, 0, 0, 0, len(name), 0) + name)
+        central.write(struct.pack('<4sHHHHHHIIIHHHHHII', b'PK\x01\x02', 20, 20, 0, 0, 0, 0, 0, 0, 0, len(name), 0, 0, 0, 0, 0, offset) + name)
+    cd = central.getvalue(); at = out.tell(); out.write(cd)
+    out.write(struct.pack('<4sHHHHIIH', b'PK\x05\x06', 0, 0, 3, 3, len(cd), at, 0))      # "3 entries"
+    with pytest.raises(readers.Unreadable, match='internal parts'):
+        readers.sniff(out.getvalue(), 'x.xlsb')
+
+
+@pytest.mark.parametrize('name,message', [('encrypted_libreoffice.xls', readers.MSG_XLS_PASSWORD), ('encrypted_libreoffice.ods', readers.MSG_ODS_PASSWORD)])
+def test_libreoffice_password_protected_files_get_the_password_message(name, message):
+    content = (FORMATS / name).read_bytes()
+    with pytest.raises(readers.Unsupported) as err:
+        readers.read(content, name)
+    assert str(err.value) == message and 'password' in message
+
+
+@pytest.mark.parametrize('ext', ['xlsx', 'xls', 'ods'])
+def test_hidden_rows_with_stale_data_and_a_hidden_tail_read_the_same_everywhere(ext):
+    po = read_one((FORMATS / f'hidden_tail_libreoffice.{ext}').read_bytes(), f'po.{ext}')
+    assert cells_of(po) == {'A1': 'Style', 'B1': 'Qty', 'A2': 'ZK-1', 'B2': 10, 'A3': 'ZK-2', 'B3': 20, 'A4': 'OLD-STALE', 'B4': 999, 'A5': 'ZK-3', 'B5': 30}
+    assert {c['cell'] for c in po['cells'] if c['hidden']} == {'A4', 'B4'}
+
+
+@pytest.mark.parametrize('ext', ['xlsx', 'xls', 'ods'])
+def test_an_empty_first_sheet_does_not_hide_the_data_sheet(ext):
+    kind, sheets = readers.read((FORMATS / f'empty_first_libreoffice.{ext}').read_bytes(), f'po.{ext}')
+    assert [(s['name'], len(s['cells'])) for s in sheets] == [('Cover', 0), ('Order', 4)]
+    assert cells_of(sheets[1]) == {'A1': 'Style', 'B1': 'Qty', 'A2': 'ZK-1', 'B2': 7}
+
+
+@pytest.mark.parametrize('name,content', [
+    ('x.ods', lambda: (FORMATS / 'sheets31_libreoffice.ods').read_bytes()),
+    ('x.xlsx', lambda: small_xlsx(extra=lambda wb: [wb.create_sheet(f'S{i}') for i in range(30)])),
+    ('x.xml', lambda: ('<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
+                       + ''.join(f'<Worksheet ss:Name="S{i}"><Table><Row><Cell><Data ss:Type="Number">{i}</Data></Cell></Row></Table></Worksheet>' for i in range(31))
+                       + '</Workbook>').encode()),
+    ('x.json', lambda: json.dumps({f'S{i}': [{'a': i}] for i in range(31)}).encode()),
+])
+def test_31_sheets_get_the_same_message_in_every_format(name, content):
+    with pytest.raises(readers.Unreadable, match='more than 30 sheets. Delete the sheets that are not part of the order'):
+        readers.read(content(), name)
+
+
+def test_ods_repeated_rows_keep_their_number_formats():
+    def repeat(name, data):
+        if name == 'content.xml':
+            at = [m.start() for m in re.finditer(rb'<table:table-row', data)][1]          # the Style / 0008 / 000-123 row
+            end = data.index(b'>', at)
+            data = data[:end] + b' table:number-rows-repeated="3"' + data[end:]
+        return name, data
+    po = read_one(rezip(LAYOUT['ods'], repeat), 'x.ods')
+    values = cells_of(po)
+    assert [values[f'{c}{r}'] for r in (2, 3, 4) for c in 'BCD'] == ['0008', '000-123', 'ST-0008'] * 3
+    assert values['A5'] == 'hidden row' and {c['cell'] for c in po['cells'] if c['hidden']} == {'E1', 'A5'}
+
+
+def test_spreadsheetml_with_a_long_prolog_is_not_mistaken_for_html():
+    padded = SPREADSHEETML.replace('<?mso-application progid="Excel.Sheet"?>', '<!--' + ' note ' * 3000 + '-->')
+    assert readers.sniff(padded.encode(), 'po.xml') == 'xml2003'
+    assert cells_of(read_one(padded.encode(), 'po.xml'))['B1'] == '0008'
+    hostile = ('<?xml version="1.0"?><!DOCTYPE Workbook [<!ENTITY a "' + 'A' * 20_000 + '">]><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet">'
+               '<Worksheet><Table><Row><Cell><Data>' + '&a;' * 1000 + '</Data></Cell></Row></Table></Worksheet></Workbook>').encode()
+    assert readers.sniff(hostile, 'x.xml') == 'xml2003'                    # was read as HTML: payload text in A1
+    with pytest.raises(readers.Unreadable, match='declares entities'):
+        readers.read(hostile, 'x.xml')
+    with pytest.raises(readers.Unsupported, match='no spreadsheet table'):
+        readers.sniff(b'<data><Table><Row>1</Row></Table></data>', 'x.xml')    # <Table> without <td> is not HTML
+
+
+def test_html_export_with_a_line_of_text_before_the_table_is_html():
+    page = b'Report generated 17-10-2026, user ADMIN\r\n<table><tr><td>Style</td><td>Qty</td></tr><tr><td>0008</td><td>5</td></tr></table>'
+    assert readers.sniff(page, 'export.xls') == 'html'
+    assert cells_of(read_one(page, 'export.xls')) == {'A1': 'Report generated 17-10-2026, user ADMIN', 'A3': 'Style', 'B3': 'Qty', 'A4': '0008', 'B4': 5}
+    assert readers.sniff(page, 'export.csv') == 'csv'                     # a .csv is read as the text it is
+
+
+@pytest.mark.parametrize('content,expected', [
+    (b'[PO No],[Style],[Qty]\r\nP1,ZK-1,5\r\n', {'A1': '[PO No]', 'B1': '[Style]', 'C1': '[Qty]', 'A2': 'P1', 'B2': 'ZK-1', 'C2': 5}),
+    (b'{Style};Qty\r\nZK-1;5\r\n', {'A1': '{Style}', 'B1': 'Qty', 'A2': 'ZK-1', 'B2': 5}),
+    (b'<Style>,Qty\r\nZK-1,5\r\n', {'A1': '<Style>', 'B1': 'Qty', 'A2': 'ZK-1', 'B2': 5}),
+])
+def test_text_files_that_only_start_like_json_or_markup_are_read_as_csv(content, expected):
+    kind, sheets = readers.read(content, 'orders.csv')
+    assert kind == 'csv' and cells_of(sheets[0]) == expected
+    with pytest.raises((readers.Unsupported, readers.Unreadable)):
+        readers.read(content, 'orders.json' if content[:1] in b'[{' else 'orders.xml')     # other names still refuse
+
+
+def test_sap_report_with_title_and_ruler_lines_is_split_on_its_pipes():
+    report = ('17.10.2026                 Purchase Orders                1\r\n' + '-' * 60 + '\r\n'
+              '|Purch.Doc. |Item |Material  |PO Quantity|\r\n' + '-' * 60 + '\r\n'
+              '|4500012345 |00010|0008      |      1,500|\r\n|4500012345 |00020|0009      |      2,000|\r\n' + '-' * 60 + '\r\n').encode('cp1252')
+    values = cells_of(read_one(report, 'EXPORT.XLS'))
+    assert [values[a] for a in ('B3', 'C3', 'D3', 'E3', 'B5', 'C5', 'D5', 'E5', 'E6')] == \
+        ['Purch.Doc.', 'Item', 'Material', 'PO Quantity', 4500012345, '00010', '0008', 1500, 2000]
+    tabbed = '\tMaterial\tPO Quantity\tNet Price\r\n\t0008\t1,500\t125.50\r\n\t000123\t12,50,000\t1.234,56\r\n'.encode('cp1252')
+    values = cells_of(read_one(tabbed, 'EXPORT.XLS'))
+    assert [values[a] for a in ('B2', 'C2', 'D2', 'B3', 'C3', 'D3')] == ['0008', 1500, 125.5, '000123', 1250000, '1.234,56']
+
+
+def test_decimal_comma_files_keep_dot_grouped_numbers_as_text():
+    """In a file written with decimal commas 1.500 is fifteen hundred: reading it as 1.5 would quietly
+    turn a quantity of 1,500 pieces into one and a half."""
+    cells = {c['cell']: c for c in read_one(b'Style;Qty;Price\r\nA;1.500;12,50\r\nB;2;1,500\r\n', 'eu.csv')['cells']}
+    assert [(cells[a]['value'], cells[a].get('flag')) for a in ('B2', 'C2', 'B3', 'C3')] == \
+        [('1.500', 'decimal_comma'), ('12,50', 'decimal_comma'), (2, None), ('1,500', 'decimal_comma')]
+    quoted = {c['cell']: c for c in read_one(b'Style,Qty,Price\r\nA,1.500,"12,50"\r\n', 'eu.csv')['cells']}
+    assert (quoted['B2']['value'], quoted['B2']['flag']) == ('1.500', 'decimal_comma')    # the file uses decimal commas
+    plain = cells_of(read_one(b'Style,Qty,Price\r\nA,1.500,"1,500"\r\n', 'us.csv'))
+    assert (plain['B2'], plain['C2']) == (1.5, 1500)                                       # no decimal commas anywhere
+    points = cells_of(read_one(b'Style;Qty;Price\r\nA;1.500;12.50\r\nB;3;2.25\r\n', 'pt.csv'))
+    assert points['B2'] == 1.5                                     # semicolons, but the prices use decimal points
+
+
+def test_csv_rows_padded_with_empty_fields_are_read_quickly():
+    started = time.monotonic()
+    sheet = read_one(b'Style,Qty\r\n' + b',' * 5_000_000 + b'\r\nZK-1,5\r\n', 'x.csv')
+    assert cells_of(sheet) == {'A1': 'Style', 'B1': 'Qty', 'A3': 'ZK-1', 'B3': 5} and time.monotonic() - started < 5
+
+
+def test_json_records_with_many_different_keys_are_laid_out_sparsely():
+    """100,000 records with one different key each kept a worker busy for the full minute."""
+    started = time.monotonic()
+    sheet = read_one(json.dumps([{f'k{i}': i} for i in range(100_000)]).encode(), 'x.json')
+    assert time.monotonic() - started < 10
+    assert cells_of(sheet)['A1'] == 'k0' and cells_of(sheet)['A2'] == 0 and cells_of(sheet)['B3'] == 1
+    assert any("beyond Excel's last row" in n for n in sheet['notes'])                  # keys past column XFD
+    doc = read_one(b'{"PO": "X", "lines": [{"Style": "A", "Qty": 1}, {"Qty": 2, "Colour": "RED"}]}', 'x.json')
+    assert cells_of(doc) == {'A1': 'PO', 'B1': 'X', 'A3': 'lines', 'A4': 'Style', 'B4': 'Qty', 'C4': 'Colour',
+                             'A5': 'A', 'B5': 1, 'B6': 2, 'C6': 'RED'}
+
+
+def test_cells_beyond_excels_grid_are_ignored_with_a_note():
+    page = b'<table><tr>' + b'<td>1</td>' * (readers.EXCEL_COLS + 3) + b'</tr></table>'
+    sheet = read_one(page, 'wide.xls')
+    assert sheet['cols'] == readers.EXCEL_COLS and sheet['notes'] == ["3 cells beyond Excel's last row (1,048,576) or column (16,384) were ignored."]
+
+
+def test_spreadsheetml_column_styles_are_found_by_bisection():
+    columns = ''.join(f'<Column ss:Index="{i}" ss:StyleID="{"s62" if i % 2 else "Default"}"/>' for i in range(1, 1001))
+    row = '<Row>' + '<Cell><Data ss:Type="Number">8</Data></Cell>' * 1000 + '</Row>'
+    xml = SPREADSHEETML.replace('<Column ss:Index="3" ss:StyleID="s62"/>\n   <Column ss:Index="7" ss:Hidden="1" ss:Span="99999999"/>', columns)
+    xml = re.sub(r'<Row>.*</Table>', row * 60 + '</Table>', xml, flags=re.S)
+    started = time.monotonic()
+    values = cells_of(read_one(xml.encode(), 'x.xml'))
+    assert time.monotonic() - started < 10
+    assert (values['A1'], values['B1'], values['ALK60']) == ('0008', 8, '0008')       # odd columns are styled 0000
+
+
+def test_single_sheet_excel_web_pages_keep_the_sheet_name():
+    page = ('<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets>'
+            '<x:ExcelWorksheet><x:Name>NEXT PO &amp; 4471</x:Name><x:WorksheetOptions><x:Selected/></x:WorksheetOptions></x:ExcelWorksheet>'
+            '</x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body><table><tr><td>Style</td><td>Qty</td></tr></table></body></html>')
+    assert read_one(mhtml([('PO.htm', 'text/html', 'windows-1252', page)]), 'po.mht')['name'] == 'NEXT PO & 4471'
+    assert read_one(page.encode(), 'po.xls')['name'] == 'NEXT PO & 4471'
+    assert read_one(b'<table><tr><td>Style</td></tr></table>', 'po.xls')['name'] == 'Sheet1'
+
+
+def test_ole2_directory_chains_are_classified_quickly():
+    def chained(n, link):
+        END, NOS = 0xFFFFFFFE, 0xFFFFFFFF
+        entry = lambda name, typ, right=NOS, child=NOS: ((name.encode('utf-16-le') + b'\0\0').ljust(64, b'\0')
+                                                        + struct.pack('<HBB', len(name) * 2 + 2, typ, 1) + struct.pack('<III', NOS, right, child)
+                                                        + b'\0' * 36 + struct.pack('<III', END, 0, 0))
+        entries = [entry('Root Entry', 5, child=1)]
+        for i in range(1, n + 1):
+            nxt = i + 1 if i < n else NOS
+            entries.append(entry(f's{i}', 1, **{link: nxt}))
+        entries += [b'\0' * 68 + struct.pack('<III', NOS, NOS, NOS) + b'\0' * 48] * (-len(entries) % 4)
+        dirs = len(entries) // 4; fats = -(-(dirs + 1) // 127) + 1
+        fat = [0xFFFFFFFD] * fats + [fats + k + 1 for k in range(dirs - 1)] + [END]
+        fat += [0xFFFFFFFF] * (fats * 128 - len(fat))
+        header = (readers.OLE2 + b'\0' * 16 + struct.pack('<HHHHH', 0x3E, 3, 0xFFFE, 9, 6) + b'\0' * 6
+                  + struct.pack('<9I', 0, fats, fats, 0, 4096, END, 0, END, 0) + struct.pack('<109I', *(list(range(fats)) + [0xFFFFFFFF] * (109 - fats))))
+        return header + struct.pack(f'<{len(fat)}I', *fat) + b''.join(entries)
+    for link in ('right', 'child'):                     # olefile walks these recursively
+        content = chained(20_000, link)
+        started = time.monotonic()
+        readers.sniff(content, 'x.xls')                  # in the server process: must be quick and never raise raw
+        with pytest.raises((readers.Unsupported, readers.Unreadable)):
+            readers.read(content, 'x.xls')
+        assert time.monotonic() - started < 10
+
+
+# --- the worker stops real parses; the server carries on --------------------------------------------
+def slow_xlsx():
+    """240,000 numbers on one sheet: openpyxl needs several seconds (two loads)."""
+    rows = ''.join(f'<row r="{r}">' + ''.join(f'<c r="{readers.address(c, r)}"><v>{c}</v></c>' for c in range(1, 241)) + '</row>' for r in range(1, 1001))
+    return small_xlsx(lambda d: re.sub(rb'<sheetData>.*</sheetData>', b'<sheetData>' + rows.encode() + b'</sheetData>', d, flags=re.S))
+
+
+def test_isolated_worker_stops_a_real_slow_parse_and_the_server_carries_on():
+    content = slow_xlsx()
+    started = time.monotonic()
+    with pytest.raises(isolation.WorkerFailed) as err:
+        isolation.run(readers._worker_read, (content, 'slow.xlsx'), timeout=1.5, passthrough=(readers.Unsupported, readers.Unreadable))
+    assert err.value.reason == 'timeout' and time.monotonic() - started < 15
+    assert cells_of(read_one(b'Style,Qty\r\nZK-1,5\r\n', 'x.csv'))['B2'] == 5          # the next upload is read normally
+
+
+def lying_zip(member, real_size, declared, extra=None):
+    """A zip whose `member` really inflates to `real_size` bytes but declares `declared` (built in chunks)."""
+    deflate = zlib.compressobj(9, zlib.DEFLATED, -15); chunk = b' ' * (1 << 20); crc = 0; parts = []
+    for _ in range(real_size >> 20):
+        parts.append(deflate.compress(chunk)); crc = zlib.crc32(chunk, crc)
+    data = b''.join(parts) + deflate.flush(); name = member.encode()
+    out = BytesIO(); entries = []
+    for n, payload, method, size, c in [(k.encode(), v, 0, len(v), zlib.crc32(v)) for k, v in (extra or {}).items()] + [(name, data, 8, declared, crc)]:
+        entries.append((n, out.tell(), method, size, c, len(payload)))
+        out.write(struct.pack('<4sHHHHHIIIHH', b'PK\x03\x04', 20, 0, method, 0, 0, c, len(payload), size, len(n), 0) + n + payload)
+    central = b''.join(struct.pack('<4sHHHHHHIIIHHHHHII', b'PK\x01\x02', 20, 20, 0, m, 0, 0, c, clen, size, len(n), 0, 0, 0, 0, 0, off) + n
+                       for n, off, m, size, c, clen in entries)
+    at = out.tell(); out.write(central)
+    out.write(struct.pack('<4sHHHHIIH', b'PK\x05\x06', 0, 0, len(entries), len(entries), len(central), at, 0))
+    return out.getvalue()
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='RLIMIT_AS is enforced on Linux; Windows uses a Job Object')
+def test_isolated_native_reader_running_out_of_memory_only_stops_the_worker():
+    """Without the zip guard, calamine's zip library inflates a part past its declared size and the Rust
+    allocator aborts the process: the worker dies, the server reports it plainly and carries on."""
+    parts = zipfile.ZipFile(BytesIO(small_xlsx()))
+    liar = lying_zip('xl/worksheets/sheet1.xml', 400 << 20, 1000,
+                     {n: parts.read(n) for n in parts.namelist() if n != 'xl/worksheets/sheet1.xml'})
+    with pytest.raises(readers.Unsupported, match='larger than the file says'):
+        readers.read(liar, 'x.xlsx')                                                  # the guard refuses it first
+    with pytest.raises((isolation.WorkerFailed, readers.Unreadable)) as err:
+        isolation.run(readers.read_calamine, (liar,), timeout=60, memory=384 << 20, passthrough=(readers.Unsupported, readers.Unreadable))
+    assert getattr(err.value, 'reason', None) in ('crashed', 'memory')        # calamine buffers the whole part
+    assert cells_of(read_one(b'Style,Qty\r\nZK-1,5\r\n', 'x.csv'))['B2'] == 5

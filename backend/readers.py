@@ -1034,7 +1034,9 @@ def _ooxml_prepare(content):
             if sheet_names is None:
                 sheet_names = _ooxml_sheet_names(archive, names)
             label = sheet_names.get(name) or name.rsplit('/', 1)[-1]
-            if xml.count(b'<c ') + xml.count(b'<c>') + xml.count(b':c ') > MAX_CELLS * 4:
+            cells = xml.count(b'<c ') + xml.count(b'<c>') + xml.count(b':c ')
+            rows = xml.count(b'<row ') + xml.count(b'<row>') + xml.count(b':row ')
+            if cells > MAX_CELLS * 4 or rows > MAX_CELLS * 4:     # each becomes an object in openpyxl, twice
                 raise Unreadable(f'{label}: sheet is too large; trim unused formatting and upload again.')
             new, found = _sanitize_merges(xml)
             if new is not None:
@@ -1968,7 +1970,18 @@ def _delimiter(sample):
 # Files written with a decimal comma (Europe: 12,50) group thousands with dots, so 1.500 there is fifteen
 # hundred, not one and a half; 1,500 may be one and a half. Such values are kept as text and flagged.
 EU_DECIMAL = re.compile(r'^[-+]?(\d+,\d{1,2}|\d{1,3}(\.\d{3})+,\d+)$')
+POINT_DECIMAL = re.compile(r'^[-+]?(\d+\.\d{1,2}|\d{1,3}(,\d{3})+\.\d+|\d{1,2}(,\d{2})+,\d{3}\.\d+)$')
 EU_AMBIGUOUS = re.compile(r'^[-+]?(\d{1,3}(\.\d{3})+|\d{1,3},\d{3})$')
+
+
+def _uses_decimal_comma(values, delimiter):
+    """True when more values are written with a decimal comma (12,50) than with a decimal point (12.50);
+    a tie goes to semicolon-separated files, the decimal-comma countries' CSV."""
+    comma = point = 0
+    for raw in values:
+        v = raw.strip()
+        comma += bool(EU_DECIMAL.match(v)); point += bool(POINT_DECIMAL.match(v))
+    return comma > point or (comma == point and delimiter == ';')
 
 
 def _csv_value(raw, decimal_comma=False):
@@ -2002,7 +2015,7 @@ def read_csv(content):
                          + (' because one value is longer than any spreadsheet cell, usually because a quotation mark is not closed. '
                             if limit else f' ({str(exc)[:80]}). ')
                          + 'Open the file in Excel, check that line, save it again as CSV and upload.') from exc
-    decimal_comma = delimiter == ';' or any(EU_DECIMAL.match(raw.strip()) for _, _, raw in found)
+    decimal_comma = _uses_decimal_comma((raw for _, _, raw in found), delimiter)
     for r, c, raw in found:
         value, extras = _csv_value(raw, decimal_comma)
         b.put(r, c, value, **extras)

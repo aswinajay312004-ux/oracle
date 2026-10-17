@@ -214,7 +214,7 @@ def inspect_db(path):
                     tables[name] = None             # e.g. a virtual table whose module this Python lacks
             facts = {k: c.execute(f'PRAGMA {k}').fetchone()[0] for k in ('page_size', 'page_count', 'user_version', 'journal_mode')}
     except sqlite3.DatabaseError as e:
-        raise Problem(f'The database copy cannot be read ({e}). The database file is damaged.') from None
+        raise Problem(f'The database copy cannot be read ({e}).') from None
     return dict(integrity_check=integrity, foreign_key_violations=len(fk), foreign_key_examples=[list(r) for r in fk[:10]],
                 tables=tables, **facts)
 
@@ -379,15 +379,16 @@ def make_backup(data_dir, dest, app_root=APP_ROOT, label=None, include_uploads=F
         except sqlite3.DatabaseError as e:
             raise Problem(f'SQLite could not copy the database ({e}). If it says "malformed", the live database is '
                           'damaged: follow docs/RUNBOOK.md, "A backup reports a damaged database".') from None
-        report = inspect_db(copy)
         try:
+            report = inspect_db(copy)
             require_healthy(report)
-        except Problem:
+        except Problem as e:
             kept = dest / 'last-failed-check.sqlite3'
             with contextlib.suppress(OSError):
                 os.replace(copy, kept)
                 say(f'  The copy that failed the check is kept for investigation: {kept}')
-            raise
+            raise Problem(f'{e} The live database may be damaged: follow docs/RUNBOOK.md, "A backup reports a damaged database". '
+                          'The older backups were not touched.') from None
         say(f'  Checked the copy: integrity_check ok, foreign_key_check ok ({len(report["tables"])} tables, '
             f'{sum(v or 0 for v in report["tables"].values())} rows)')
         members = [(DB_MEMBER, copy)] + collect_members(data_dir, app_root, include_uploads)

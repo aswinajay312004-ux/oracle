@@ -244,8 +244,12 @@ $python = Get-ReleasePython $target
 if (-not $python) { Stop-Switch "$target has no Python (python\python.exe or .venv\Scripts\python.exe)." }
 if ($RestoreDatabase -and -not (Test-Path -LiteralPath $RestoreDatabase -PathType Leaf)) { Stop-Switch "Backup file not found: $RestoreDatabase" }
 if ($To -ieq $activeVersion -and -not $RestoreDatabase) {
-  Write-Host "Release $To is already active; nothing to do." -ForegroundColor Yellow
-  exit 3
+  if ((Get-Service -Name $ServiceName).Status -eq 'Running') {
+    Write-Host "Release $To is already active and running; nothing to do." -ForegroundColor Yellow
+    exit 3
+  }
+  # Active but stopped (for example an upgrade stopped it and then failed before switching): go through the steps,
+  # which only start it again.
 }
 
 Write-Host "POPPYS AI - $($Word.ToLower()) from $activeVersion to $To" -ForegroundColor Green

@@ -5,6 +5,10 @@ Every table and column is checked against the knowledge catalog, joins come from
 graph (never from a model), values are bind variables, the statement is always a single SELECT with
 a row limit, and aggregation is protected against fan-out (a parent quantity is never summed across
 child rows; counts use COUNT(DISTINCT key)).
+
+Text equality is index-friendly on big tables: `col IN (:as_stored, :capitals)` (or `col = :b` when both
+are the same), never UPPER(TRIM(col)) = :b, which no ordinary index can answer (11 s at 3M orders against
+0.002 s, docs/PERFORMANCE.md). The forgiving any-case/any-spaces form is kept for small tables only.
 """
 from __future__ import annotations
 from datetime import date, datetime, timedelta
@@ -17,6 +21,21 @@ OPS = {'eq', 'ne', 'contains', 'starts', 'gt', 'gte', 'lt', 'lte', 'between', 'i
 BUCKETS = {'month', 'year', 'day'}
 MAX_LIMIT = 1000
 AGG_WORD = {'count': 'Number of', 'sum': 'Total', 'avg': 'Average', 'min': 'Lowest', 'max': 'Highest'}
+TEXT_TYPES = ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR', 'VARCHAR')
+# Tables with at most this many rows (by dictionary statistics) keep the forgiving UPPER(TRIM(col)) match: a
+# full scan of them is cheap. Bigger tables, and tables without statistics (never analysed: size unknown), get
+# the plain column so an index can answer. The same limit decides forgiving live lookups (service.SCAN_ROWS).
+FORGIVING_ROWS = 100_000
+MAX_SPELLINGS = 8   # stored spellings tried per value (as given, the value index's spellings, capitals)
+
+
+def forgiving(table):
+    """True when text filters on this table may use UPPER(TRIM(col)): uploaded files (in memory) and tables
+    that statistics say are small."""
+    if not table or table.get('source') == 'local':
+        return True
+    rows = table.get('rows')
+    return rows is not None and rows <= FORGIVING_ROWS
 
 
 class QueryError(ValueError):
@@ -78,7 +97,9 @@ class Compiled(dict):
     pass
 
 
-def compile_intent(intent, kb, dialect, display_references=True):
+def compile_intent(intent, kb, dialect, display_references=True, stored=None):
+    """stored: optional (table, column, value) -> spellings of that value as stored (from the value index), so
+    an index-friendly text filter on a big table still matches every stored spelling the value index knows."""
     base = intent.get('base')
     if not base or not IDENT.match(base) or not kb.table(base):
         raise QueryError('Choose what to look at (an order, buyer, size…).')
@@ -219,6 +240,12 @@ def compile_intent(intent, kb, dialect, display_references=True):
 
     # --- filters -----------------------------------------------------------------------------------
     where = []; exists = {}
+
+    def condition(expr, r, f):
+        t, c = r['table'], r['column']
+        spellings = (lambda v: stored(t, c, v)) if stored else None
+        return _condition(expr, r['meta'], f.get('op', 'eq'), f.get('value'), bind, dialect,
+                          forgiving=forgiving(kb.table(t)), stored=spellings)
     for f in filters:
         op = f.get('op', 'eq')
         if op not in OPS:

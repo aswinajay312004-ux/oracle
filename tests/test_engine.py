@@ -533,6 +533,7 @@ def test_code_fields_holding_descriptions_are_asked():
     wb, _ = book([['Style', 'Colour', 'Size', 'Qty'], ['BABY GIRLS ROMPER WITH FRILL AND HOOD', 'RED', 'S', 5]])
     o = workbooks.parse(save(wb))['orders'][0]
     assert o['style'] == '' and o['provenance']['style']['doubt'] == 'BABY GIRLS ROMPER WITH FRILL AND HOOD'
+    assert o['provenance']['style']['question'] == 'The file has a description here (“BABY GIRLS ROMPER WITH F…”), not a style number — enter the style number.'
     assert 'A2 holds “BABY GIRLS ROMPER WITH FRILL AND HOOD”, which reads like a description, not a style number — enter the style number.' in o['warnings']
     assert workbooks.finish(dict(workbooks.base_order(), style='ZK-1001 BLUE'))['style'] == 'ZK-1001 BLUE'
 
@@ -620,8 +621,9 @@ def test_month_first_file_does_not_guess_an_ambiguous_date():
     wb, _ = book([['Style', 'MD-1'], ['Order Date', '10/01/2026'], ['Ship Date', '12/20/2026'], [], ['Size', 'Qty'], ['M', 5]])
     o = workbooks.parse(save(wb))['orders'][0]
     assert o['ship_date'] == '2026-12-20' and o['order_date'] == ''      # was 2026-01-10 (day-first) with only a note
-    assert o['provenance']['order_date']['question'] == ('“10/01/2026” could be 10 January 2026 or 1 October 2026; this file writes '
-                                                         '“12/20/2026” month first — enter the order date.')
+    assert o['provenance']['order_date']['question'] == '“10/01/2026” could be 10 January 2026 or 1 October 2026 — enter the order date.'
+    assert ('Order date: “10/01/2026” could be 10 January 2026 or 1 October 2026; this file writes “12/20/2026” month first — '
+            'enter the order date.') in o['warnings']
     wb, _ = book([['Style', 'MD-2'], ['Order Date', '10/01/2026'], ['Ship Date', '20/12/2026'], [], ['Size', 'Qty'], ['M', 5]])
     o = workbooks.parse(save(wb))['orders'][0]                            # a day-first file keeps the documented rule
     assert o['order_date'] == '2026-01-10' and any('read as day/month/year' in w for w in o['warnings'])

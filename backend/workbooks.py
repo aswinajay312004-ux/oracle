@@ -282,8 +282,10 @@ class Grid:
             parts.append(f'column{"s" if len(self.hidden_cols) > 1 else ""} {spans(self.hidden_cols, lambda c: address(c, 1)[:-1])}')
         if not parts:
             return None
-        return (f'Hidden {" and ".join(parts)} on “{self.sheet["name"]}” hold data and were not read. '
-                'Unhide them in Excel and upload again if they belong to the order.')
+        one = len(self.hidden_rows) + len(self.hidden_cols) == 1
+        return (f'Hidden {" and ".join(parts)} on “{self.sheet["name"]}” {"holds" if one else "hold"} data and '
+                f'{"was" if one else "were"} not read. Unhide {"it" if one else "them"} in Excel and upload again if '
+                f'{"it belongs" if one else "they belong"} to the order.')
 
     def right(self, r, c, span=3):
         for cc in range(c + 1, c + span + 1):
@@ -836,9 +838,11 @@ def finish(o, month_first=None):
         name = key.replace('_', ' ')
         if iso and iso != raw and note and 'day/month' in note and month_first:
             first, second = _both_readings(raw)
-            ask = f'“{raw}” could be {first} or {second}; this file writes “{month_first}” month first — enter the {name}.'
-            o.setdefault('provenance', {}).setdefault(key, {}).update(question=ask, derivation=f'"{raw}" not converted: day and month are unclear')
-            o.setdefault('warnings', []).append(f'{name.capitalize()}: {ask}')
+            # the short question is shown on the field; the note says why
+            o.setdefault('provenance', {}).setdefault(key, {}).update(
+                question=f'“{raw}” could be {first} or {second} — enter the {name}.', derivation=f'"{raw}" not converted: day and month are unclear')
+            o.setdefault('warnings', []).append(f'{name.capitalize()}: “{raw}” could be {first} or {second}; this file writes “{month_first}” '
+                                                f'month first — enter the {name}.')
             o[key] = ''
         elif iso and iso != raw:
             o[key] = iso
@@ -853,10 +857,10 @@ def finish(o, month_first=None):
         if isinstance(v, str) and reads_like_text(v):
             # e.g. a "Style" column that holds descriptions: never created as a new style number
             p = o.setdefault('provenance', {}).setdefault(key, {})
-            where = f'{p["cell"]} ' if p.get('cell') else ''
-            ask = f'{where}holds “{v[:60]}{"…" if len(v) > 60 else ""}”, which reads like a description, not a {name} — enter the {name}.'
-            p.update(question=ask, doubt=v)
-            o.setdefault('warnings', []).append(ask[0].upper() + ask[1:])
+            where = f'{p["cell"]} ' if p.get('cell') else 'The file '
+            p.update(question=f'The file has a description here (“{v[:24].rstrip()}…”), not a {name} — enter the {name}.', doubt=v)
+            o.setdefault('warnings', []).append(f'{where}holds “{v[:60]}{"…" if len(v) > 60 else ""}”, which reads like a description, '
+                                                f'not a {name} — enter the {name}.')
             o[key] = ''
     return o
 

@@ -109,7 +109,8 @@ const lineQty = l => (l.sizes || []).reduce((n, s) => n + num(s.quantity), 0);
 function clientIssues() {
   const out = [];
   state.draft.orders.forEach((o, oi) => {
-    requiredKeys().forEach(k => { if (o[k] == null || String(o[k]).trim() === '') out.push({ severity: 'error', message: DEFAULT_REQUIRED.includes(k) ? 'Not in the file — please enter it.' : `${LABEL[k]} is required for every order — enter it.`, path: `orders.${oi}.${k}`, client: true }); });
+    // a value the file holds but the reader would not trust (a description in the style cell, an unclear date) says why
+    requiredKeys().forEach(k => { if (o[k] == null || String(o[k]).trim() === '') out.push({ severity: 'error', message: o.provenance?.[k]?.question || (DEFAULT_REQUIRED.includes(k) ? 'Not in the file — please enter it.' : `${LABEL[k]} is required for every order — enter it.`), path: `orders.${oi}.${k}`, client: true }); });
     if (!['sample', 'order_demo'].includes(o.quantity_basis)) out.push({ severity: 'error', message: 'Choose which quantities this sample order uses.', path: `orders.${oi}.quantity_basis`, client: true });
     if ('qty_unit' in o) {   // drafts saved before the unit question keep the old pieces-per-unit rule
       const ppu = o.pieces_per_unit == null || o.pieces_per_unit === '' ? null : Number(o.pieces_per_unit);
