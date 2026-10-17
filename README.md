@@ -43,10 +43,11 @@ The format is decided from the file's bytes, not its name. Password-protected or
 
 ## How it saves
 
-- Nothing is written to Oracle until a person with the approver role approves the exact preview. The approval is bound to a hash of the planned rows.
+- Nothing is written to Oracle until a person with the approver role approves the exact preview, after ticking "I have read these notes" when there are warnings. The approval is bound to a hash of the planned rows. With the four-eyes rule on, no one who uploaded or changed the order can approve it.
 - The save runs under a write lock and re-plans inside the transaction. It refuses if anything changed, uses bind variables only, reads back every inserted row and compares it, then writes a receipt (`PP_IMPORT_LOG`). Any failure rolls everything back.
 - Duplicate files, order references and repeated sizes or colours are refused. Existing ERP rows are never updated or deleted.
 - The app writes as the restricted `POPPYS_APP` account. Ask AI, the explorer, history and read-back use the read-only `POPPYS_RO` account. This build is scoped to the `GARMENT_DEMO` schema and refuses any other owner.
+- Saving is refused unless the database is on this computer: every host in the connection setting must be loopback. `ORACLE_DB_IDENTITY` can pin the database by name.
 
 > **Before production use:** a direct INSERT bypasses Axpert's own numbering and Gen/MD maps. Agile Labs (the Axpert vendor) must confirm the posting path. See [docs/adr/0001-posting-path.md](docs/adr/0001-posting-path.md).
 
@@ -105,5 +106,5 @@ The tests build synthetic files that reproduce the structure of the client's wor
 - Upload, review and preview never write to Oracle. A preview made while Oracle is offline is marked as such and cannot be approved.
 - The local AI can only propose layout cells and question intents. Both are checked. It cannot write SQL, change values or save.
 - Ask AI and the explorer run each query read-only, with a timeout and a row limit, on the read-only account.
-- Passwords live only in the git-ignored `.env.poppys`, or are typed at a prompt. They are never logged, shown or committed.
+- Passwords live only in the git-ignored `.env.poppys`, or are typed at a prompt. They are never logged, shown or committed. A password an administrator sets for someone is temporary: that person chooses their own at the next sign-in.
 - Security details, and how to report a problem: [SECURITY.md](SECURITY.md). Changes per release: [CHANGELOG.md](CHANGELOG.md).
