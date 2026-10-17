@@ -1,15 +1,18 @@
 """One-time additive setup for the EXISTING local demo. Never resets existing users."""
 from pathlib import Path
+import os
 import secrets
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / '.env.poppys'
 TABLES = ('BUYMAS','STYLENUM','STYLEMAS','SIZE_MAS','COLORMAS','UNITMAS','MERCHMAS','ORDMAS','ORDSTYLE','ORDSIZE')
+CONTAINER = os.environ.get('POPPYS_ORACLE_CONTAINER', 'oracle26ai')
+PDB = os.environ.get('POPPYS_ORACLE_PDB', 'FREEPDB1')
 
 def sqlplus(sql):
-    result = subprocess.run(['docker','exec','-i','oracle26ai','sqlplus','-s','/ as sysdba'],
-        input='set echo off feedback off heading off pages 0 lines 32767\nwhenever sqlerror exit failure rollback\nalter session set container=FREEPDB1;\n'+sql+'\nexit\n',
+    result = subprocess.run(['docker','exec','-i',CONTAINER,'sqlplus','-s','/ as sysdba'],
+        input='set echo off feedback off heading off pages 0 lines 32767\nwhenever sqlerror exit failure rollback\nalter session set container='+PDB+';\n'+sql+'\nexit\n',
         text=True, capture_output=True, timeout=90)
     if result.returncode:
         # Never echo DDL, since CREATE USER contains a generated credential.

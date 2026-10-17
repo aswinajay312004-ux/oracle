@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "owner": "GARMENT_DEMO",
+  "notes": "Business field -> GARMENT_DEMO column registry. Only columns with status 'verified' are written. 'proposed' columns are previewed as reference until an admin verifies them against scripts/discover_schema.py evidence (Database mapping screen). Never add a table here without live dictionary evidence.",
+  "masters": {
+    "buyer": {"table": "BUYMAS", "key": "BUYMASID", "label": "BUYERNAME", "business": "Buyer", "create": true},
+    "style": {"table": "STYLENUM", "key": "STYLENUMID", "label": "STYLENUMBER", "business": "Style number", "create": true},
+    "description": {"table": "STYLEMAS", "key": "STYLEMASID", "label": "SDESC", "business": "Garment description", "create": true},
+    "size": {"table": "SIZE_MAS", "key": "SIZE_MASID", "label": "SIZES", "business": "Size", "create": true},
+    "color": {"table": "COLORMAS", "key": "COLORMASID", "label": "COLOR", "business": "Colour / combo", "create": true},
+    "uom": {"table": "UNITMAS", "key": "UNITMASID", "label": "UOM", "business": "Unit of measure", "create": true},
+    "merch": {"table": "MERCHMAS", "key": "MERCHMASID", "label": "NAME", "business": "Merchandiser", "create": true},
+    "exporter": {"table": "PARTYMAS", "key": "PARTYMASID", "label": "LEDGER", "business": "Exporter", "create": false},
+    "fabric": {"table": "FABMAS", "key": "FABMASID", "label": "FABRIC", "business": "Fabric quality", "create": false},
+    "count": {"table": "COUNTMAS", "key": "COUNTMASID", "label": "COUNTS", "business": "Yarn count", "create": false},
+    "accessory": {"table": "ACCMAS", "key": "ACCMASID", "label": "ACCNAME", "business": "Accessory item", "create": false}
+  },
+  "tables": {
+    "ORDMAS": {
+      "business": "Order Entry — order header",
+      "screen": "Order Entry",
+      "level": "order",
+      "key": "ORDMASID",
+      "status": "verified",
+      "columns": {
+        "ORDMASID": {"key": true, "status": "verified", "label": "Order record ID (generated)"},
+        "DOCID": {"field": "order.order_ref", "status": "verified", "label": "Order reference (OC number)", "evidence": "Displayed OC string; ORDNO is NUMBER and not interchangeable"},
+        "BUYER": {"master": "buyer", "field": "order.buyer", "required": true, "status": "verified", "label": "Buyer"},
+        "STYLENO": {"master": "style", "field": "order.style", "required": true, "status": "verified", "label": "Style number"},
+        "STYLEDESC": {"master": "description", "field": "order.description", "required": true, "status": "verified", "label": "Garment description"},
+        "BONO": {"field": "order.po_number", "status": "verified", "label": "Buyer PO / contract number"},
+        "ODATE": {"field": "order.order_date", "status": "verified", "label": "Order confirmation date"},
+        "UOM": {"master": "uom", "value": "PCS", "status": "verified", "label": "Order unit"},
+        "SAMPLETYPE": {"field": "order.sample_type", "status": "verified", "label": "Sample type"},
+        "ORDCATEGORY": {"value": "SAMPLE ORDER", "status": "verified", "label": "Order category"},
+        "REMARKS": {"template": "POPPYS demo sample import; quantity basis: {order.quantity_basis}", "status": "verified", "label": "Remarks"},
+        "MERCH": {"master": "merch", "field": "order.merch", "optional": true, "status": "verified", "label": "Merchandiser"},
+        "OQTY": {"field": "calc.pieces", "status": "verified", "label": "Total order quantity (pieces)"},
+        "ENAME": {"master": "exporter", "field": "order.exporter", "optional": true, "status": "proposed", "label": "Exporter", "evidence": "NUMBER reference; Exporter is the first field on Sample Order Entry. PARTYMAS.LEDGER as label is unproven."},
+        "OAGAINST": {"field": "order.against", "optional": true, "status": "proposed", "label": "Against", "evidence": "Screen label 'Against' (observed value ENQUIRY); VARCHAR2(10)"},
+        "DEPARTMENT": {"field": "order.department", "optional": true, "status": "proposed", "label": "Department", "evidence": "Screen label match; VARCHAR2(25)"},
+        "GENDER": {"field": "order.gender", "optional": true, "status": "proposed", "label": "Gender", "evidence": "Screen label match; VARCHAR2(25)"},
+        "COMPTYPE": {"field": "order.packing_type", "optional": true, "status": "proposed", "label": "Packing type", "evidence": "Observed SINGLE / 1 on screen; VARCHAR2(10)"},
+        "NOCOMP": {"field": "order.components", "optional": true, "status": "proposed", "label": "Components (pieces per pack)", "evidence": "Screen 'Components'; NUMBER"}
+      }
+    },
+    "ORDSTYLE": {
+      "business": "Order Entry — style / colour line",
+      "screen": "Order Entry",
+      "level": "line",
+      "parent": "ORDMAS",
+      "key": "ORDSTYLEID",
+      "status": "verified",
+      "columns": {
+        "ORDSTYLEID": {"key": true, "status": "verified", "label": "Line record ID (generated)"},
+        "ORDMASID": {"parent": "ORDMAS", "status": "verified", "label": "Belongs to order"},
+        "STNO": {"copy": "ORDMAS.STYLENO", "status": "verified", "label": "Style number"},
+        "STYLENAME": {"copy": "ORDMAS.STYLEDESC", "status": "verified", "label": "Garment description"},
+        "PONUM": {"copy": "ORDMAS.BONO", "status": "verified", "label": "PO number"},
+        "SUBNO": {"field": "calc.subno", "status": "verified", "label": "Line link number (order:line)"},
+        "COMBO": {"master": "color", "field": "line.color", "required": true, "status": "verified", "label": "Colour / combo"},
+        "ORDQTY": {"field": "calc.pieces", "status": "verified", "label": "Line order quantity (pieces)"},
+        "PRODQTY": {"field": "calc.pieces", "status": "verified", "label": "Line production quantity (pieces)"},
+        "SHIPDT": {"field": "order.ship_date", "status": "verified", "label": "Ship date"},
+        "PUOM": {"copy": "ORDMAS.UOM", "status": "verified", "label": "Line unit"},
+        "SNO": {"field": "calc.row", "status": "verified", "label": "Line number"}
+      }
+    },
+    "ORDSIZE": {
+      "business": "Order Entry — size quantities",
+      "screen": "Order Entry",
+      "level": "size",
+      "parent": "ORDMAS",
+      "key": "ORDSIZEID",
+      "status": "verified",
+      "columns": {
+        "ORDSIZEID": {"key": true, "status": "verified", "label": "Size record ID (generated)"},
+        "ORDMASID": {"parent": "ORDMAS", "status": "verified", "label": "Belongs to order"},
+        "SUB3_SUBNO": {"field": "calc.subno", "status": "verified", "label": "Belongs to line (SUBNO)"},
+        "GSIZE": {"master": "size", "field": "size.size", "required": true, "status": "verified", "label": "Size"},
+        "RQTY": {"field": "calc.pieces", "status": "verified", "label": "Required quantity (pieces)"},
+        "PQTY": {"field": "calc.pieces", "status": "verified", "label": "Production quantity (pieces)"},
+        "ORDSIZEROW": {"field": "calc.row", "status": "verified", "label": "Size row number"}
+      }
+    },
+    "ORDFAB": {
+      "business": "Fabric Planning — fabric per garment / portion",
+      "screen": "Fabric Planning",
+      "level": "fabric",
+      "parent": "ORDMAS",
+      "key": "ORDFABID",
+      "status": "proposed",
+      "columns": {
+        "ORDFABID": {"key": true, "status": "verified", "label": "Fabric record ID (generated)"},
+        "ORDMASID": {"parent": "ORDMAS", "status": "verified", "label": "Belongs to order"},
+        "ORDFABROW": {"field": "calc.row", "status": "proposed", "label": "Fabric row number"},
+        "FSUBNO": {"field": "calc.subno", "status": "proposed", "label": "Belongs to line (SUBNO)", "evidence": "Naming pattern F+SUBNO; confirm with discover_schema.py child-link evidence"},
+        "FABRIC": {"master": "fabric", "field": "fabric.quality", "required": true, "status": "proposed", "label": "Fabric quality", "evidence": "NUMBER(16) reference; fabric master table not in the 19-table demo"},
+        "COLOUR": {"master": "color", "field": "fabric.color", "required": true, "status": "proposed", "label": "Fabric colour"},
+        "DIA": {"field": "fabric.dia", "status": "proposed", "label": "Dia"},
+        "FGSM": {"field": "fabric.gsm", "status": "proposed", "label": "GSM"},
+        "FUOM": {"master": "uom", "value": "KGS", "status": "proposed", "label": "Fabric unit"},
+        "CADWT": {"field": "fabric.yy", "status": "proposed", "label": "Consumption per piece (grams)"},
+        "COLPCS": {"field": "calc.pieces", "status": "proposed", "label": "Garment pieces for this fabric"},
+        "POQTY": {"field": "calc.total_kg", "status": "proposed", "label": "Fabric required incl. rejection (kg)"},
+        "YDET": {"field": "calc.ydet", "status": "proposed", "label": "Yarn detail link"},
+        "YTOT": {"field": "calc.yarn_kg", "status": "proposed", "label": "Total yarn (kg)"},
+        "YPERTOT": {"field": "calc.yarn_percent", "status": "proposed", "label": "Total yarn percentage"}
+      }
+    },
+    "ORDYARN": {
+      "business": "Fabric Planning — yarn split",
+      "screen": "Fabric Planning",
+      "level": "yarn",
+      "parent": "ORDMAS",
+      "key": "ORDYARNID",
+      "status": "proposed",
+      "columns": {
+        "ORDYARNID": {"key": true, "status": "verified", "label": "Yarn record ID (generated)"},
+        "ORDMASID": {"parent": "ORDMAS", "status": "verified", "label": "Belongs to order"},
+        "ORDYARNROW": {"field": "calc.row", "status": "proposed", "label": "Yarn row number"},
+        "SUB9_FSUBNO": {"field": "calc.subno", "status": "proposed", "label": "Belongs to fabric line (SUBNO)"},
+        "SUB9_YDET": {"field": "calc.ydet", "status": "proposed", "label": "Belongs to fabric yarn detail"},
+        "COUNTS": {"master": "count", "field": "yarn.count", "required": true, "status": "proposed", "label": "Yarn count", "evidence": "NUMBER(16) reference; count master table not in the 19-table demo"},
+        "YCOLOR": {"master": "color", "field": "yarn.color", "required": true, "status": "proposed", "label": "Yarn colour"},
+        "YPER": {"field": "yarn.percent", "status": "proposed", "label": "Yarn percentage"},
+        "YQTY": {"field": "calc.kg", "status": "proposed", "label": "Yarn quantity (kg)"}
+      }
+    },
+    "ORDACC": {
+      "business": "Accessories (trims) per order",
+      "screen": "Accessories",
+      "level": "accessory",
+      "parent": "ORDMAS",
+      "key": "ORDACCID",
+      "status": "proposed",
+      "columns": {
+        "ORDACCID": {"key": true, "status": "verified", "label": "Accessory record ID (generated)"},
+        "ORDMASID": {"parent": "ORDMAS", "status": "verified", "label": "Belongs to order"},
+        "ORDACCROW": {"field": "calc.row", "status": "proposed", "label": "Accessory row number"},
+        "ASUBNO": {"field": "calc.subno", "status": "proposed", "label": "Belongs to line (SUBNO) or order"},
+        "ACCNAME": {"master": "accessory", "field": "acc.name", "required": true, "status": "proposed", "label": "Accessory item", "evidence": "NUMBER(16) reference; accessory master table not in the 19-table demo"},
+        "ACCDESC": {"field": "acc.description", "status": "proposed", "label": "Accessory description / code"},
+        "ACCCOLOR": {"master": "color", "field": "acc.color", "optional": true, "status": "proposed", "label": "Accessory colour"},
+        "ACCSIZES": {"master": "size", "field": "acc.size", "optional": true, "status": "proposed", "label": "Accessory size"},
+        "AUOM": {"master": "uom", "field": "acc.uom", "required": true, "status": "proposed", "label": "Accessory unit"},
+        "APOQTY": {"field": "calc.quantity", "status": "proposed", "label": "Accessory quantity incl. rejection"}
+      }
+    }
+  },
+  "links": [
+    {"from": "ORDMAS", "to": "ORDSTYLE", "on": "ORDMASID", "label": "order → lines"},
+    {"from": "ORDMAS", "to": "ORDSIZE", "on": "ORDMASID", "label": "order → sizes"},
+    {"from": "ORDSTYLE", "to": "ORDSIZE", "on": "SUBNO = SUB3_SUBNO", "label": "line → sizes"},
+    {"from": "ORDSTYLE", "to": "ORDFAB", "on": "SUBNO = FSUBNO", "label": "line → fabric"},
+    {"from": "ORDFAB", "to": "ORDYARN", "on": "YDET = SUB9_YDET", "label": "fabric → yarn"},
+    {"from": "ORDMAS", "to": "ORDACC", "on": "ORDMASID", "label": "order → accessories"}
+  ]
+}

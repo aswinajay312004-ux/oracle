@@ -9,3 +9,8 @@ docs/workbook_analysis/
 docs/live_sample_records.txt
 *.log
 
+.venv/
+*.xls
+*.xlsx
+*.xlsm
+!tests/fixtures/*.xlsx
