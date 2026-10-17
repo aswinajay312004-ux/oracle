@@ -48,7 +48,7 @@ export async function recent() {
 
 export async function upload(file) {
   if (!file) return;
-  if (!/\.(xlsx|xlsm|xls)$/i.test(file.name)) return notify('Choose the buyer Excel workbook (.xlsx, .xlsm or .xls).', 'error');
+  if (!/\.(xlsx|xlsm|xltx|xltm|xls|xlsb|ods|xml|htm|html|csv|tsv|txt|json)$/i.test(file.name)) return notify('Choose the buyer Excel file (.xlsx, .xls, .xlsm, .xlsb, .ods, CSV, Excel XML/HTML export) or a JSON file.', 'error');
   if (!can('upload')) return notify('Your role can view orders but not upload. Ask an administrator.', 'error');
   stage('read'); $('#read-title').textContent = `Reading ${file.name}…`; $('#read-steps').innerHTML = ''; $('#read-actions').hidden = true;
   await busy('Reading the file and finding the order…', async () => {
@@ -71,7 +71,7 @@ export async function openDraft(draftId) {
 
 function showReading() {
   const d = state.draft; const o = d.orders[0]; const items = [];
-  items.push(['ok', 'Opened the Excel workbook', `${plural(d.sheets.length, 'sheet')} · ${fmt(d.sheets.reduce((n, s) => n + s.cells.length, 0), 0)} filled cells read, each value keeps its source cell`]);
+  items.push(['ok', `Opened: ${d.source_format || 'Excel workbook'}`, `${plural(d.sheets.length, 'sheet')} · ${fmt(d.sheets.reduce((n, s) => n + s.cells.length, 0), 0)} filled cells read, each value keeps its source cell`]);
   if (!d.orders.length) {
     items.push(['warn', 'This layout is new to POPPYS AI', d.suggestion ? 'A layout was proposed. Check it once — it is saved as a template so next time it is automatic.' : 'Show us once where the order details are; it is saved as a template for next time.']);
   } else {
