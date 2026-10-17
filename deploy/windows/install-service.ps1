@@ -260,9 +260,13 @@ function Get-ReleaseVersion([string]$Dir) {
     try { $ver = [string](& git -C $Dir describe --tags --always --dirty 2>$null | Select-Object -First 1) } finally { $ErrorActionPreference = $saved }
     if ($LASTEXITCODE -ne 0) { $ver = '' }
   }
-  if (-not $ver.Trim()) { $ver = 'build-' + (Get-ContentHash $Dir).Substring(0, 12) }
-  # Uncommitted changes keep the same "<sha>-dirty" name; add the content hash so each changed copy is its own release.
-  elseif ($ver.Trim() -match '-dirty$') { $ver = $ver.Trim() + '-' + (Get-ContentHash $Dir).Substring(0, 8) }
+  # Without VERSION or git: a hash of the app files. Uncommitted changes keep the same "<sha>-dirty" name, so the
+  # content hash is added to make each changed copy its own release.
+  if (-not $ver.Trim()) {
+    $ver = 'build-' + (Get-ContentHash $Dir).Substring(0, 12)
+  } elseif ($ver.Trim() -match '-dirty$') {
+    $ver = $ver.Trim() + '-' + (Get-ContentHash $Dir).Substring(0, 8)
+  }
   return ($ver.Trim() -replace '[^A-Za-z0-9._-]', '-').Trim([char[]]@('-', '.'))
 }
 
