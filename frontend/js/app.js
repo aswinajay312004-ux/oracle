@@ -1,17 +1,16 @@
-// App shell: authentication, navigation, status lights, saved orders, global events.
-import { $, $$, esc, plural, state, can, notify, busy, closeDrawer } from './util.js';
+// App shell: authentication, navigation, status lights, saved orders and global actions.
+import { $, $$, esc, plural, fmt, state, can, notify, busy, closeDrawer } from './util.js';
 import { api, id, onUnauthorized } from './api.js';
 import * as ws from './workspace.js';
 import { loadExplorer, bindExplorer, exploreOrder } from './explorer.js';
 import { loadAdmin, bindAdmin } from './admin.js';
-
-let view = 'workspace';
+import { loadChat, bindChat } from './chat.js';
 
 async function session() {
   const s = await fetch('/api/session', { credentials: 'same-origin' }).then(r => r.json());
   state.user = s.authenticated ? s.username : null; state.permissions = s.permissions || []; state.setup = s.needs_setup;
   $('#auth').hidden = s.authenticated; $('#logout').hidden = !s.authenticated;
-  $('#auth-title').textContent = s.needs_setup ? 'Set up POPPYS AI.' : 'Welcome back.';
+  $('#auth-title').textContent = s.needs_setup ? 'Set up POPPYS AI' : 'Welcome back';
   $('#auth-text').textContent = s.needs_setup ? 'Create the administrator account for this computer. You can add operators and approvers afterwards.' : 'Sign in to prepare and approve ERP entries.';
   $('#auth-submit').textContent = s.needs_setup ? 'Create administrator →' : 'Sign in →';
   $('#auth-pass').autocomplete = s.needs_setup ? 'new-password' : 'current-password';
@@ -22,13 +21,14 @@ async function session() {
 async function status() {
   try {
     const h = await api('/api/health'); state.health = h;
-    const db = h.database;
-    $('#oracle-status').className = `status ${db.connected ? 'ok' : 'off'}`;
-    $('#oracle-status span').textContent = db.connected ? `Oracle ${db.owner}` : 'Oracle offline';
-    $('#oracle-status').title = db.connected ? `Connected to ${db.dsn || ''} · ${db.tables} tables visible` : db.error || '';
-    $('#ai-status').className = `status ${h.ollama.available ? 'ok' : 'idle'}`;
-    $('#ai-status span').textContent = h.ollama.available ? 'Local AI ready' : 'Local AI off';
-    $('#ai-status').title = h.ollama.available ? `Ollama · ${h.ollama.model}` : 'Ollama is not running. Everything works; AI suggestions are unavailable.';
+    const db = h.database; const o = $('#oracle-status'); const a = $('#ai-status');
+    o.className = `status ${db.connected ? 'ok' : 'off'}`;
+    o.querySelector('span').textContent = db.connected ? 'Oracle connected' : 'Oracle offline';
+    o.querySelector('small').textContent = db.connected ? `${db.owner} · ${db.tables} tables` : 'start Docker + oracle26ai';
+    o.title = db.connected ? `Connected to ${db.dsn || ''}` : db.error || '';
+    a.className = `status ${h.ollama.available ? 'ok' : 'idle'}`;
+    a.querySelector('span').textContent = h.ollama.available ? 'Local AI ready' : 'Local AI off';
+    a.querySelector('small').textContent = h.ollama.available ? h.ollama.model : 'optional · rules still work';
   } catch (_) { $('#oracle-status').className = 'status off'; }
 }
 
@@ -39,7 +39,7 @@ async function lists() {
     const div = document.createElement('div'); div.id = 'master-lists'; div.hidden = true;
     div.innerHTML = Object.entries(m).map(([k, v]) => `<datalist id="list-${esc(k)}">${v.filter(x => !x.cancelled).slice(0, 3000).map(x => `<option value="${esc(x.label)}"></option>`).join('')}</datalist>`).join('');
     document.body.appendChild(div);
-  } catch (_) { /* typing stays free; preview validates masters */ }
+  } catch (_) { /* typing stays free; the check validates masters */ }
   try {
     const mp = await api('/api/mapping');
     state.mappingStatus = Object.fromEntries(mp.tables.map(t => [t.table, t.status]));
@@ -47,25 +47,27 @@ async function lists() {
 }
 
 function go(next) {
-  view = next;
-  $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === next));
+  $$('.nav [data-view]').forEach(t => t.classList.toggle('active', t.dataset.view === next));
   $$('.view').forEach(v => { v.hidden = v.id !== `view-${next}`; });
-  notify('');
+  closeDrawer();
   if (next === 'history') history();
   if (next === 'explorer') loadExplorer();
   if (next === 'admin') loadAdmin();
+  if (next === 'chat') { loadChat(); setTimeout(() => $('#chat-input').focus(), 50); }
   if (next === 'workspace' && !state.draft) ws.recent();
+  if (location.hash !== '#' + next) history_replace(next);
 }
+function history_replace(v) { try { window.history.replaceState(null, '', '#' + v); } catch (_) { /* file previews */ } }
 
 async function history() {
   $('#history-detail').hidden = true;
   await busy('Reading saved imports from Oracle…', async () => {
     let list;
     try { list = await api('/api/history'); } catch (e) { $('#history').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
-    $('#history').innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>File</th><th>Order</th><th>Approved by</th><th>Saved</th><th></th></tr></thead><tbody>
-      ${list.map(r => `<tr><td><strong>${esc(r.filename || r.job_id)}</strong><div class="muted">${esc(r.format || '')}</div></td>
-        <td>${esc((r.orders || []).join(', ') || '—')}<div class="muted">${esc((r.styles || []).join(', '))}</div></td><td>${esc(r.approver)}</td>
-        <td>${esc(new Date(r.committed_at).toLocaleString())}</td><td><button class="secondary small" data-receipt="${esc(r.job_id)}">Show where it was saved</button></td></tr>`).join('')}
+    $('#history').innerHTML = list.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order</th><th>Approved by</th><th>Saved</th><th></th></tr></thead><tbody>
+      ${list.map(r => `<tr class="clickable" data-receipt="${esc(r.job_id)}"><td><b>${esc(r.filename || r.job_id)}</b><div class="muted small-text">${esc(r.format || '')}</div></td>
+        <td>${esc((r.orders || []).join(', ') || '—')}<div class="muted small-text">${esc((r.styles || []).join(', '))}</div></td><td>${esc(r.approver)}</td>
+        <td class="nowrap">${esc(new Date(r.committed_at).toLocaleString())}</td><td><button class="secondary small" data-receipt="${esc(r.job_id)}">Show where it was saved</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="empty">No orders have been saved yet.</p>';
   });
 }
@@ -91,7 +93,7 @@ function bind() {
     finally { $('#auth-submit').disabled = false; }
   });
   $('#logout').addEventListener('click', () => busy('Signing out…', async () => { await api('/api/logout', { method: 'POST' }); state.draft = null; await session(); }));
-  $$('.tab').forEach(t => t.addEventListener('click', () => go(t.dataset.view)));
+  $$('.nav [data-view]').forEach(t => t.addEventListener('click', () => go(t.dataset.view)));
   const input = $('#file-input'); const drop = $('#dropzone');
   input.addEventListener('change', e => ws.upload(e.target.files[0]));
   drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
@@ -99,31 +101,28 @@ function bind() {
   ['dragleave', 'drop'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', e => { if (e.dataTransfer.files.length > 1) return notify('Drop one order file at a time.', 'warning'); ws.upload(e.dataTransfer.files[0]); });
   $('#go-review').addEventListener('click', ws.goReview);
-  $('#new-upload').addEventListener('click', async () => { if (state.dirty && !confirm('Discard unsaved corrections?')) return; ws.resetWorkspace(); });
-  $('#prepare').addEventListener('click', ws.prepare);
-  $('#ask-form').addEventListener('submit', e => { e.preventDefault(); ws.ask($('#ask').value); });
-  $('#orders').addEventListener('input', ws.onInput);
-  $('#orders').addEventListener('change', ws.onChange);
   $('#drawer-close').addEventListener('click', closeDrawer); $('#scrim').addEventListener('click', closeDrawer);
+  $('#modal-close').addEventListener('click', () => $('#modal').close());
+  $('#modal').addEventListener('click', e => { if (e.target === $('#modal')) $('#modal').close(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#drawer').hidden) closeDrawer(); });
   document.addEventListener('click', async e => {
-    const b = e.target.closest('button'); if (!b || state.busy) return;
-    if (b.dataset.openDraft) return ws.openDraft(b.dataset.openDraft);
+    const b = e.target.closest('[data-open-draft],[data-receipt],[data-explore-order],[data-act2]'); if (!b || state.busy) return;
+    if (b.dataset.openDraft) { go('workspace'); return ws.openDraft(b.dataset.openDraft); }
     if (b.dataset.receipt) return receipt(b.dataset.receipt);
-    if (b.dataset.exploreOrder) { closeDrawer(); return exploreOrder(b.dataset.exploreOrder); }
+    if (b.dataset.exploreOrder) { closeDrawer(); go('explorer'); return exploreOrder(b.dataset.exploreOrder); }
     if (b.dataset.act2 === 'approve') return ws.approve();
-    if (b.dataset.act2 === 'back-review') { ws.renderReview(); $('#stage-approve').hidden = true; $('#stage-review').hidden = false; ws.step(3); return; }
+    if (b.dataset.act2 === 'back-review') return ws.backToReview();
     if (b.dataset.act2 === 'another') return ws.resetWorkspace();
-    if (b.dataset.act && b.closest('#stage-review')) await ws.onAction(b);
   });
   window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
-  bindExplorer(); bindAdmin();
+  ws.bindWorkspace(); bindExplorer(); bindAdmin(); bindChat();
 }
 
 async function start() {
   $$('[data-permission]').forEach(el => { el.hidden = !can(el.dataset.permission); });
   await Promise.allSettled([status(), lists()]);
-  go('workspace');
+  const initial = (location.hash || '').slice(1);
+  go(['workspace', 'history', 'chat', 'explorer', 'admin'].includes(initial) ? initial : 'workspace');
   clearInterval(start.timer); start.timer = setInterval(status, 30000);
 }
 
@@ -132,3 +131,4 @@ bind();
   try { if (await session()) await start(); }
   catch (e) { notify(`Unable to reach the POPPYS AI server: ${e.message}`, 'error'); }
 })();
+void plural; void fmt;

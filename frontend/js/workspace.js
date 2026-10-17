@@ -1,41 +1,48 @@
-// New-order workspace: Upload → Auto-read → Review → Approve → Saved.
-import { $, $$, esc, clone, num, fmt, show, plural, state, can, notify, busy, source, confirmDialog } from './util.js';
+// New-order workspace: Upload → Review (Axpert-style entry) → Check & approve → Saved.
+// Problems are shown on the field or table cell they belong to (red outline + one short reason),
+// never as a separate list at the bottom of the page.
+import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, confirmDialog, drawer } from './util.js';
 import { api, id } from './api.js';
-import { renderFlow } from './flow.js';
 import { renderMapping } from './mapping.js';
+import { flowCard, mountFlow } from './flowview.js';
 
-const REQUIRED = ['exporter', 'buyer', 'style', 'description', 'order_ref', 'order_date', 'po_number', 'ship_date', 'sample_type'];
 const HEADER = [
-  ['exporter', 'Exporter', true], ['against', 'Against'], ['__orderno', 'Order No'],
-  ['buyer', 'Buyer', true, 'buyer'], ['department', 'Department'], ['order_ref', 'OC No / Order reference', true],
-  ['style', 'Style #', true, 'style'], ['description', 'Description', true, 'description'], ['order_date', 'Ord Confm Dt', true, null, 'date'],
-  ['po_number', 'PO / Contract No', true], ['packing_type', 'Packing type'], ['components', 'Components', false, null, 'number'],
-  ['merch', 'Merch', false, 'merch'], ['season', 'Season'], ['ship_date', 'Ship Dt', true, null, 'date'],
-  ['sample_type', 'Sample type', true], ['gender', 'Gender'],
+  // key, label, required, datalist, input type
+  ['exporter', 'Exporter', true], ['against', 'Against'], ['__orderno', 'Order No'], ['order_ref', 'OC No / Order reference', true],
+  ['buyer', 'Buyer', true, 'buyer'], ['department', 'Department'], ['style', 'Style #', true, 'style'], ['description', 'Description', true, 'description'],
+  ['order_date', 'Ord Confm Dt', true, null, 'date'], ['po_number', 'PO / Contract No', true], ['ship_date', 'Ship Dt', true, null, 'date'], ['sample_type', 'Sample type', true],
+  ['merch', 'Merchandiser', false, 'merch'], ['season', 'Season'], ['packing_type', 'Packing type'], ['components', 'Components', false, null, 'number'],
+  ['gender', 'Gender'],
 ];
+const REQUIRED = HEADER.filter(h => h[2]).map(h => h[0]);
+const LABEL = Object.fromEntries(HEADER.map(h => [h[0], h[1]]));
+let nav = 0;
 
-export function step(n) {
-  $$('.stepper li').forEach((li, i) => { li.classList.toggle('active', i + 1 === n); li.classList.toggle('done', i + 1 < n); li.toggleAttribute('aria-current', i + 1 === n); });
+// ---------------------------------------------------------------- stages
+function step(n) {
+  $$('.stepper li[data-step]').forEach(li => { const s = Number(li.dataset.step); li.classList.toggle('active', s === n); li.classList.toggle('done', s < n); });
 }
 function stage(name) {
   ['upload', 'read', 'review', 'approve', 'saved'].forEach(s => { $(`#stage-${s}`).hidden = s !== name; });
-  step({ upload: 1, read: 2, review: 3, approve: 4, saved: 5 }[name]);
+  step({ upload: 1, read: 1, review: 2, approve: 3, saved: 4 }[name]);
+  $('#ws-title').textContent = { upload: 'New sample order', read: 'Reading the file', review: 'Review the order entry', approve: 'Check before saving', saved: 'Saved in Oracle' }[name];
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 export function resetWorkspace() {
-  state.draft = null; state.dirty = false; state.saved = false; state.tab = {};
+  state.draft = null; state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = [];
   $('#file-input').value = ''; stage('upload'); recent();
 }
 
 export async function recent() {
   try {
     const drafts = await api('/api/drafts');
-    $('#recent').innerHTML = drafts.length ? drafts.slice(0, 8).map(d => `<div class="recent">
-      <span class="file-badge ${d.kind === 'pdf' ? 'pdf' : ''}">${d.kind === 'pdf' ? 'PDF' : 'XLS'}</span>
-      <div><strong>${esc(d.filename)}</strong><div class="muted">${esc(d.format)} · ${esc((d.styles || []).filter(Boolean).join(', ') || 'no style yet')} · ${esc(d.uploaded_by || '')} ${d.created_at ? '· ' + esc(new Date(d.created_at).toLocaleString()) : ''}</div></div>
-      <span class="pill ${d.committed ? 'ok' : d.status === 'Preview ready' ? 'info' : ''}">${esc(d.status)}</span>
-      <button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></div>`).join('') : '<p class="empty">Your uploads will appear here.</p>';
+    $('#recent').innerHTML = drafts.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order</th><th>Uploaded</th><th>Status</th><th></th></tr></thead><tbody>
+      ${drafts.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><span class="row"><span class="file-badge ${d.kind === 'pdf' ? 'pdf' : ''}">${d.kind === 'pdf' ? 'PDF' : 'XLS'}</span><span><b>${esc(d.filename)}</b><br><span class="muted small-text">${esc(d.format)}</span></span></span></td>
+        <td>${esc((d.styles || []).filter(Boolean).join(', ') || '—')}<br><span class="muted small-text">${esc((d.buyers || []).filter(Boolean).join(', '))}</span></td>
+        <td class="nowrap">${esc(d.uploaded_by || '')}<br><span class="muted small-text">${d.created_at ? esc(new Date(d.created_at).toLocaleString()) : ''}</span></td>
+        <td><span class="pill ${d.committed ? 'ok' : d.status === 'Preview ready' ? 'info' : ''}">${esc(d.status)}</span></td><td><button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="empty">Your uploads will appear here.</p>';
   } catch (e) { $('#recent').innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
 }
 
@@ -48,7 +55,7 @@ export async function upload(file) {
     const form = new FormData(); form.append('file', file);
     try { state.draft = await api('/api/uploads', { method: 'POST', form }); }
     catch (e) { stage('upload'); throw e; }
-    state.dirty = false; state.saved = false; state.tab = {};
+    state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = [];
     showReading();
   });
 }
@@ -56,247 +63,311 @@ export async function upload(file) {
 export async function openDraft(draftId) {
   await busy('Opening the saved draft…', async () => {
     state.draft = await api(`/api/drafts/${id(draftId)}`); state.dirty = false; state.saved = !!state.draft.result; state.tab = {};
+    state.planIssues = state.draft.plan?.issues || [];
     if (state.draft.result) return showSaved(state.draft.result);
     renderReview(); stage('review');
   });
 }
 
 function showReading() {
-  const d = state.draft; const o = d.orders[0];
-  const items = [];
-  items.push(['ok', `Opened ${d.kind === 'pdf' ? 'PDF' : 'Excel workbook'}`, `${plural(d.sheets.length, d.kind === 'pdf' ? 'page' : 'sheet')} · ${fmt(d.sheets.reduce((n, s) => n + s.cells.length, 0), 0)} filled cells read, formulas and source cells kept`]);
+  const d = state.draft; const o = d.orders[0]; const items = [];
+  items.push(['ok', `Opened ${d.kind === 'pdf' ? 'PDF' : 'Excel workbook'}`, `${plural(d.sheets.length, d.kind === 'pdf' ? 'page' : 'sheet')} · ${fmt(d.sheets.reduce((n, s) => n + s.cells.length, 0), 0)} filled cells read, each value keeps its source cell`]);
   if (!d.orders.length) {
-    items.push(['warn', 'This layout is new to POPPYS AI', d.suggestion ? 'We proposed a mapping from the layout. Check it once — it is saved as a template so next time it is automatic.' : 'Show us once where the order details are; it is saved as a template for next time.']);
+    items.push(['warn', 'This layout is new to POPPYS AI', d.suggestion ? 'A layout was proposed. Check it once — it is saved as a template so next time it is automatic.' : 'Show us once where the order details are; it is saved as a template for next time.']);
   } else {
     items.push(['ok', `Layout recognised: ${d.format}`, `${plural(d.orders.length, 'order')} found`]);
     const found = ['buyer', 'style', 'description', 'po_number', 'ship_date', 'season', 'merch'].filter(k => o[k]);
-    items.push(['ok', `Order details found (${found.length}/7)`, found.map(k => `${label(k)}: ${o[k]}`).join(' · ') || 'none']);
+    items.push(['ok', `Order details found (${found.length} of 7)`, found.map(k => `${LABEL[k] || k}: ${o[k]}`).join(' · ') || 'none']);
     const pcs = l => l.reduce((n, x) => n + x.sizes.reduce((m, s) => m + num(s.quantity), 0), 0);
-    items.push([o.lines.length ? 'ok' : 'warn', `Size breakdown: ${plural(o.lines.length, 'garment line')}, ${plural(new Set(o.lines.flatMap(l => l.sizes.map(s => s.size))).size, 'size')}`,
-      `Buyer order quantity ${fmt(pcs(o.order_lines || []), 0)} pcs${(o.sample_lines || []).length ? ` · sample section ${fmt(pcs(o.sample_lines), 0)} pcs` : ''}${o.packs ? ` · ${fmt(o.packs.packs, 0)} packs × ${fmt(o.packs.pieces / o.packs.packs, 0)} = ${fmt(o.packs.pieces, 0)} pcs` : ''}`]);
+    items.push([o.lines.length ? 'ok' : 'warn', `Size breakdown: ${plural(o.lines.length, 'colour line')}, ${plural(new Set(o.lines.flatMap(l => l.sizes.map(s => s.size))).size, 'size')}`,
+      `Buyer order ${fmt(pcs(o.order_lines || []), 0)} pcs${(o.sample_lines || []).length ? ` · sample section ${fmt(pcs(o.sample_lines), 0)} pcs` : ''}${o.packs ? ` · ${fmt(o.packs.packs, 0)} packs × ${fmt(o.packs.pieces / o.packs.packs, 0)} = ${fmt(o.packs.pieces, 0)} pcs` : ''}`]);
     items.push([o.fabrics?.length ? 'ok' : 'miss', `Fabric & yarn: ${plural(o.fabrics?.length || 0, 'fabric row')}`, o.fabrics?.length ? `${fmt(o.fabrics.reduce((n, f) => n + num(f.total), 0))} kg in the workbook · yarn split suggested from fabric content` : 'No fabric table in this file']);
-    items.push([o.accessories?.length ? 'ok' : 'miss', `Trims & accessories: ${plural(o.accessories?.length || 0, 'row')}`, o.accessories?.length ? `${new Set(o.accessories.map(a => a.block)).size} trim tables: ${[...new Set(o.accessories.map(a => a.category))].slice(0, 8).join(', ')}…` : 'No accessory tables in this file']);
-    const need = d.orders.flatMap(x => REQUIRED.filter(k => !x[k]).map(label));
-    items.push([need.length ? 'warn' : 'ok', need.length ? `Needs you: ${[...new Set(need)].join(', ')}` : 'All required order details present', need.length ? 'These are not in the file. You will fill them on the next screen.' : 'Review the quantities and approve.']);
+    items.push([o.accessories?.length ? 'ok' : 'miss', `Trims & accessories: ${plural(o.accessories?.length || 0, 'row')}`, o.accessories?.length ? `${new Set(o.accessories.map(a => a.block)).size} trim tables: ${[...new Set(o.accessories.map(a => a.category))].slice(0, 6).join(', ')}…` : 'No accessory tables in this file']);
+    const need = [...new Set(d.orders.flatMap(x => REQUIRED.filter(k => !x[k]).map(k => LABEL[k])))];
+    items.push([need.length ? 'warn' : 'ok', need.length ? `${plural(need.length, 'field')} not in the file: ${need.join(', ')}` : 'All required order details present',
+      need.length ? 'They are outlined in red on the next screen — type them there.' : 'Review the quantities and approve.']);
   }
   $('#read-title').textContent = d.orders.length ? 'Here is what we found' : 'We need one quick hint';
-  $('#read-steps').innerHTML = items.map(([k, t, s], i) => `<li class="${k === 'ok' ? '' : k}" style="animation-delay:${i * 90}ms"><span class="ic">${k === 'ok' ? '✓' : k === 'warn' ? '!' : '–'}</span><div><strong>${esc(t)}</strong><small>${esc(s)}</small></div></li>`).join('');
+  $('#read-steps').innerHTML = items.map(([k, t, s], i) => `<li class="${k === 'ok' ? '' : k}" style="animation-delay:${i * 80}ms"><span class="ic">${k === 'ok' ? '✓' : k === 'warn' ? '!' : '–'}</span><div><strong>${esc(t)}</strong><small>${esc(s)}</small></div></li>`).join('');
   $('#read-actions').hidden = false; $('#go-review').focus();
 }
 export function goReview() { renderReview(); stage('review'); }
 
-function label(k) { return ({ order_ref: 'Order reference', order_date: 'Confirmation date', po_number: 'PO number', ship_date: 'Ship date', sample_type: 'Sample type', merch: 'Merchandiser' })[k] || (HEADER.find(h => h[0] === k)?.[1]) || k; }
+// ---------------------------------------------------------------- issues → fields
+const strip = m => { const t = String(m).replace(/^Order \d+(, [^:]{1,60})?: /, ''); return t.charAt(0).toUpperCase() + t.slice(1); };
+const lineQty = l => (l.sizes || []).reduce((n, s) => n + num(s.quantity), 0);
 
-// ---------------- review ----------------
-export function renderReview() {
-  const d = state.draft;
-  $('#file-kind').textContent = d.kind === 'pdf' ? 'PDF' : 'XLS'; $('#file-kind').className = `file-badge ${d.kind === 'pdf' ? 'pdf' : ''}`;
-  $('#file-name').textContent = d.filename;
-  $('#file-meta').textContent = `${d.format} · uploaded by ${d.uploaded_by || '—'} · version ${d.version}`;
-  setState();
-  const locked = !!d.result;
-  const needMap = !d.orders.length || /Needs column mapping/.test(d.format);
-  $('#mapping-panel').hidden = !needMap && !state.showMapping;
-  if (!$('#mapping-panel').hidden) renderMapping($('#mapping-panel'), d, applyMapping);
-  $('#orders').innerHTML = d.orders.map((o, i) => orderCard(o, i)).join('') +
-    (locked ? '' : `<button class="ghost addrow" data-act="add-order">＋ Add another order manually</button>` +
-      (needMap ? '' : ` <button class="link" data-act="show-mapping">Read this file differently…</button>`));
-  if (locked) $$('#orders input, #orders select, #orders button').forEach(e => { e.disabled = true; });
-  renderQuestions();
+function clientIssues() {
+  const out = [];
+  state.draft.orders.forEach((o, oi) => {
+    REQUIRED.forEach(k => { if (o[k] == null || String(o[k]).trim() === '') out.push({ severity: 'error', message: 'Not in the file — please enter it.', path: `orders.${oi}.${k}`, client: true }); });
+    if (!['sample', 'order_demo'].includes(o.quantity_basis)) out.push({ severity: 'error', message: 'Choose which quantities this sample order uses.', path: `orders.${oi}.quantity_basis`, client: true });
+    (o.lines || []).forEach((l, li) => {
+      if (!String(l.color || '').trim()) out.push({ severity: 'error', message: 'Enter the colour / combo.', path: `orders.${oi}.lines.${li}.color`, client: true });
+      if (lineQty(l) === 0) out.push({ severity: 'error', message: 'All quantities are zero — type the quantities or choose another quantity source.', path: `orders.${oi}.lines.${li}.sizes`, client: true });
+    });
+  });
+  return out;
 }
 
-function setState() {
-  const d = state.draft; const p = d.plan;
-  $('#draft-state').textContent = d.result ? 'Saved to Oracle' : state.dirty ? 'Unsaved changes' : p ? (p.errors.length ? `${p.errors.length} to fix` : 'Ready to approve') : 'Draft';
-  $('#draft-state').className = `pill ${d.result ? 'ok' : p && !state.dirty ? (p.errors.length ? 'err' : 'ok') : state.dirty ? 'warn' : ''}`;
+function allIssues() {
+  // live checks on what is on screen win over the last server check for the same field
+  const client = clientIssues();
+  const plan = (state.planIssues || []).filter(i => i.path && !client.some(c => c.path === i.path));
+  return [...client, ...plan];
+}
+function fileIssues() { return (state.planIssues || []).filter(i => !i.path); }
+function at(path) {
+  const list = allIssues().filter(i => i.path === path);
+  return list.find(i => i.severity === 'error') || list[0];
+}
+function under(prefix) { return allIssues().filter(i => i.path === prefix || i.path.startsWith(prefix + '.')); }
+function tabOf(path) { return /\.fabrics(\.|$)/.test(path) ? 'fabric' : /\.accessories(\.|$)/.test(path) ? 'trims' : 'order'; }
+function cls(issue) { return issue ? (issue.severity === 'error' ? 'err' : 'warn') : ''; }
+function msgHtml(issue) { return issue ? `<div class="f-msg"><span>${esc(strip(issue.message))}</span></div>` : ''; }
+function cellMsgs(list) { return list.map(i => `<div class="cell-msg ${cls(i)}">${esc(strip(i.message))}</div>`).join(''); }
+
+// ---------------------------------------------------------------- review
+export function renderReview() {
+  const d = state.draft; const root = $('#stage-review');
+  const locked = !!d.result;
+  const needMap = !d.orders.length || /Needs column mapping/.test(d.format);
+  const files = fileIssues();
+  const p = d.plan;
+  root.innerHTML = `
+    <div class="card doc-bar"><span class="file-badge ${d.kind === 'pdf' ? 'pdf' : ''}">${d.kind === 'pdf' ? 'PDF' : 'XLS'}</span>
+      <div><span class="name">${esc(d.filename)}</span><small>${esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
+      <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? 'Saved to Oracle' : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
+      <button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
+    ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}
+    ${p && !p.live ? '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected, so existing masters and order numbers could not be checked. Start the database and press <b>Check &amp; continue</b> again.</div></div>' : ''}
+    <section id="mapping-panel" class="card" ${needMap || state.showMapping ? '' : 'hidden'} style="margin-bottom:14px"></section>
+    <div id="orders">${d.orders.map((o, i) => orderScreen(o, i)).join('')}
+      ${locked ? '' : '<button class="secondary" data-act="add-order">＋ Add another order manually</button>'}</div>
+    <div class="action-bar review-bar" id="review-side"></div>`;
+  if (needMap || state.showMapping) renderMapping($('#mapping-panel'), d, applyMapping);
+  if (locked) $$('#orders input, #orders select, #orders button').forEach(e => { e.disabled = true; });
+  renderSide();
+}
+
+function counts(oi) {
+  const out = { order: 0, fabric: 0, trims: 0 };
+  allIssues().filter(i => i.severity === 'error' && i.path.startsWith(`orders.${oi}.`)).forEach(i => { out[tabOf(i.path)]++; });
+  return out;
+}
+
+function orderScreen(o, oi) {
+  const tab = state.tab[oi] || 'order'; const c = counts(oi);
+  const pcs = (o.lines || []).reduce((n, l) => n + lineQty(l), 0) * (num(o.pieces_per_unit) || 1);
+  const tabs = [['order', 'Order entry', c.order], ['fabric', `Fabric & yarn · ${o.fabrics?.length || 0}`, c.fabric], ['trims', `Trims · ${o.accessories?.length || 0}`, c.trims]];
+  return `<section class="card screen" id="order-${oi}" style="margin-bottom:14px">
+    <div class="screen-head"><span class="title">Sample Order Entry${state.draft.orders.length > 1 ? ` · ${oi + 1}` : ''}</span>
+      <nav class="tabs" role="tablist">${tabs.map(([t, n, k]) => `<button role="tab" class="${tab === t ? 'active' : ''}" aria-selected="${tab === t}" data-act="tab" data-oi="${oi}" data-tab="${t}">${n}${k ? ` <span class="count-badge err">${k}</span>` : ''}</button>`).join('')}</nav>
+      <span class="spacer"></span><span class="pill brand">${fmt(pcs, 0)} pcs</span>
+      ${state.draft.orders.length > 1 ? `<button class="ghost small" data-act="remove-order" data-oi="${oi}">Remove</button>` : ''}</div>
+    <div class="screen-body">${tab === 'order' ? orderTab(o, oi) : tab === 'fabric' ? fabricTab(o, oi) : trimsTab(o, oi)}</div></section>`;
 }
 
 function srcOf(o, k) {
   const s = o.provenance?.[k];
   if (s) return source(s);
-  return o[k] ? '<span class="chip default">Entered</span>' : '';
+  return o[k] ? '<span class="chip calc">entered</span>' : '';
 }
 
 function field(o, oi, [k, text, req, list, type]) {
-  if (k === '__orderno') return `<label class="field"><span>${text}</span><input readonly value="Generated by Oracle on save"><span class="src"><span class="chip default">automatic</span></span></label>`;
-  const v = o[k] ?? ''; const missing = req && (v === '' || v == null);
-  const issue = issueFor(`orders.${oi}.${k}`);
-  return `<label class="field ${missing ? 'missing' : ''} ${issue ? 'problem' : ''}"><span>${esc(text)}${req ? ' <span class="req">*</span>' : ''}</span>
-    <input data-path="orders.${oi}.${k}" ${type ? `type="${type}"` : ''} value="${esc(v)}" ${list ? `list="list-${list}"` : ''} ${k === 'order_ref' ? 'placeholder="e.g. PK/26-27/S/1320" maxlength="30"' : ''}>
-    <span class="src">${missing ? '<span class="chip need">Needs input</span>' : srcOf(o, k)}</span></label>`;
-}
-
-function issueFor(path) { return (state.draft.plan?.issues || []).find(i => i.severity === 'error' && i.path && (i.path === path)); }
-
-function lineQty(l) { return (l.sizes || []).reduce((n, s) => n + num(s.quantity), 0); }
-
-function orderCard(o, oi) {
-  const tab = state.tab[oi] || 'order';
-  const pcs = (o.lines || []).reduce((n, l) => n + lineQty(l), 0) * (num(o.pieces_per_unit) || 1);
-  const ref = state.draft.plan?.reference_only || [];
-  return `<section class="card order" id="order-${oi}">
-    <div class="order-head"><span class="pill brand">ORDER ${oi + 1}</span><h2>${esc(o.style || 'New order')} <span class="muted">${esc(o.buyer || '')}</span></h2>
-      <span class="spacer"></span><span class="pill">${fmt(pcs, 0)} pcs</span>
-      ${state.draft.orders.length > 1 ? `<button class="danger small" data-act="remove-order" data-oi="${oi}">Remove</button>` : ''}</div>
-    <div class="order-tabs" role="tablist">
-      ${[['order', 'Order entry', ''], ['fabric', 'Fabric & yarn', o.fabrics?.length || 0], ['trims', 'Trims & accessories', o.accessories?.length || 0]].map(([t, n, c]) =>
-        `<button role="tab" class="order-tab ${tab === t ? 'active' : ''}" aria-selected="${tab === t}" data-act="tab" data-oi="${oi}" data-tab="${t}">${n}${c !== '' ? ` <span class="pill">${c}</span>` : ''}</button>`).join('')}
-    </div>
-    <div class="order-body">${tab === 'order' ? orderTab(o, oi) : tab === 'fabric' ? fabricTab(o, oi, ref) : trimsTab(o, oi, ref)}</div></section>`;
+  if (k === '__orderno') return `<div class="f"><label class="f-label">${text}<span class="src"><span class="chip calc">automatic</span></span></label><input readonly value="Generated by Oracle on save"></div>`;
+  const path = `orders.${oi}.${k}`; const v = o[k] ?? ''; const issue = at(path);
+  return `<div class="f ${cls(issue)}" data-field="${esc(path)}"><label class="f-label" for="f-${esc(path)}"><span>${esc(text)}</span>${req ? '<span class="req">*</span>' : ''}<span class="src">${issue ? '' : srcOf(o, k)}</span></label>
+    <input id="f-${esc(path)}" data-path="${esc(path)}" ${type ? `type="${type}"` : ''} value="${esc(v)}" ${list ? `list="list-${list}"` : ''} ${k === 'order_ref' ? 'placeholder="e.g. PK/26-27/S/1320" maxlength="30"' : ''} ${issue ? 'aria-invalid="true"' : ''}>${msgHtml(issue)}</div>`;
 }
 
 function orderTab(o, oi) {
-  const basis = o.quantity_basis || 'unconfirmed';
+  const basis = o.quantity_basis || '';
   const sum = ls => (ls || []).reduce((n, l) => n + lineQty(l), 0);
-  const hasSample = (o.sample_lines || []).length; const hasOrder = (o.order_lines || []).length;
-  return `<div class="screen-title"><b>Sample Order Entry</b><span class="muted">— same fields as the Axpert screen, filled from the file</span></div>
-    <div class="erp-grid">${HEADER.map(h => field(o, oi, h)).join('')}</div>
-    <div class="basis"><h3>Which quantities should this sample order use? <span class="req">*</span></h3>
-      <div class="segmented" role="radiogroup">
-        ${hasSample ? `<button role="radio" aria-checked="${basis === 'sample'}" class="${basis === 'sample' ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="sample">Sample section · ${fmt(sum(o.sample_lines), 0)} pcs</button>` : ''}
-        ${hasOrder ? `<button role="radio" aria-checked="${basis === 'order_demo'}" class="${basis === 'order_demo' ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="order_demo">Buyer order quantities · ${fmt(sum(o.order_lines), 0)} pcs</button>` : ''}
-        <button role="radio" aria-checked="${basis === 'sample' && !hasSample}" class="${basis === 'sample' && !hasSample ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="manual">I will type sample quantities</button>
-      </div>
-      <p>${basis === 'order_demo' ? 'The buyer’s order quantities will be saved as this sample order (demo). Check the sizes below.' : basis === 'sample' ? 'The sample quantities below will be saved. Zero quantities must be corrected.' : 'Choose a quantity source to continue.'}</p>
-      <label class="field" style="max-width:240px;margin-top:8px"><span>Pieces in one entered unit <span class="req">*</span></span><input type="number" min="1" step="1" data-path="orders.${oi}.pieces_per_unit" value="${esc(o.pieces_per_unit ?? '')}"><span class="src">${o.pieces_per_unit === 1 ? '<span class="chip default">1 = quantities are pieces</span>' : ''}</span></label>
-    </div>
-    <div class="lines">${(o.lines || []).map((l, li) => lineCard(o, oi, l, li)).join('')}</div>
-    <button class="ghost addrow small" data-act="add-line" data-oi="${oi}">＋ Add garment / colour line</button>
-    ${(o.warnings || []).length ? `<div class="warnings"><strong>Notes from reading the file</strong><ul>${o.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}`;
+  const bIssue = at(`orders.${oi}.quantity_basis`);
+  const packs = under(`orders.${oi}.packs`);
+  return `<div class="block"><div class="block-head"><h3>Order header</h3><span class="sub">Same fields as the Axpert screen · filled from the file · the cell each value came from is shown on the right</span></div>
+      <div class="form-grid">${HEADER.map(h => field(o, oi, h)).join('')}</div></div>
+    <div class="block"><div class="block-head"><h3>Style &amp; size quantities</h3><span class="sub">${esc(o.po_number || '')}</span></div>
+      <div class="qty-bar"><span class="lbl">Quantities to save <span style="color:var(--err)">*</span></span>
+        <div class="segmented ${cls(bIssue)}" role="radiogroup" aria-label="Quantity source">
+          ${(o.order_lines || []).length ? `<button role="radio" aria-checked="${basis === 'order_demo'}" class="${basis === 'order_demo' ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="order_demo">Buyer order · ${fmt(sum(o.order_lines), 0)} pcs</button>` : ''}
+          ${(o.sample_lines || []).length ? `<button role="radio" aria-checked="${basis === 'sample' && o._manual !== true}" class="${basis === 'sample' && !o._manual ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="sample">Sample section · ${fmt(sum(o.sample_lines), 0)} pcs</button>` : ''}
+          <button role="radio" class="${o._manual ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="manual">Type them</button></div>
+        <div class="f ${cls(at(`orders.${oi}.pieces_per_unit`))}"><label class="f-label" for="ppu-${oi}">Pieces per unit</label><input id="ppu-${oi}" type="number" min="1" step="1" data-path="orders.${oi}.pieces_per_unit" value="${esc(o.pieces_per_unit ?? '')}" title="1 = quantities are pieces; 3 = each quantity is a pack of 3"></div>
+        ${bIssue ? `<div class="cell-msg ${cls(bIssue)}">${esc(strip(bIssue.message))}</div>` : ''}</div>
+      ${matrix(o, oi)}
+      ${packs.length ? `<div class="banner warning" style="margin-top:10px"><span class="b-ic">!</span><div>${packs.map(i => esc(strip(i.message))).join('<br>')}</div></div>` : ''}
+      ${(o.warnings || []).length ? `<details class="notes"><summary class="muted small-text" style="cursor:pointer">Notes from reading the file (${o.warnings.length})</summary><ul class="small-text">${o.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}</div>`;
 }
 
-function lineCard(o, oi, l, li) {
-  const total = lineQty(l); const declared = l.declared_total;
-  const mismatch = declared != null && num(declared) !== total;
-  return `<div class="line" id="line-${oi}-${li}">
-    <div class="line-head"><span class="line-no">${li + 1}</span>
-      <label class="field">Garment / component<input data-path="orders.${oi}.lines.${li}.label" value="${esc(l.label)}"></label>
-      <label class="field ${!l.color ? 'missing' : ''}"><span>Combo / colour <span class="req">*</span></span><input data-path="orders.${oi}.lines.${li}.color" list="list-color" value="${esc(l.color)}"><span class="src">${source(l.provenance?.color)}</span></label>
-      <span class="pill">${esc(o.po_number || 'PO —')}</span>
-      <button class="ghost small" data-act="remove-line" data-oi="${oi}" data-li="${li}" aria-label="Remove line ${li + 1}">Remove</button></div>
-    <div class="sizes">${(l.sizes || []).map((s, si) => `<div class="size">
-        <input class="sz" aria-label="Size name" data-path="orders.${oi}.lines.${li}.sizes.${si}.size" list="list-size" value="${esc(s.size)}">
-        <input aria-label="Quantity for ${esc(s.size)}" type="number" min="0" step="1" data-path="orders.${oi}.lines.${li}.sizes.${si}.quantity" value="${esc(s.quantity ?? '')}" title="${esc(s.source?.cell ? 'From ' + s.source.cell : '')}">
-        <button class="x" data-act="remove-size" data-oi="${oi}" data-li="${li}" data-si="${si}" aria-label="Remove size ${esc(s.size)}">remove</button></div>`).join('')}
-      <button class="ghost small" data-act="add-size" data-oi="${oi}" data-li="${li}">＋ Size</button></div>
-    <div class="line-foot"><span>Total <strong data-total="${oi}-${li}">${fmt(total, 0)}</strong> pcs${num(o.pieces_per_unit) > 1 ? ` × ${o.pieces_per_unit}` : ''}</span>
-      ${mismatch ? `<span class="bad">File total says ${fmt(declared, 0)}</span>` : declared != null ? '<span class="pill ok">Matches file total</span>' : ''}</div></div>`;
+function sizeNames(o) {
+  const names = [];
+  (o.lines || []).forEach(l => (l.sizes || []).forEach(s => { if (!names.includes(s.size ?? '')) names.push(s.size ?? ''); }));
+  return names;
 }
 
-function refBanner(ref, tables) {
-  const r = ref.filter(x => tables.includes(x.table));
+function fresh() { return !!state.draft.plan && !state.draft.plan.stale && !state.dirty; }
+
+function msgRow(list, span, rowCls) {
+  return list.length ? `<tr class="msg-row ${rowCls}"><td colspan="${span}"><div class="msg-wrap">${cellMsgs(list)}</div></td></tr>` : '';
+}
+
+function matrix(o, oi) {
+  const lines = o.lines || []; const sizes = sizeNames(o); const ppu = num(o.pieces_per_unit) || 1;
+  const colTotal = s => lines.reduce((n, l) => n + num(l.sizes.find(x => (x.size ?? '') === s)?.quantity), 0);
+  const grand = lines.reduce((n, l) => n + lineQty(l), 0);
+  const span = sizes.length + 7;
+  return `<div class="tbl-wrap"><table class="grid-input matrix"><thead><tr><th style="width:44px">#</th><th style="min-width:190px">Garment / component</th><th style="min-width:210px">Colour / combo <span style="color:var(--err)">*</span></th>
+      ${sizes.map(s => `<th class="size"><div class="size-head"><input data-sizecol="${oi}" data-old="${esc(s)}" value="${esc(s)}" aria-label="Size name" class="${s === '' ? 'err' : ''}" placeholder="size" title="${esc(s)} — click to rename"><button class="th-x" data-act="remove-size-col" data-oi="${oi}" data-size="${esc(s)}" title="Remove size ${esc(s)}" aria-label="Remove size ${esc(s)}">×</button></div></th>`).join('')}
+      <th class="add-col"><input data-addsize="${oi}" placeholder="＋ size" aria-label="Add a size column"></th>
+      <th class="num">Total</th><th class="num">File total</th><th></th></tr></thead><tbody>
+    ${lines.map((l, li) => {
+      const lp = `orders.${oi}.lines.${li}`; const rowIss = under(lp); const total = lineQty(l);
+      const bad = l.declared_total != null && num(l.declared_total) !== total;
+      const rowCls = rowIss.some(i => i.severity === 'error') ? 'row-err' : rowIss.length ? 'row-warn' : '';
+      const colorIss = at(`${lp}.color`);
+      return `<tr class="${rowCls} ${rowIss.length ? 'has-msg' : ''}" id="line-${oi}-${li}"><td><span class="rowno">${li + 1}</span></td>
+        <td><input data-path="${lp}.label" value="${esc(l.label)}" title="${esc(l.label)}" aria-label="Garment for line ${li + 1}"></td>
+        <td><input data-path="${lp}.color" list="list-color" value="${esc(l.color)}" class="${cls(colorIss)}" aria-label="Colour for line ${li + 1}" title="${esc(l.color)}${l.provenance?.color?.cell ? ' · from ' + esc(l.provenance.color.cell) : ''}"></td>
+        ${sizes.map(s => { const si = l.sizes.findIndex(x => (x.size ?? '') === s); const sp = `${lp}.sizes.${si}`;
+          const iss = si >= 0 ? (at(`${sp}.quantity`) || at(`${sp}.size`)) : null; const sz = l.sizes[si];
+          return `<td class="num">${si >= 0 ? `<input type="number" min="0" step="1" data-path="${sp}.quantity" value="${esc(sz.quantity ?? '')}" class="${cls(iss)}" title="${esc(iss ? strip(iss.message) : sz.source?.cell ? 'From ' + (sz.source.sheet ? sz.source.sheet + '!' : '') + sz.source.cell : '')}" aria-label="${esc(s)} quantity line ${li + 1}">`
+            : `<input type="number" min="0" step="1" data-newsize="${oi}|${li}" data-size="${esc(s)}" placeholder="–" aria-label="${esc(s)} quantity line ${li + 1}">`}</td>`; }).join('')}
+        <td></td><td class="total" data-total="${oi}-${li}">${fmt(total, 0)}</td>
+        <td class="num file-total ${l.declared_total == null ? '' : bad ? 'bad' : 'good'}">${l.declared_total == null ? '—' : `${fmt(l.declared_total, 0)} ${bad ? '≠' : '✓'}`}</td>
+        <td><button class="icon-btn" data-act="remove-line" data-oi="${oi}" data-li="${li}" title="Remove line ${li + 1}" aria-label="Remove line ${li + 1}">✕</button></td></tr>
+        ${msgRow(rowIss, span, rowCls)}`;
+    }).join('') || `<tr><td colspan="${span}" class="empty">No lines yet. Add a colour line.</td></tr>`}
+    </tbody><tfoot><tr><td></td><td>Total pieces</td><td class="muted">${ppu > 1 ? `× ${ppu} per unit = <b>${fmt(grand * ppu, 0)}</b> pcs` : ''}</td>${sizes.map(s => `<td class="num">${fmt(colTotal(s), 0)}</td>`).join('')}<td></td><td class="num">${fmt(grand, 0)}</td><td></td><td></td></tr></tfoot></table></div>
+    <div class="tbl-actions"><button class="secondary small" data-act="add-line" data-oi="${oi}">＋ Add colour line</button><span class="muted small-text" style="align-self:center">Tip: type a new size name in “＋ size” to add a column.</span></div>`;
+}
+
+function lineOptions(o, sel, all = false) {
+  return `<option value="">${all ? 'All garments' : '— choose —'}</option>` + (o.lines || []).map((l, i) => `<option value="${i + 1}" ${Number(sel) === i + 1 ? 'selected' : ''}>${i + 1}. ${esc((l.color || l.label || '').slice(0, 22))}</option>`).join('');
+}
+
+function refBanner(tables) {
+  const ref = (state.draft.plan?.reference_only || []).filter(x => tables.includes(x.table));
   const m = state.mappingStatus || {};
   const unverified = tables.filter(t => m[t] && m[t] !== 'verified');
-  if (!r.length && !unverified.length) return '';
-  return `<div class="ref-only">These rows are checked and shown for review. They are <b>not saved to Oracle yet</b> because the ${unverified.join(' / ') || r.map(x => x.table).join(' / ')} column mapping is not verified. An administrator can verify it in <b>Setup → Database mapping</b>.</div>`;
+  if (!ref.length && !unverified.length) return '';
+  return `<div class="banner info"><span class="b-ic">i</span><div>These rows are checked and shown for review. They are <b>not saved to Oracle yet</b> because the ${esc((unverified.length ? unverified : ref.map(x => x.table)).join(' / '))} mapping is not verified. An administrator can verify it in <b>Setup → Write mapping</b>.</div></div>`;
 }
 
-function lineOptions(o, sel) {
-  return `<option value="">— choose —</option>` + (o.lines || []).map((l, i) => `<option value="${i + 1}" ${Number(sel) === i + 1 ? 'selected' : ''}>${i + 1}. ${esc((l.label || '').slice(0, 24))} ${esc(l.color ? '· ' + l.color.slice(0, 18) : '')}</option>`).join('');
-}
-
-function fabricTab(o, oi, ref) {
-  const fabrics = o.fabrics || [];
-  const derived = state.draft.plan?.derived || {};
-  return `<div class="screen-title"><b>Fabric Planning</b><span class="muted">— fabric per garment portion, consumption and yarn split</span></div>${refBanner(ref, ['ORDFAB', 'ORDYARN'])}
-    ${fabrics.length ? fabrics.map((f, fi) => {
+function fabricTab(o, oi) {
+  const fabrics = o.fabrics || []; const derived = fresh() ? state.draft.plan.derived || {} : {};
+  state.openFab ||= new Set();
+  return `${refBanner(['ORDFAB', 'ORDYARN'])}<div class="block-head"><h3>Fabric planning</h3><span class="sub">Fabric per garment portion · kg = pieces × g/pc ÷ 1000 × rejection</span></div>
+    <div class="tbl-wrap"><table class="grid-input fabric-table"><thead><tr><th>#</th><th>Garment line <span style="color:var(--err)">*</span></th><th>Portion</th><th>Fabric colour <span style="color:var(--err)">*</span></th><th>Quality</th><th>GSM</th><th>Dia</th><th>Content</th>
+      <th class="num">g / pc <span style="color:var(--err)">*</span></th><th class="num">Rejection</th><th class="num">Pieces</th><th class="num">Kg to save</th><th class="num">File kg</th><th>Yarn</th><th></th></tr></thead><tbody>
+    ${fabrics.map((f, fi) => {
+      const p = `orders.${oi}.fabrics.${fi}`; const iss = under(p);
       const line = o.lines?.[num(f.line) - 1]; const pcs = line ? lineQty(line) * (num(o.pieces_per_unit) || 1) : 0;
-      const kg = pcs * num(f.yy) / 1000 * (num(f.rejection) || 1);
-      const ysum = (f.yarns || []).reduce((n, y) => n + num(y.percent), 0);
-      const p = `orders.${oi}.fabrics.${fi}`;
-      return `<details class="group" open><summary><span><strong>${esc(f.component || 'Fabric ' + (fi + 1))}</strong> <span class="muted">${esc(f.quality)} · ${esc(f.gsm)} GSM · ${esc(f.color)}</span></span>
-        <span class="pill ${derived[p] ? 'ok' : ''}">${fmt(derived[p]?.total_kg ?? kg)} kg to save</span><span class="pill">file ${fmt(f.total)} kg</span></summary>
-        <div class="inner"><div class="erp-grid">
-          <label class="field ${issueFor(p + '.line') ? 'problem' : ''}"><span>Garment line <span class="req">*</span></span><select data-path="${p}.line" data-type="int">${lineOptions(o, f.line)}</select><span class="src">${source(f.source?.component)}</span></label>
-          <label class="field">Portion<input data-path="${p}.portion" value="${esc(f.portion)}"></label>
-          <label class="field"><span>Fabric colour <span class="req">*</span></span><input data-path="${p}.color" list="list-color" value="${esc(f.color)}"><span class="src">${source(f.source?.color)}</span></label>
-          <label class="field">Fabric quality<input data-path="${p}.quality" value="${esc(f.quality)}"><span class="src">${source(f.source?.quality)}</span></label>
-          <label class="field">GSM<input data-path="${p}.gsm" value="${esc(f.gsm)}"><span class="src">${source(f.source?.gsm)}</span></label>
-          <label class="field">Dia<input data-path="${p}.dia" value="${esc(f.dia)}"><span class="src">${source(f.source?.dia)}</span></label>
-          <label class="field">Content<input data-path="${p}.content" value="${esc(f.content)}"><span class="src">${source(f.source?.content)}</span></label>
-          <label class="field ${issueFor(p + '.yy') ? 'problem' : ''}"><span>Consumption (g / piece) <span class="req">*</span></span><input type="number" step="any" min="0" data-path="${p}.yy" value="${esc(f.yy ?? '')}"><span class="src">${source(f.source?.yy)}</span></label>
-          <label class="field">Rejection factor<input type="number" step="any" min="1" data-path="${p}.rejection" value="${esc(f.rejection ?? '')}"><span class="src">${source(f.source?.rejection)}</span></label>
-        </div>
-        <p class="formula">${esc(derived[p]?.formula || `${fmt(pcs, 0)} pcs × ${fmt(f.yy)} g ÷ 1000 × ${fmt(f.rejection || 1)} = ${fmt(kg)} kg`)}</p>
-        <div class="table-wrap yarns"><table><thead><tr><th>Yarn count</th><th>Yarn colour</th><th class="num">%</th><th class="num">kg</th><th></th></tr></thead><tbody>
-          ${(f.yarns || []).map((y, yi) => `<tr><td><input data-path="${p}.yarns.${yi}.count" value="${esc(y.count)}" title="${esc(y.source?.derivation || '')}"></td>
-            <td><input data-path="${p}.yarns.${yi}.color" list="list-color" value="${esc(y.color)}"></td>
-            <td><input type="number" step="any" min="0" max="100" data-path="${p}.yarns.${yi}.percent" value="${esc(y.percent ?? '')}"></td>
-            <td class="num">${fmt(derived[`${p}.yarns.${yi}`]?.kg ?? kg * num(y.percent) / 100)}</td>
-            <td><button class="ghost small" data-act="remove-yarn" data-path="${p}" data-yi="${yi}">Remove</button></td></tr>`).join('')}
-          <tr><td colspan="2"><button class="link" data-act="add-yarn" data-path="${p}">＋ Add yarn</button>${(f.yarns || []).some(y => y.source?.derivation) ? ' <span class="muted">Suggested from content — confirm</span>' : ''}</td>
-            <td class="num"><strong class="${Math.abs(ysum - 100) > 1e-9 && f.yarns?.length ? 'bad' : ''}">${fmt(ysum)}%</strong></td><td></td><td></td></tr></tbody></table></div>
-        <div><button class="danger small" data-act="remove-fabric" data-oi="${oi}" data-fi="${fi}">Remove fabric row</button></div></div></details>`;
-    }).join('') : '<p class="empty">No fabric table was found in this file.</p>'}
-    <button class="ghost small addrow" data-act="add-fabric" data-oi="${oi}">＋ Add fabric row</button>`;
+      const kg = derived[p]?.total_kg ?? pcs * num(f.yy) / 1000 * (num(f.rejection) || 1);
+      const ysum = (f.yarns || []).reduce((n, y) => n + num(y.percent), 0); const open = state.openFab.has(`${oi}.${fi}`);
+      const inp = (k, extra = '') => `<input data-path="${p}.${k}" value="${esc(f[k] ?? '')}" class="${cls(at(`${p}.${k}`))}" ${extra} title="${esc(f.source?.[k]?.cell ? 'From ' + f.source[k].cell : '')}">`;
+      const rc = iss.some(i => i.severity === 'error') ? 'row-err' : iss.length ? 'row-warn' : '';
+      return `<tr class="${rc} ${iss.length ? 'has-msg' : ''}"><td><span class="rowno">${fi + 1}</span></td>
+        <td class="w-line"><select data-path="${p}.line" data-type="int" class="${cls(at(`${p}.line`))}">${lineOptions(o, f.line)}</select></td>
+        <td>${inp('portion')}</td><td class="w-wide">${inp('color', 'list="list-color"')}</td><td class="w-wide">${inp('quality')}</td><td>${inp('gsm')}</td><td>${inp('dia')}</td><td class="w-wide">${inp('content')}</td>
+        <td class="num"><input type="number" step="any" min="0" data-path="${p}.yy" value="${esc(f.yy ?? '')}" class="${cls(at(`${p}.yy`))}" style="width:76px"></td>
+        <td class="num"><input type="number" step="any" min="1" data-path="${p}.rejection" value="${esc(f.rejection ?? '')}" class="${cls(at(`${p}.rejection`))}" style="width:70px"></td>
+        <td class="num">${fmt(pcs, 0)}</td><td class="num"><b>${fmt(Math.round(kg * 1000) / 1000)}</b></td><td class="num muted">${fmt(f.total)}</td>
+        <td><button class="link yarn-btn" data-act="toggle-yarn" data-key="${oi}.${fi}">${(f.yarns || []).map(y => `${esc(y.count || '?')} ${fmt(y.percent)}%`).join(' + ') || 'Add yarn'} <span class="${Math.abs(ysum - 100) > 1e-9 && f.yarns?.length ? 'cell-msg err' : 'muted'}">${open ? '▴' : '▾'}</span></button></td>
+        <td><button class="icon-btn" data-act="remove-fabric" data-oi="${oi}" data-fi="${fi}" title="Remove fabric row" aria-label="Remove fabric row ${fi + 1}">✕</button></td></tr>
+        ${msgRow(iss, 15, rc)}
+        ${open ? `<tr class="sub-row"><td colspan="15"><div class="block-head"><h3>Yarn split for fabric ${fi + 1}</h3><span class="sub">${f.yarns?.some(y => y.source?.derivation) ? 'Suggested from the fabric content — please confirm' : ''}</span></div>
+          <table class="grid-input" style="max-width:640px"><thead><tr><th>Yarn count</th><th>Yarn colour</th><th class="num">%</th><th class="num">kg</th><th></th></tr></thead><tbody>
+          ${(f.yarns || []).map((y, yi) => `<tr><td><input data-path="${p}.yarns.${yi}.count" value="${esc(y.count)}" class="${cls(at(`${p}.yarns.${yi}.count`))}"></td><td><input data-path="${p}.yarns.${yi}.color" list="list-color" value="${esc(y.color)}"></td>
+            <td class="num"><input type="number" step="any" min="0" max="100" data-path="${p}.yarns.${yi}.percent" value="${esc(y.percent ?? '')}" style="width:80px"></td>
+            <td class="num">${fmt(derived[`${p}.yarns.${yi}`]?.kg ?? kg * num(y.percent) / 100)}</td><td><button class="icon-btn" data-act="remove-yarn" data-path="${p}" data-yi="${yi}" aria-label="Remove yarn">✕</button></td></tr>`).join('')}
+          </tbody><tfoot><tr><td colspan="2"><button class="link" data-act="add-yarn" data-path="${p}">＋ Add yarn</button></td><td class="num ${Math.abs(ysum - 100) > 1e-9 && f.yarns?.length ? 'cell-msg err' : ''}">${fmt(ysum)}%</td><td></td><td></td></tr></tfoot></table></td></tr>` : ''}`;
+    }).join('') || '<tr><td colspan="15" class="empty">No fabric table was found in this file.</td></tr>'}
+    </tbody></table></div><div class="tbl-actions"><button class="secondary small" data-act="add-fabric" data-oi="${oi}">＋ Add fabric row</button></div>`;
 }
 
-function trimsTab(o, oi, ref) {
-  const rows = o.accessories || [];
-  const derived = state.draft.plan?.derived || {};
+function trimsTab(o, oi) {
+  const rows = o.accessories || []; const derived = fresh() ? state.draft.plan.derived || {} : {};
+  state.openGroups ||= new Set();
   const groups = new Map();
   rows.forEach((a, ai) => { const k = `${a.block ?? 'm'}|${a.category}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push([a, ai]); });
-  return `<div class="screen-title"><b>Accessories / trims</b><span class="muted">— grouped exactly as the trim tables in the file</span></div>${refBanner(ref, ['ORDACC'])}
-    ${groups.size ? [...groups.values()].map(list => {
+  const only = !!state.onlyProblems;
+  return `${refBanner(['ORDACC'])}<div class="block-head"><h3>Trims &amp; accessories</h3><span class="sub">Grouped exactly as the trim tables in the file</span><span class="spacer"></span>
+      <label class="check"><input type="checkbox" data-act="only-problems" ${only ? 'checked' : ''}> Only rows that need attention</label></div>
+    <div class="tbl-wrap"><table class="grid-input"><thead><tr><th>Garment</th><th>Size</th><th>Colour</th><th>Code</th><th>Description</th><th>Unit</th><th class="num">File qty</th><th class="num">To save</th><th></th></tr></thead><tbody>
+    ${[...groups.entries()].map(([key, list]) => {
       const [first] = list[0]; const total = list.reduce((n, [a]) => n + num(a.total), 0);
+      const issues = list.flatMap(([, ai]) => under(`orders.${oi}.accessories.${ai}`));
+      if (only && !issues.length) return '';
+      const open = state.openGroups.has(key) || (issues.some(i => i.severity === 'error'));
       const descs = new Set(list.map(([a]) => a.description));
-      return `<details class="group"><summary><span><strong>${esc(first.category || first.name || 'Accessory')}</strong> <span class="muted">${esc(first.supplier || '')}</span></span>
-        <span class="pill">${list.length} row${list.length === 1 ? '' : 's'}</span><span class="pill">${fmt(total)} ${esc(first.uom || '')}</span></summary>
-        <div class="inner">${descs.size === 1 ? `<label class="field">Description for all ${list.length} rows (saved as accessory description)<input data-group-desc="${list.map(([, ai]) => ai).join(',')}" data-oi="${oi}" value="${esc(first.description)}" maxlength="120"><span class="src">${esc(String(first.description || '').length)} characters</span></label>` : ''}
-        <div class="table-wrap"><table><thead><tr><th>Garment</th><th>Size</th><th>Colour</th><th>Code</th>${descs.size > 1 ? '<th>Description</th>' : ''}<th>Unit</th><th class="num">File qty</th><th class="num">To save</th><th></th></tr></thead><tbody>
-        ${list.map(([a, ai]) => { const p = `orders.${oi}.accessories.${ai}`; return `<tr>
-          <td><select data-path="${p}.line" data-type="int"><option value="">All garments</option>${(o.lines || []).map((l, i) => `<option value="${i + 1}" ${num(a.line) === i + 1 ? 'selected' : ''}>${i + 1}. ${esc((l.color || l.label || '').slice(0, 18))}</option>`).join('')}</select></td>
-          <td><input data-path="${p}.size" list="list-size" value="${esc(a.size)}"></td><td><input data-path="${p}.color" list="list-color" value="${esc(a.color)}"></td>
-          <td><input data-path="${p}.code" value="${esc(a.code)}"></td>${descs.size > 1 ? `<td><input data-path="${p}.description" value="${esc(a.description)}"></td>` : ''}
-          <td><input data-path="${p}.uom" value="${esc(a.uom)}" style="width:70px"></td>
-          <td class="num"><input type="number" step="any" min="0" data-path="${p}.total" value="${esc(a.total ?? '')}" style="width:100px" title="${esc(a.source?.total?.cell ? 'From ' + a.source.total.cell : '')}"></td>
+      const descIss = list.map(([, ai]) => at(`orders.${oi}.accessories.${ai}.description`)).find(Boolean);
+      return `<tr class="group-row ${open ? 'open' : ''}" data-act="toggle-group" data-key="${esc(key)}"><td colspan="4"><span class="caret">▸</span> ${esc(first.category || first.name || 'Accessory')} <span class="muted" style="font-weight:500">${esc(first.supplier || '')} · ${plural(list.length, 'row')}</span>
+          ${issues.length ? ` <span class="count-badge ${issues.some(i => i.severity === 'error') ? 'err' : 'warn'}" title="${issues.length} to check">${issues.length}</span>` : ''}</td>
+        <td>${descs.size === 1 ? `<input data-group-desc="${list.map(([, ai]) => ai).join(',')}" data-oi="${oi}" value="${esc(first.description)}" maxlength="120" class="${cls(descIss)}" title="Description saved for all ${list.length} rows">` : '<span class="muted">varies</span>'}</td>
+        <td>${esc(first.uom || '')}</td><td class="num">${fmt(total)}</td><td></td><td></td></tr>
+        ${descIss ? msgRow([descIss], 9, descIss.severity === 'error' ? 'row-err' : 'row-warn') : ''}
+        ${open ? list.map(([a, ai]) => { const p = `orders.${oi}.accessories.${ai}`; const iss = under(p).filter(i => !i.path.endsWith('.description') || descs.size > 1);
+          if (only && !iss.length) return '';
+          const rc = iss.some(i => i.severity === 'error') ? 'row-err' : iss.length ? 'row-warn' : '';
+          return `<tr class="${rc} ${iss.length ? 'has-msg' : ''}">
+          <td><select data-path="${p}.line" data-type="int">${lineOptions(o, a.line, true)}</select></td>
+          <td><input data-path="${p}.size" list="list-size" value="${esc(a.size)}" style="width:80px"></td><td><input data-path="${p}.color" list="list-color" value="${esc(a.color)}"></td>
+          <td><input data-path="${p}.code" value="${esc(a.code)}" style="width:100px"></td>
+          <td>${descs.size > 1 ? `<input data-path="${p}.description" value="${esc(a.description)}" class="${cls(at(`${p}.description`))}">` : ''}</td>
+          <td><input data-path="${p}.uom" value="${esc(a.uom)}" class="${cls(at(`${p}.uom`))}" style="width:64px"></td>
+          <td class="num"><input type="number" step="any" min="0" data-path="${p}.total" value="${esc(a.total ?? '')}" style="width:96px" class="${cls(at(`${p}.total`))}"></td>
           <td class="num">${derived[p] ? fmt(derived[p].quantity) : '—'}</td>
-          <td><button class="ghost small" data-act="remove-acc" data-oi="${oi}" data-ai="${ai}">Remove</button></td></tr>`; }).join('')}
-        </tbody></table></div></div></details>`;
-    }).join('') : '<p class="empty">No accessory tables were found in this file.</p>'}`;
+          <td><button class="icon-btn" data-act="remove-acc" data-oi="${oi}" data-ai="${ai}" aria-label="Remove row">✕</button></td></tr>${msgRow(iss, 9, rc)}`; }).join('') : ''}`;
+    }).join('') || '<tr><td colspan="9" class="empty">No accessory tables were found in this file.</td></tr>'}
+    </tbody></table></div>`;
 }
 
-// ---------------- questions ----------------
-function clientChecks() {
-  const out = [];
-  state.draft.orders.forEach((o, oi) => {
-    REQUIRED.forEach(k => { if (!o[k]) out.push({ severity: 'error', message: `Order ${oi + 1}: enter ${label(k).toLowerCase()}.`, path: `orders.${oi}.${k}` }); });
-    if (!['sample', 'order_demo'].includes(o.quantity_basis)) out.push({ severity: 'error', message: `Order ${oi + 1}: choose which quantities to use.`, path: `orders.${oi}.quantity_basis` });
-    (o.lines || []).forEach((l, li) => { if (lineQty(l) === 0) out.push({ severity: 'error', message: `Order ${oi + 1}, line ${li + 1}: quantities total zero.`, path: `orders.${oi}.lines.${li}.sizes` }); });
-  });
-  return out;
-}
-
-export function renderQuestions() {
-  const d = state.draft; const p = !state.dirty && d.plan;
-  const items = p ? p.issues : clientChecks();
-  const errors = items.filter(i => i.severity === 'error'); const warns = items.filter(i => i.severity !== 'error');
-  $('#question-count').textContent = errors.length; $('#question-count').className = `count ${errors.length ? 'err' : p ? 'ok' : ''}`;
-  $('#questions').innerHTML = (errors.concat(warns).slice(0, 80).map(i => `<div class="q ${i.severity}"><span>${esc(i.message)}</span>${i.path ? `<button data-act="fix" data-path="${esc(i.path)}">${i.severity === 'error' ? 'Fix' : 'Show'}</button>` : ''}</div>`).join('')
-    + (items.length > 80 ? `<p class="muted">…and ${items.length - 80} more.</p>` : '')) ||
-    (p ? '<div class="q okmsg">✓ No open questions. Review the exact Oracle entry and approve.</div>' : '<div class="q okmsg">Required order details are filled. Press <b>Check &amp; prepare</b>.</div>');
+function renderSide() {
+  const d = state.draft; const p = !state.dirty && d.plan && !d.plan.stale;
+  const errs = allIssues().filter(i => i.severity === 'error').length + fileIssues().length;
   const t = p ? p.totals : null;
-  $('#totals').innerHTML = t ? [['Orders', t.orders], ['Pieces', fmt(t.pieces, 0)], ['Fabric kg', fmt(t.fabric_kg)], ['Trim rows', t.accessories]].map(([a, b]) => `<div><small>${a}</small><strong>${b}</strong></div>`).join('') : '';
-  $('#prepare').disabled = !!d.result || !can('preview');
-  $('#prepare').textContent = p && !errors.length ? 'Open the approval preview →' : 'Check & prepare entry →';
+  const pcs = d.orders.reduce((n, o) => n + (o.lines || []).reduce((m, l) => m + lineQty(l), 0) * (num(o.pieces_per_unit) || 1), 0);
+  const kg = t ? t.fabric_kg : d.orders.reduce((n, o) => n + (o.fabrics || []).reduce((m, f) => m + num(f.total), 0), 0);
+  const state_ = errs ? `<div class="ready-state todo"><span class="big-n">${errs}</span><span>${errs === 1 ? 'place needs' : 'places need'} your input<br><small>outlined in red</small></span></div>
+      <button class="secondary" data-act="next-issue">Show me the next one ›</button>`
+    : p ? '<div class="ready-state ok"><span class="big-n">✓</span><span>All checks passed<br><small>see the exact Oracle entry next</small></span></div>'
+      : `<div class="ready-state warn"><span class="big-n">•</span><span>${state.dirty ? 'Changes made' : 'Not checked yet'}<br><small>checking never writes to Oracle</small></span></div>`;
+  $('#review-side').innerHTML = `${state_}
+    <div class="bar-stats"><span><b>${fmt(pcs, 0)}</b> pcs</span><span><b>${d.orders.reduce((n, o) => n + (o.lines || []).length, 0)}</b> colour lines</span>
+      <span><b>${new Set(d.orders.flatMap(o => sizeNames(o))).size}</b> sizes</span><span><b>${fmt(kg)}</b> kg fabric</span><span><b>${d.orders.reduce((n, o) => n + (o.accessories || []).length, 0)}</b> trim rows</span></div>
+    <button class="primary big" id="prepare" ${d.result || !can('preview') ? 'disabled' : ''}>${p && !errs ? 'Open the approval view →' : 'Check & continue →'}</button>`;
 }
 
-export function fix(path) {
-  const parts = path.split('.'); const oi = Number(parts[1]);
-  const tab = parts[2] === 'fabrics' ? 'fabric' : parts[2] === 'accessories' ? 'trims' : 'order';
-  if ((state.tab[oi] || 'order') !== tab) { state.tab[oi] = tab; renderReview(); }
-  let el = null; let p = path;
-  const acc = path.match(/accessories\.(\d+)\.description$/);
-  if (acc) el = $$('[data-group-desc]').find(i => i.dataset.groupDesc.split(',').includes(acc[1])) || null;
-  while (!el && p.includes('.')) { el = $(`[data-path="${CSS.escape(p)}"]`) || (p.endsWith('quantity_basis') ? $(`[data-act="basis"][data-oi="${oi}"]`) : null); p = p.slice(0, p.lastIndexOf('.')); }
-  el ||= $(`#line-${parts[1]}-${parts[3]}`) || $(`#order-${oi}`);
-  const details = el?.closest('details'); if (details) details.open = true;
-  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  const f = el?.closest('.field') || el; f?.classList.add('flash'); setTimeout(() => f?.classList.remove('flash'), 2600);
-  if (el?.focus) el.focus({ preventScroll: true });
+function askFile() {
+  const body = drawer('Ask about this file', `<p class="muted">The local AI explains this upload using only what was read from the file and the last check. It cannot change or save anything.</p>
+    <form id="ask-form" style="display:grid;gap:8px"><textarea id="ask" rows="3" maxlength="1000" placeholder="Why is the sample quantity zero?" required></textarea>
+    <button class="primary" type="submit">Ask</button></form><div id="answer" class="answer-box" hidden></div>`);
+  $('#ask-form', body).onsubmit = e => { e.preventDefault(); ask($('#ask').value); };
+  $('#ask').focus();
 }
 
-// ---------------- editing ----------------
+export function nextIssue() {
+  const d = state.draft;
+  const order = ['order', 'fabric', 'trims'];
+  let els = $$('#orders .f.err, #orders input.err, #orders select.err, #orders tr.row-err, #orders .segmented.err');
+  if (!els.length) {
+    // switch to the first tab that has errors
+    for (let oi = 0; oi < d.orders.length; oi++) {
+      const c = counts(oi); const t = order.find(k => c[k]);
+      if (t) { state.tab[oi] = t; renderReview(); els = $$('#orders .f.err, #orders input.err, #orders select.err, #orders tr.row-err, #orders .segmented.err'); break; }
+    }
+  }
+  if (!els.length) { if (fileIssues().length) window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  const el = els[nav++ % els.length];
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const target = el.matches('input,select') ? el : el.querySelector('input.err, select.err, input, select, button');
+  (el.closest('.f') || el).classList.add('flash'); setTimeout(() => (el.closest('.f') || el).classList.remove('flash'), 2300);
+  target?.focus({ preventScroll: true });
+}
+
+// ---------------------------------------------------------------- editing
 function setPath(path, value) {
   const keys = path.split('.'); let obj = state.draft;
   keys.slice(0, -1).forEach(k => { obj = obj[k]; });
@@ -304,60 +375,106 @@ function setPath(path, value) {
 }
 function getPath(path) { return path.split('.').reduce((o, k) => o?.[k], state.draft); }
 
-export function markDirty() {
-  state.dirty = true; state.draft.plan = null; setState(); renderQuestions();
+function clearIssues(path) {
+  state.planIssues = (state.planIssues || []).filter(i => !i.path || !(i.path === path || path.startsWith(i.path + '.') || i.path.startsWith(path + '.')));
+}
+
+function markDirty() {
+  state.dirty = true;
+  if (state.draft.plan) state.draft.plan = { ...state.draft.plan, stale: true };
+}
+
+function refreshInPlace(el) {
+  // update this field's red state and the side panel without re-rendering the whole screen (keeps focus)
+  const f = el.closest('.f');
+  if (f) {
+    const issue = at(el.dataset.path);
+    f.classList.remove('err', 'warn'); if (issue) f.classList.add(cls(issue));
+    f.querySelector('.f-msg')?.remove(); if (issue) f.insertAdjacentHTML('beforeend', msgHtml(issue));
+  } else if (el.dataset.path) {
+    const issue = at(el.dataset.path); el.classList.remove('err', 'warn'); if (issue) el.classList.add(cls(issue));
+  }
+  $$('#orders .screen').forEach((s, oi) => { const c = counts(oi); $$('.tabs button', s).forEach(b => { const n = c[b.dataset.tab]; const badge = b.querySelector('.count-badge'); if (n && !badge) b.insertAdjacentHTML('beforeend', ` <span class="count-badge err">${n}</span>`); else if (badge) { if (n) badge.textContent = n; else badge.remove(); } }); });
+  renderSide();
 }
 
 export function onInput(e) {
-  const el = e.target;
+  const el = e.target; const d = state.draft; if (!d) return;
   if (el.dataset.groupDesc != null) {
-    const o = state.draft.orders[Number(el.dataset.oi)];
-    el.dataset.groupDesc.split(',').forEach(ai => { o.accessories[Number(ai)].description = el.value; });
-    el.closest('.field').querySelector('.src').textContent = `${el.value.length} characters`;
-    return markDirty();
+    const o = d.orders[Number(el.dataset.oi)];
+    el.dataset.groupDesc.split(',').forEach(ai => { o.accessories[Number(ai)].description = el.value; clearIssues(`orders.${el.dataset.oi}.accessories.${ai}.description`); });
+    el.classList.remove('err', 'warn'); markDirty(); renderSide(); return;
+  }
+  if (el.dataset.newsize) {   // typing into an empty size cell creates that size for the line
+    const [oi, li] = el.dataset.newsize.split('|').map(Number); const line = d.orders[oi].lines[li];
+    line.sizes.push({ size: el.dataset.size, quantity: el.value === '' ? null : Number(el.value) }); line.declared_total = null;
+    el.dataset.path = `orders.${oi}.lines.${li}.sizes.${line.sizes.length - 1}.quantity`; delete el.dataset.newsize;
+    clearIssues(`orders.${oi}.lines.${li}.sizes`); markDirty(); updateTotals(oi, li); refreshInPlace(el); return;
   }
   const path = el.dataset.path; if (!path) return;
   let v = el.value;
   if (el.type === 'number') v = v === '' ? null : Number(v);
   if (el.dataset.type === 'int') v = v === '' ? null : Number(v);
-  setPath(path, v);
-  if (/\.sizes\.\d+\.quantity$/.test(path)) {
-    const [, oi, , li] = path.split('.'); const line = state.draft.orders[oi].lines[li];
-    const t = $(`[data-total="${oi}-${li}"]`); if (t) t.textContent = fmt(lineQty(line), 0);
-  }
-  const fld = el.closest('.field'); if (fld) { fld.classList.toggle('missing', fld.querySelector('.req') && (v === '' || v == null)); fld.classList.remove('problem'); }
-  markDirty();
+  setPath(path, v); clearIssues(path); markDirty();
+  const m = path.match(/^orders\.(\d+)\.lines\.(\d+)\.sizes\.\d+\.quantity$/);
+  if (m) { clearIssues(`orders.${m[1]}.lines.${m[2]}.sizes`); updateTotals(Number(m[1]), Number(m[2])); }
+  refreshInPlace(el);
 }
 
-export function onChange(e) { if (e.target.tagName === 'SELECT' && e.target.dataset.path) { onInput(e); renderReview(); } }
+function updateTotals(oi, li) {
+  const line = state.draft.orders[oi].lines[li];
+  const t = $(`[data-total="${oi}-${li}"]`); if (t) t.textContent = fmt(lineQty(line), 0);
+  const row = $(`#line-${oi}-${li}`);
+  if (row && lineQty(line) > 0) { row.classList.remove('row-err'); row.querySelectorAll('.cell-msg').forEach(x => { if (/zero/.test(x.textContent)) x.remove(); }); }
+}
+
+export function onChange(e) {
+  const el = e.target; const d = state.draft; if (!d) return;
+  if (el.dataset.sizecol != null) {
+    const oi = Number(el.dataset.sizecol); const old = el.dataset.old; const name = el.value.trim();
+    d.orders[oi].lines.forEach(l => l.sizes.forEach(s => { if ((s.size ?? '') === old) s.size = name; }));
+    clearIssues(`orders.${oi}.lines`); markDirty(); renderReview(); return;
+  }
+  if (el.dataset.addsize != null) {
+    const oi = Number(el.dataset.addsize); const name = el.value.trim(); if (!name) return;
+    d.orders[oi].lines.forEach(l => { if (!l.sizes.some(s => s.size === name)) l.sizes.push({ size: name, quantity: null }); l.declared_total = null; });
+    markDirty(); renderReview(); return;
+  }
+  if (el.tagName === 'SELECT' && el.dataset.path) { onInput(e); renderReview(); }
+}
 
 export async function onAction(btn) {
   const a = btn.dataset.act; const d = state.draft; if (!a || !d) return false;
   const oi = Number(btn.dataset.oi); const o = d.orders[oi];
-  const emptyLine = () => ({ label: '', color: '', declared_total: null, sizes: [{ size: '', quantity: null }] });
+  const emptyLine = () => ({ label: '', color: '', declared_total: null, sizes: sizeNames(o || {}).map(s => ({ size: s, quantity: null })) });
   switch (a) {
     case 'tab': state.tab[oi] = btn.dataset.tab; renderReview(); return true;
+    case 'next-issue': nextIssue(); return true;
+    case 'ask-file': askFile(); return true;
+    case 'new-upload': if (state.dirty && !await confirmDialog('Discard your corrections?', '<p>Corrections not yet checked will be lost.</p>', 'Discard')) return true; resetWorkspace(); return true;
+    case 'show-mapping': state.showMapping = true; renderReview(); $('#mapping-panel').scrollIntoView({ behavior: 'smooth' }); return true;
+    case 'toggle-yarn': { const k = btn.dataset.key; state.openFab.has(k) ? state.openFab.delete(k) : state.openFab.add(k); renderReview(); return true; }
+    case 'toggle-group': { const k = btn.dataset.key; state.openGroups.has(k) ? state.openGroups.delete(k) : state.openGroups.add(k); renderReview(); return true; }
+    case 'only-problems': state.onlyProblems = btn.checked; renderReview(); return true;
     case 'basis': {
-      const b = btn.dataset.basis;
+      const b = btn.dataset.basis; o._manual = b === 'manual';
       if (b === 'sample' && o.sample_lines?.length) o.lines = clone(o.sample_lines);
       if (b === 'order_demo' && o.order_lines?.length) o.lines = clone(o.order_lines);
       o.quantity_basis = b === 'manual' ? 'sample' : b;
-      if (b === 'manual' && !o.lines.length) o.lines = [emptyLine()];
+      if (b === 'manual') { if (!o.lines.length) o.lines = [emptyLine()]; o.lines.forEach(l => { l.sizes.forEach(s => { s.quantity = null; }); l.declared_total = null; }); }
+      clearIssues(`orders.${oi}.quantity_basis`); clearIssues(`orders.${oi}.lines`);
       break;
     }
-    case 'add-order': d.orders.push({ buyer: '', style: '', description: '', po_number: '', order_ref: '', order_date: '', ship_date: '', exporter: state.health?.settings?.company_exporter || '', sample_type: state.health?.settings?.default_sample_type || '', quantity_basis: 'sample', pieces_per_unit: 1, lines: [emptyLine()], fabrics: [], accessories: [], provenance: {}, warnings: [] }); break;
+    case 'add-order': d.orders.push({ buyer: '', style: '', description: '', po_number: '', order_ref: '', order_date: '', ship_date: '', exporter: state.health?.settings?.company_exporter || '', sample_type: state.health?.settings?.default_sample_type || '', quantity_basis: 'sample', _manual: true, pieces_per_unit: 1, lines: [{ label: '', color: '', declared_total: null, sizes: [{ size: '', quantity: null }] }], fabrics: [], accessories: [], provenance: {}, warnings: [] }); break;
     case 'remove-order': if (!await confirmDialog('Remove this order?', '<p>It will not be imported. You can add it back by uploading again.</p>', 'Remove')) return true; d.orders.splice(oi, 1); break;
     case 'add-line': o.lines.push(emptyLine()); break;
-    case 'remove-line': o.lines.splice(Number(btn.dataset.li), 1); break;
-    case 'add-size': { const l = o.lines[Number(btn.dataset.li)]; l.sizes.push({ size: '', quantity: null }); l.declared_total = null; break; }
-    case 'remove-size': { const l = o.lines[Number(btn.dataset.li)]; l.sizes.splice(Number(btn.dataset.si), 1); l.declared_total = null; break; }
+    case 'remove-line': o.lines.splice(Number(btn.dataset.li), 1); clearIssues(`orders.${oi}.lines`); break;
+    case 'remove-size-col': { const s = btn.dataset.size; o.lines.forEach(l => { l.sizes = l.sizes.filter(x => (x.size ?? '') !== s); l.declared_total = null; }); clearIssues(`orders.${oi}.lines`); break; }
     case 'add-fabric': (o.fabrics ||= []).push({ component: '', line: o.lines.length === 1 ? 1 : null, portion: 'BODY', color: '', quality: '', gsm: '', dia: '', content: '', yy: null, rejection: 1.03, yarns: [{ count: '', color: 'GREIGE', percent: 100 }] }); break;
-    case 'remove-fabric': o.fabrics.splice(Number(btn.dataset.fi), 1); break;
-    case 'add-yarn': getPath(btn.dataset.path).yarns ||= []; getPath(btn.dataset.path).yarns.push({ count: '', color: 'GREIGE', percent: null }); break;
-    case 'remove-yarn': getPath(btn.dataset.path).yarns.splice(Number(btn.dataset.yi), 1); break;
-    case 'remove-acc': o.accessories.splice(Number(btn.dataset.ai), 1); break;
-    case 'show-mapping': state.showMapping = true; renderReview(); $('#mapping-panel').scrollIntoView({ behavior: 'smooth' }); return true;
-    case 'fix': fix(btn.dataset.path); return true;
+    case 'remove-fabric': o.fabrics.splice(Number(btn.dataset.fi), 1); clearIssues(`orders.${oi}.fabrics`); break;
+    case 'add-yarn': (getPath(btn.dataset.path).yarns ||= []).push({ count: '', color: 'GREIGE', percent: null }); break;
+    case 'remove-yarn': getPath(btn.dataset.path).yarns.splice(Number(btn.dataset.yi), 1); clearIssues(btn.dataset.path + '.yarns'); break;
+    case 'remove-acc': o.accessories.splice(Number(btn.dataset.ai), 1); clearIssues(`orders.${oi}.accessories`); break;
     default: return false;
   }
   markDirty(); renderReview(); return true;
@@ -365,7 +482,10 @@ export async function onAction(btn) {
 
 async function saveEdits() {
   if (!state.dirty) return;
-  state.draft = await api(`/api/drafts/${id(state.draft.id)}`, { method: 'PUT', body: { version: state.draft.version, orders: state.draft.orders } });
+  const orders = state.draft.orders.map(({ _manual, ...o }) => o);
+  const manual = state.draft.orders.map(o => o._manual);
+  state.draft = await api(`/api/drafts/${id(state.draft.id)}`, { method: 'PUT', body: { version: state.draft.version, orders } });
+  state.draft.orders.forEach((o, i) => { if (manual[i]) o._manual = true; });
   state.dirty = false;
 }
 
@@ -373,21 +493,26 @@ async function applyMapping(body) {
   await busy('Reading the file with this layout…', async () => {
     await saveEdits();
     state.draft = await api(`/api/drafts/${id(state.draft.id)}/map`, { method: 'POST', body: { version: state.draft.version, ...body } });
-    state.showMapping = false; state.tab = {};
-    notify(body.save_template ? 'Layout applied and saved as a template. Files with this layout will now be read automatically.' : 'Layout applied. Check the order details.', 'success');
+    state.showMapping = false; state.tab = {}; state.planIssues = [];
+    notify(body.save_template ? 'Layout applied and saved as a template. Files with this layout are now read automatically.' : 'Layout applied. Check the order details.', 'success');
     renderReview();
   });
 }
 
 export async function prepare() {
   const d = state.draft;
-  if (d.plan && !state.dirty && !d.plan.errors.length) return showApprove();
+  if (d.plan && !d.plan.stale && !state.dirty && !d.plan.errors.length) return showApprove();
   await busy('Checking every value against Oracle masters and rules…', async () => {
     await saveEdits();
+    const manual = state.draft.orders.map(o => o._manual);
     state.draft = await api(`/api/drafts/${id(d.id)}/preview`, { method: 'POST', body: { version: state.draft.version } });
-    const p = state.draft.plan;
-    if (p.errors.length) { renderReview(); notify(`${plural(p.errors.length, 'question')} to resolve before approval. Use “Fix” to jump to each one.`, 'warning'); }
-    else showApprove();
+    state.draft.orders.forEach((o, i) => { if (manual[i]) o._manual = true; });
+    const p = state.draft.plan; state.planIssues = p.issues || [];
+    if (p.errors.length) {
+      renderReview(); nav = 0;
+      notify(`${plural(p.errors.length, 'thing')} to fix — each one is outlined in red where it belongs.`, 'warning');
+      nextIssue();
+    } else showApprove();
   });
 }
 
@@ -398,86 +523,37 @@ export async function ask(question) {
   });
 }
 
-// ---------------- approve ----------------
-function opIndex(plan) { return Object.fromEntries(plan.operations.map(op => [op.key, op])); }
-
-function valueCell(v, ops, meta) {
-  if (meta?.master && v != null && !(typeof v === 'string' && v.startsWith('$'))) {
-    const cols = state.draft?.plan?.columns || {};
-    // Match on the master role as well as the ID: IDs from different master tables can coincide.
-    const reuse = Object.values(ops).find(op => op.action === 'reuse' && Object.values(op.values)[0] === v
-      && cols[op.table]?.[Object.keys(op.values)[0]]?.master === meta.master);
-    if (reuse) return `${esc(show(Object.values(reuse.values)[1]))}<span class="reusetag">existing · ID ${esc(v)}</span>`;
-  }
-  if (typeof v === 'string' && v.startsWith('$')) {
-    const op = ops[v.slice(1)];
-    if (!op) return '<span class="gen">generated</span>';
-    if (/^m\d+$/.test(op.key)) {
-      const label = Object.values(op.values).find(x => !(typeof x === 'string' && x.startsWith('$')) && typeof x !== 'number');
-      return `${esc(show(label))}${op.action === 'reuse' ? '<span class="reusetag">existing</span>' : '<span class="newtag">new master</span>'}`;
-    }
-    return op.key === v.slice(1) && op.values && Object.values(op.values)[0] === v ? '<span class="gen">new ID — generated on save</span>' : `<span class="gen">→ ${esc(op.table)} ${esc(op.where || '')}</span>`;
-  }
-  return esc(show(v));
-}
-
-function fromCell(op, col, plan) {
-  const meta = plan.columns?.[op.table]?.[col]; const src = op.source || {};
-  const f = meta?.field?.split('.')[1];
-  const s = (f && src[f]) || (src.cell ? src : null);
-  return s ? source(s) : meta?.field?.startsWith('calc.') ? '<span class="chip default">calculated</span>' : '';
-}
-
-function headerTable(op, plan, ops) {
-  const meta = plan.columns?.[op.table] || {};
-  return `<div class="table-wrap"><table class="colmap"><thead><tr><th>Business field</th><th>Value to save</th><th>Oracle column</th><th>From</th></tr></thead><tbody>
-    ${Object.entries(op.values).map(([c, v]) => `<tr><td>${esc(meta[c]?.label || c)}</td><td>${valueCell(v, ops, meta[c])}</td><td class="dest">${esc(op.table)}.${esc(c)}</td><td class="from">${fromCell(op, c, plan)}</td></tr>`).join('')}
-    </tbody></table></div>`;
-}
-
-function rowsTable(list, plan, ops, limit = 60) {
-  if (!list.length) return '';
-  const cols = Object.keys(list[0].values); const meta = plan.columns?.[list[0].table] || {};
-  return `<div class="table-wrap" style="max-height:420px"><table><thead><tr><th>Row</th>${cols.map(c => `<th title="${esc(list[0].table + '.' + c)}">${esc(meta[c]?.label || c)}<br><code>${esc(c)}</code></th>`).join('')}</tr></thead><tbody>
-    ${list.slice(0, limit).map(op => `<tr><td class="muted">${esc(op.where || op.key)}</td>${cols.map(c => `<td>${valueCell(op.values[c], ops, meta[c])}</td>`).join('')}</tr>`).join('')}
-    </tbody></table></div>${list.length > limit ? `<p class="muted" style="margin-top:6px">Showing ${limit} of ${list.length} rows. All ${list.length} will be saved.</p>` : ''}`;
-}
-
+// ---------------------------------------------------------------- approve
 export function showApprove() {
-  const d = state.draft; const plan = d.plan; const ops = opIndex(plan);
+  const d = state.draft; const plan = d.plan;
   const inserts = plan.operations.filter(o => o.action === 'insert'); const reuse = plan.operations.filter(o => o.action === 'reuse');
-  const by = t => plan.operations.filter(o => o.table === t);
-  const tables = [...new Set(inserts.map(o => o.table))];
-  const masters = plan.operations.filter(o => /^m\d+$/.test(o.key));
-  const ref = plan.reference_only || [];
-  const block = (title, sub, body) => `<section class="card screen-block"><div class="card-head"><div><h2>${title}</h2><span class="muted">${sub}</span></div></div><div class="body">${body}</div></section>`;
-  const refNote = t => { const r = ref.find(x => x.table === t); return r ? `<div class="ref-only"><b>${esc(r.business)}</b>: ${r.rows} rows checked but <b>not saved</b> — ${esc(r.reason)}</div>` : ''; };
+  const tables = new Set(inserts.map(o => o.table));
   const canApprove = plan.live && !plan.errors.length && can('approve');
-  $('#stage-approve').innerHTML = `
-    <div class="approve-head"><div><span class="eyebrow">STEP 4 · APPROVAL</span><h1>This is exactly what will be saved.</h1>
-      <p class="lead">Nothing is in Oracle yet. Check the values, the destination columns and where each value came from in your file.</p></div>
-      <button class="ghost" data-act2="back-review">← Back to review</button></div>
-    ${plan.live ? '' : '<div class="notice warning">Oracle is not connected. This preview used the saved database structure, so existing masters were not checked. Start the database and prepare the preview again to approve.</div>'}
-    <div class="kpis">${[['New records', inserts.length], ['Oracle tables', tables.length], ['Existing masters reused', reuse.length], ['Pieces', fmt(plan.totals.pieces, 0)], ['Fabric (kg)', fmt(plan.totals.fabric_kg)]].map(([a, b]) => `<div class="kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
-    ${plan.warnings.length ? `<div class="warnings"><strong>Please read before approving</strong><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
-    ${by('ORDMAS').map(op => block(`Order Entry · ${esc(op.values.DOCID || '')}`, 'ORDMAS — order header', headerTable(op, plan, ops))).join('')}
-    ${block('Style / colour lines', `ORDSTYLE — ${plural(by('ORDSTYLE').length, 'row')}`, rowsTable(by('ORDSTYLE'), plan, ops))}
-    ${block('Size quantities', `ORDSIZE — ${plural(by('ORDSIZE').length, 'row')}`, rowsTable(by('ORDSIZE'), plan, ops, 120))}
-    ${block('Fabric planning', `ORDFAB / ORDYARN — ${plural(by('ORDFAB').length, 'fabric row')}, ${plural(by('ORDYARN').length, 'yarn row')}`, refNote('ORDFAB') + refNote('ORDYARN') + rowsTable(by('ORDFAB'), plan, ops) + rowsTable(by('ORDYARN'), plan, ops) || '<p class="muted">No fabric rows.</p>')}
-    ${block('Accessories', `ORDACC — ${plural(by('ORDACC').length, 'row')}`, refNote('ORDACC') + rowsTable(by('ORDACC'), plan, ops, 40) || '<p class="muted">No accessory rows.</p>')}
-    ${block('Master records', `${plural(masters.filter(m => m.action === 'insert').length, 'new master')} · ${plural(masters.filter(m => m.action === 'reuse').length, 'existing master')} reused`,
-      `<div class="table-wrap"><table><thead><tr><th>Master</th><th>Value</th><th>Action</th><th>Oracle table</th></tr></thead><tbody>${masters.map(m => { const vals = Object.entries(m.values); return `<tr><td>${esc(m.business)}</td><td>${esc(show(vals.find(([, v]) => typeof v === 'string' && !v.startsWith('$'))?.[1]))}</td><td>${m.action === 'reuse' ? `<span class="reusetag">existing ID ${esc(vals[0][1])}</span>` : '<span class="newtag">will be created</span>'}</td><td class="dest">${esc(m.table)}</td></tr>`; }).join('')}</tbody></table></div>`)}
-    <div class="approve-bar"><p>${canApprove ? `Approving writes these ${plural(inserts.length, 'record')} in <b>one Oracle transaction</b>, reads every row back to confirm it, and records who approved it. If anything fails, nothing is saved.` :
-      !plan.live ? 'Saving is disabled until Oracle is connected.' : plan.errors.length ? 'Resolve the open questions first.' : 'Your role cannot approve. An approver or administrator must approve this entry.'}</p>
-      <button class="primary big-action" data-act2="approve" ${canApprove ? '' : 'disabled'}>Approve &amp; save to Oracle</button></div>`;
+  const root = $('#stage-approve');
+  root.innerHTML = `
+    <div class="row" style="margin-bottom:12px"><button class="ghost" data-act2="back-review">← Back to the order entry</button><span class="spacer"></span>
+      <span class="muted small-text">${esc(d.filename)} · ${esc(d.orders.map(o => `${o.order_ref} · ${o.style}`).join(', '))}</span></div>
+    ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected. This view used the saved database structure, so existing masters were not checked. Start the database and check again to approve.</div></div>'}
+    <div class="kpis">${[['New records', inserts.length], ['Oracle tables', tables.size], ['Existing masters reused', reuse.length], ['Pieces', fmt(plan.totals.pieces, 0)], ['Fabric (kg)', fmt(plan.totals.fabric_kg)]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
+    ${plan.warnings.length ? `<div class="banner warning"><span class="b-ic">!</span><div><b>Please read before approving</b><ul>${plan.warnings.map(w => `<li>${esc(d.orders.length === 1 ? strip(w) : w)}</li>`).join('')}</ul></div></div>` : ''}
+    ${flowCard('Where this order will be saved', 'Nothing is in Oracle yet. Click a table to see the exact rows and values that will be written.')}
+    <div class="action-bar"><p>${canApprove ? `Accepting writes these ${plural(inserts.length, 'record')} in <b>one Oracle transaction</b>, reads every row back to confirm it, and records who approved it. If anything fails, nothing is saved.` :
+      !plan.live ? 'Saving is disabled until Oracle is connected.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Your role cannot approve. An approver or administrator must accept this entry.'}</p>
+      <button class="primary big" data-act2="approve" ${canApprove ? '' : 'disabled'}>Accept and save to Oracle →</button></div>`;
+  mountFlow(root, plan.graph || { nodes: [], edges: [] }, { planned: true, columns: plan.columns, onReferenceOnly: t => backToReview(t === 'ORDACC' ? 'trims' : 'fabric') });
   stage('approve');
+}
+
+export function backToReview(tab) {
+  if (tab) state.draft.orders.forEach((_, i) => { state.tab[i] = tab; });
+  renderReview(); stage('review');
 }
 
 export async function approve() {
   const d = state.draft; const plan = d.plan;
   const inserts = plan.operations.filter(o => o.action === 'insert');
   const counts = {}; inserts.forEach(o => { counts[o.table] = (counts[o.table] || 0) + 1; });
-  const ok = await confirmDialog('Save this order to Oracle?', `<p>${esc(d.orders.map(o => `${o.order_ref} · ${o.style} · ${o.buyer}`).join('\n'))}</p>
+  const ok = await confirmDialog('Save this order to Oracle?', `<p><b>${esc(d.orders.map(o => `${o.order_ref} · ${o.style} · ${o.buyer}`).join(' / '))}</b></p>
     <ul>${Object.entries(counts).map(([t, n]) => `<li><b>${esc(t)}</b>: ${n} new record${n === 1 ? '' : 's'}</li>`).join('')}</ul>
     <p class="muted">This cannot be undone from POPPYS AI. Existing orders are never overwritten.</p>`, 'Yes, save to Oracle');
   if (!ok) return;
@@ -486,32 +562,48 @@ export async function approve() {
     try { result = await api(`/api/drafts/${id(d.id)}/accept`, { method: 'POST', body: { version: d.version, plan_hash: plan.hash } }); }
     catch (e) {
       try { state.draft = await api(`/api/drafts/${id(d.id)}`); } catch (_) { /* keep current */ }
-      throw new Error(`${e.message}\nNothing was partially saved. Prepare the preview again and retry.`);
+      throw new Error(`${e.message}\nNothing was partially saved. Check again and retry.`);
     }
     state.draft.result = result; state.saved = true;
     await showSaved(result);
   });
 }
 
+// ---------------------------------------------------------------- saved
 export async function showSaved(result, target = $('#stage-saved'), standalone = false) {
-  target.innerHTML = `<section class="card saved-hero"><span class="tick">✓</span><div><span class="eyebrow">${result.already_committed ? 'ALREADY SAVED' : 'SAVED AND VERIFIED'}</span>
+  target.innerHTML = `<section class="card saved-hero"><span class="tick">✓</span><div><span class="eyebrow">${result.already_committed ? 'Already saved' : 'Saved and verified'}</span>
       <h1>${result.already_committed ? 'This order is in Oracle.' : 'The order is saved in Oracle.'}</h1>
       <p class="muted">Approved by ${esc(result.approver || '—')} · ${esc(new Date(result.committed_at).toLocaleString())} · ${plural((result.rows || []).length, 'new record')}${(result.reused || []).length ? `, ${plural(result.reused.length, 'existing master')} linked` : ''}</p>
       <div class="ids">${(result.orders || []).map(o => `<span><b>${esc(o.order_ref)}</b> · ORDMASID <code>${esc(o.ordmasid)}</code></span>`).join('')}</div></div>
       <div style="display:grid;gap:8px">${(result.orders || []).map(o => `<button class="secondary" data-explore-order="${esc(o.ordmasid)}">Open in Database</button>`).join('')}${standalone ? '' : '<button class="primary" data-act2="another">Start another order</button>'}</div></section>
-    <section class="card flow-card"><div class="card-head"><div><h2>Where your data was saved</h2><span class="muted" id="flow-sub">Reading the rows back from Oracle…</span></div><span class="pill" id="flow-verified">checking</span></div>
-      <div class="flow-wrap"><div class="flow" id="flow"></div></div>
-      <div class="legend"><span><i style="background:#c2410c"></i>Order header</span><span><i style="background:#0b5d57"></i>Order detail tables</span><span><i style="background:#7c3aed"></i>Master tables</span><span>Click a table to see its exact saved records</span></div></section>
-    ${(result.reference_only || []).length ? `<div class="ref-only" style="margin-top:12px">Not saved (mapping not verified yet): ${result.reference_only.map(r => `${esc(r.business)} (${r.rows} rows)`).join(', ')}.</div>` : ''}`;
+    ${flowCard('Where your data was saved', 'Reading the rows back from Oracle…', '<span class="pill" data-flow-pill>checking</span>')}
+    ${(result.reference_only || []).length ? `<div class="banner info" style="margin-top:12px"><span class="b-ic">i</span><div>Not saved (mapping not verified yet): ${result.reference_only.map(r => `${esc(r.business)} (${r.rows} rows)`).join(', ')}.</div></div>` : ''}`;
   if (!standalone) stage('saved');
   try {
     const graph = await api(`/api/history/${id(result.job_id)}/graph`);
-    target.querySelector('#flow-sub').textContent = `${plural(graph.nodes.length, 'table')} affected · values below come from a fresh SELECT, not from the save receipt`;
-    const v = target.querySelector('#flow-verified');
-    v.textContent = graph.verified ? '✓ Verified in Oracle' : '⚠ Differences found'; v.className = `pill ${graph.verified ? 'ok' : 'err'}`;
-    renderFlow(target.querySelector('#flow'), graph);
+    target.querySelector('[data-flow-sub]').textContent = `${plural(graph.nodes.length, 'table')} · the values below come from a fresh SELECT, not from the save receipt`;
+    const pill = target.querySelector('[data-flow-pill]');
+    pill.textContent = graph.verified ? '✓ Verified in Oracle' : '⚠ Differences found'; pill.className = `pill ${graph.verified ? 'ok' : 'err'}`;
+    mountFlow(target, graph, { planned: false });
   } catch (e) {
-    target.querySelector('#flow-sub').textContent = `Could not read back from Oracle: ${e.message}`;
-    target.querySelector('#flow-verified').textContent = 'not verified'; target.querySelector('#flow-verified').className = 'pill warn';
+    target.querySelector('[data-flow-sub]').textContent = `Could not read back from Oracle: ${e.message}`;
+    const pill = target.querySelector('[data-flow-pill]'); pill.textContent = 'not verified'; pill.className = 'pill warn';
   }
+}
+
+export function bindWorkspace() {
+  const root = $('#stage-review');
+  root.addEventListener('input', onInput);
+  root.addEventListener('change', e => { if (e.target.dataset.act === 'only-problems') return onAction(e.target); onChange(e); });
+  root.addEventListener('click', async e => {
+    if (state.busy) return;
+    if (e.target.closest('#prepare')) return prepare();
+    if (e.target.closest('input, select, textarea')) return;
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    await onAction(b);
+  });
+  root.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.dataset.addsize != null) { e.preventDefault(); e.target.blur(); }
+    const row = e.target.closest('tr.group-row'); if (row && (e.key === 'Enter' || e.key === ' ') && e.target === row) { e.preventDefault(); onAction(row); }
+  });
 }
