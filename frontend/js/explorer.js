@@ -91,7 +91,8 @@ function draw() {
   const d = current.data; const meta = tables.find(t => t.table === current.table) || {};
   const all = ordered(d);
   const sys = all.filter(c => c.role === 'system');
-  const empty = all.filter(c => c.role !== 'system' && d.rows.length && d.rows.every(r => blank(r[c.name])));
+  let empty = all.filter(c => c.role !== 'system' && d.rows.length && d.rows.every(r => blank(r[c.name])));
+  if (empty.length === all.length - sys.length) empty = [];   // nothing would be left to show
   const shown = all.filter(c => c.role === 'system' ? view.showSys : view.showEmpty || !empty.includes(c));
   const filtered = !!(current.column && current.value);
   $('#table-view').innerHTML = `<div class="ex-head"><div style="flex:1;min-width:0"><div class="row wrap"><h2>${esc(d.business || d.table)}</h2><code class="muted">${esc(d.table)}</code>

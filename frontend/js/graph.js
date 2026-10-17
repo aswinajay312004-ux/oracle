@@ -171,25 +171,34 @@ export function renderGraph(el, model, opts = {}) {
   let box = { w: 0, h: 0 }, minK = ZOOM.min, shown = live.view, anim = 0, raf = 0, lastW = -1;
 
   const px = v => (String(v).endsWith('px') ? parseFloat(v) : NaN);
+  const corner = () => ({ w: tools.offsetWidth + 16, h: tools.offsetHeight + 16 });   // toolbar corner plus a little air
+  const underTools = (v, c = corner()) => Object.values(pos).some(p => v.x + (p.x + p.w) * v.k > box.w - c.w && v.y + (p.y + p.h) * v.k > box.h - c.h);
   function layout() {   // size the box from the container width; false while the diagram is hidden
     const cs = getComputedStyle(el);
     const w = el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
     if (w <= 0) return false;
     const extra = ['borderTopWidth', 'borderBottomWidth', 'paddingTop', 'paddingBottom'].reduce((s, p) => s + (parseFloat(cs[p]) || 0), 0);
     const maxH = Number.isNaN(px(cs.maxHeight)) ? Infinity : px(cs.maxHeight) - extra, minH = (px(cs.minHeight) || 0) - extra;
-    const h = Math.round(clamp(height * Math.min(1, w / width), Math.max(minH, 0), maxH));
+    // natural height at the box width, plus room under the picture when a table would sit beneath the toolbar
+    const k0 = Math.min(1, w / width), x0 = (w - width * k0) / 2, c = corner();
+    const room = Math.max(0, ...Object.values(pos).filter(p => x0 + (p.x + p.w) * k0 > w - c.w).map(p => (p.y + p.h - height) * k0 + c.h));
+    const h = Math.round(clamp(height * k0 + room, Math.max(minH, 0), maxH));
     svg.removeAttribute('viewBox'); svg.style.maxWidth = 'none'; svg.style.height = `${h}px`;
-    box = { w, h }; minK = Math.min(ZOOM.min, fitZoom(width, height, w, h));
+    box = { w, h, room }; minK = Math.min(ZOOM.min, fitZoom(width, height, w, h));
     return true;
   }
   const keep = v => clampView({ ...v, k: clamp(v.k, minK, ZOOM.max) }, width, height, box.w, box.h);
   const autoView = () => {   // the old look: as wide as the box (never above 100%), centred, base table in view
     const k = Math.min(1, box.w / width), base = nodes.find(n => n.base) || nodes.find(n => n.id === opts.selected);
-    let y = (box.h - height * k) / 2;
+    let y = Math.max(0, (box.h - box.room - height * k) / 2);
     if (height * k > box.h) y = base && pos[base.id] ? box.h / 2 - (pos[base.id].y + pos[base.id].h / 2) * k : 0;
     return keep({ k, x: (box.w - width * k) / 2, y });
   };
-  const fitView = () => { const k = fitZoom(width, height, box.w, box.h); return keep({ k, x: (box.w - width * k) / 2, y: (box.h - height * k) / 2 }); };
+  const fitView = () => {   // everything in view; shrink a little more if a table would hide under the toolbar
+    let k = fitZoom(width, height, box.w, box.h), v = { k, x: (box.w - width * k) / 2, y: (box.h - height * k) / 2 };
+    if (underTools(v)) { const c = corner(); k = fitZoom(width, height, box.w, box.h - c.h); v = { k, x: (box.w - width * k) / 2, y: (box.h - c.h - height * k) / 2 }; }
+    return keep(v);
+  };
   const paint = v => {
     shown = v;
     canvas.setAttribute('transform', `translate(${v.x.toFixed(2)} ${v.y.toFixed(2)}) scale(${v.k.toFixed(4)})`);

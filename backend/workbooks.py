@@ -1,9 +1,11 @@
-"""Read-only Excel ingestion (.xlsx, .xlsm and legacy .xls). Cell text is data, never instructions.
+"""Read-only spreadsheet ingestion (every Excel format and JSON, via backend/readers.py). Cell text is data,
+never instructions.
 
-Pipeline per sheet: saved user template (exact layout signature) → built-in structural
-detectors (merch BOM, buyer contract) → alias-matched flat table → "needs mapping".
+Pipeline per sheet (docs/EXCEL_UNDERSTANDING.md): saved buyer template (layout match + unchanged anchor
+labels + validator) → built-in structural detectors (merch BOM, buyer contract) → alias-matched flat table
+(style as a column or a header field) → "needs mapping" (backend/matcher.py proposes).
 BOM tables (fabric, accessories) are detected by their header structure on the same sheet.
-Both file formats are read into the same cell model, so every detector works on either.
+The effective business fields (backend/fields.py: defaults + admin aliases) are passed in explicitly.
 """
 from __future__ import annotations
 from copy import deepcopy
@@ -11,21 +13,11 @@ from datetime import date, datetime
 from io import BytesIO
 import hashlib
 import re
-from . import readers
+from . import readers, fields as F
 
-ALIASES = {
- 'buyer': ['buyer', 'buyer name', 'customer', 'customer name', 'brand'],
- 'style': ['style', 'style no', 'style number', 'item', 'item number', 'style #', 'item no', 'article', 'article no'],
- 'description': ['description', 'garment description', 'item description', 'style description'],
- 'po_number': ['po', 'po number', 'po no', 'contract', 'contract no', 'order no', 'purchase order no', 'po #'],
- 'order_ref': ['oc no', 'order reference', 'order ref', 'docid', 'ocn'],
- 'ship_date': ['ship date', 'ship dt', 'delivery date', 'ex factory date', 'ex-factory date', 'fob date', 'etd'],
- 'season': ['season'],
- 'merch': ['merchandiser', 'merch', 'merchant'],
- 'size': ['size', 'sizes'], 'quantity': ['quantity', 'qty', 'sample qty', 'order qty', 'pcs', 'pieces'],
- 'color': ['colour', 'color', 'combo', 'colour description', 'color description', 'colour name'],
-}
-HEADER_FIELDS = ('buyer', 'style', 'description', 'po_number', 'order_ref', 'ship_date', 'season', 'merch')
+# Compatibility names: the defaults now live in backend/fields.py (parsing uses the effective fields passed in).
+ALIASES = F.DEFAULT.alias_map()
+HEADER_FIELDS = F.DEFAULT.header_keys
 FABRIC_COLUMNS = {
  'component': ['garment', 'garment portion', 'portion', 'component'],
  'color': ['colour description', 'color description', 'colour', 'color'],
@@ -82,7 +74,7 @@ def base_order():
     return dict(buyer='', style='', description='', po_number='', order_ref='', ship_date='',
         order_date='', season='', merch='', sample_type='DEVELOPMENT SAMPLE', exporter='', against='',
         department='', gender='', packing_type='', components=None,
-        pieces_per_unit=None, quantity_basis='unconfirmed', lines=[], provenance={},
+        qty_unit='', pieces_per_unit=None, quantity_basis='unconfirmed', lines=[], provenance={},
         warnings=[], order_lines=[], sample_lines=[], fabrics=[], accessories=[], packs=None, workbook_pieces=None)
 
 
@@ -113,7 +105,36 @@ def labels(sheet, rows=60):
 
 
 def signature(sheet):
-    return hashlib.sha256('|'.join(sorted(labels(sheet))).encode()).hexdigest()
+    return signature_of(labels(sheet))
+
+
+def signature_of(label_set):
+    return hashlib.sha256('|'.join(sorted(label_set)).encode()).hexdigest()
+
+
+def layout_labels(sheet, definition):
+    """The labels of a layout without the cells a definition reads as data (header values, size headings,
+    everything below the table header), so the next file from the same buyer — new style, PO, sizes,
+    colours — still has the same layout signature."""
+    d = definition or {}; t = d.get('table') or {}; skip = set()
+    for ref in (d.get('fields') or {}).values():
+        try:
+            skip.add(cell_ref(ref))
+        except ValueError:
+            pass
+    hr = t.get('header_row') if isinstance(t.get('header_row'), int) else 0
+    first, last = t.get('first_size_col') or 0, t.get('last_size_col') or 0
+    out = set()
+    for lab in labels(sheet):
+        r, c, _ = lab.split(':', 2); r, c = int(r), int(c)
+        if (r, c) in skip or (hr and r > hr) or (t.get('type') == 'matrix' and r == hr and first <= c <= last):
+            continue
+        out.add(lab)
+    return out
+
+
+def layout_signature(sheet, definition):
+    return signature_of(layout_labels(sheet, definition))
 
 
 def similarity(a, b):
@@ -122,10 +143,20 @@ def similarity(a, b):
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
+def template_score(sheet, t):
+    """1.0 for the same layout signature, otherwise label similarity. Templates saved before anchors
+    existed were signed over all short text of the sheet; newer ones over their layout labels only."""
+    if t.get('anchors') is None:
+        mine = labels(sheet)
+    else:
+        mine = layout_labels(sheet, t.get('definition'))
+    return 1.0 if signature_of(mine) == t['signature'] else similarity(mine, t['labels'])
+
+
 def match_template(sheet, templates, threshold=0.8):
-    mine = labels(sheet); best = None
+    best = None
     for t in templates:
-        score = 1.0 if t['signature'] == signature(sheet) else similarity(mine, t['labels'])
+        score = template_score(sheet, t)
         if score >= threshold and (best is None or score > best[0]):
             best = (score, t)
     return best
@@ -133,8 +164,9 @@ def match_template(sheet, templates, threshold=0.8):
 
 # --- cell helpers ----------------------------------------------------------------
 class Grid:
-    def __init__(self, sheet):
+    def __init__(self, sheet, fields=None):
         self.sheet = sheet
+        self.fields = F.resolve(fields)
         self.cells = {(c['row'], c['col']): c for c in sheet['cells']}
         self.rows = sheet['rows']; self.cols = sheet['cols']
 
@@ -196,25 +228,145 @@ def cell_ref(ref):
 
 
 # --- detectors -----------------------------------------------------------------
-LABEL_WORDS = {norm(a) for aliases in ALIASES.values() for a in aliases} | {'bom date', 'fab ih date', 'destination'}
+OTHER_LABELS = frozenset({'bom date', 'fab ih date', 'destination'})
+LABEL_WORDS = F.DEFAULT.label_words | OTHER_LABELS
 
 
-def looks_like_label(value):
+def looks_like_label(value, fields=None):
     """A neighbour that is itself a heading (e.g. "QTY(IN PACKS)") is not the value of a label."""
     n = norm(value)
-    return isinstance(value, str) and (n in LABEL_WORDS or bool(re.search(r'\b(qty|quantity|price|total)\b', n)))
+    words = F.resolve(fields).label_words
+    return isinstance(value, str) and (n in words or n in OTHER_LABELS or bool(re.search(r'\b(qty|quantity|price|total)\b', n)))
+
+
+def field_value(g, r, c, key):
+    """A header value as the order keeps it: dates stay raw for iso_date (an Excel serial number is a
+    date, not the text "46402"), whole numbers for number fields, trimmed text otherwise."""
+    v = g.v(r, c); kind = g.fields.kind(key)
+    if kind == 'date' and isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v
+    if kind == 'number':
+        n = number(v)
+        if n is not None:
+            return int(n) if float(n).is_integer() else n
+    return text(v)
+
+
+def header_value(g, key, limit_row):
+    """(row, col) of the value next to a label of this field above limit_row, or None."""
+    rows = range(1, max(2, limit_row))
+    return next((t for hit in g.find(g.fields.aliases(key), rows, first=False) for t in [g.right(*hit)]
+                 if t and not looks_like_label(g.v(*t), g.fields)), None)
 
 
 def header_fields(g, o, limit_row, only_missing=False):
     """Key-value labels ("BUYER | NEXT") anywhere above the first data block."""
-    rows = range(1, max(2, limit_row))
-    for key in HEADER_FIELDS:
-        if only_missing and o.get(key):
+    for key in g.fields.header_keys:
+        if only_missing and o.get(key) not in (None, ''):
             continue
-        target = next((t for hit in g.find(ALIASES[key], rows, first=False) for t in [g.right(*hit)]
-                       if t and not looks_like_label(g.v(*t))), None)
+        target = header_value(g, key, limit_row)
         if target:
-            o[key] = text(g.v(*target)); o['provenance'][key] = g.p(*target)
+            o[key] = field_value(g, *target, key); o['provenance'][key] = g.p(*target)
+
+
+# --- quantity unit evidence (docs/EXCEL_UNDERSTANDING.md §5) ---------------------------
+PCS_WORDS = ('pcs', 'pc', 'pieces', 'piece')
+PACK_WORDS = ('pack', 'packs', 'pk', 'set', 'sets', 'ratio')
+_UNIT_TOKEN = re.compile(r'(\d*)(pcs|pc|pieces|piece|packs|pack|pk|sets|set|ratio)')
+_PER_PACK = re.compile(r'\b(\d{1,3}) ?(?:pcs|pc|pieces|piece)? ?(?:pack|packs|pk|set|sets)\b|\b(?:pack|packs|pk|set|sets) of (\d{1,3})\b')
+_QTY_WORDS = re.compile(r'\b(qty|quantity|quantities)\b')
+
+
+def unit_words(value):
+    """('PCS' | 'PACK' | '?' (both) | '', pieces per pack or None) from the words of a header or label."""
+    n = norm(value)
+    kinds = {('PACK' if m.group(2) in PACK_WORDS else 'PCS') for t in n.split() for m in [_UNIT_TOKEN.fullmatch(t)] if m}
+    m = _PER_PACK.search(n)
+    if m and 'PACK' in kinds and int(m.group(1) or m.group(2)) >= 2:
+        return 'PACK', int(m.group(1) or m.group(2))
+    if kinds == {'PCS'}:
+        return 'PCS', 1
+    if kinds == {'PACK'}:
+        return 'PACK', None
+    return ('?' if kinds else ''), None
+
+
+def strip_units(n):
+    """'qty in pcs' → 'qty': a quantity heading qualified by its unit is still a quantity heading."""
+    return ' '.join(t for t in n.split() if not _UNIT_TOKEN.fullmatch(t) and t not in ('in', 'of'))
+
+
+def unit_evidence(g, table, role=None):
+    """Decide qty_unit from what the file itself says next to the quantities: the quantity heading (flat),
+    the total / left headings (matrix), a unit label ("UOM | PCS") or a note just above the table.
+    Returns {qty_unit, pieces_per_unit, provenance}; qty_unit is '' when the file is silent or says both."""
+    sheet = g.sheet['name']; hr = table.get('header_row') if isinstance(table.get('header_row'), int) else 0
+    heads = []
+    if table.get('type') == 'flat':
+        qc = (table.get('columns') or {}).get('quantity')
+        if qc:
+            heads.append((hr, int(qc), 'quantity heading'))
+    else:
+        heads += [(hr, int(table[k]), 'size table heading') for k in ('total_col', 'label_col', 'color_col') if table.get(k)]
+    found = []
+    for r, c, what in heads:
+        v = g.v(r, c); u, per = unit_words(v)
+        if u:
+            found.append(dict(unit=u, per=per, cell=address(c, r), value=v, evidence=f'the {what} says “{text(v)}”'))
+    for hit in g.find(g.fields.aliases('qty_unit'), range(1, max(2, hr)), first=False):
+        t = g.right(*hit)
+        if t:
+            u, per = unit_words(g.v(*t))
+            if u:
+                found.append(dict(unit=u, per=per, cell=address(t[1], t[0]), value=g.v(*t),
+                                  evidence=f'“{text(g.v(*hit))}” says “{text(g.v(*t))}”'))
+    for r in range(max(1, hr - 2), hr):
+        for c in range(1, g.cols + 1):
+            v = g.v(r, c)
+            if isinstance(v, str) and _QTY_WORDS.search(norm(v)):
+                u, per = unit_words(v)
+                if u:
+                    found.append(dict(unit=u, per=per, cell=address(c, r), value=v, evidence=f'{address(c, r)} says “{text(v)}”'))
+    units = {f['unit'] for f in found}
+    said = text(g.v(*heads[0][:2])) if heads and table.get('type') == 'flat' else ''
+    base = dict(sheet=sheet, cell=address(heads[0][1], heads[0][0]) if heads else None, value=said or None, said=said or None)
+    if not found:
+        evidence = (f'the quantity heading says only “{said}”' if said else
+                    f'the {role or "size table"} does not say whether the quantities are pieces or packs')
+        return dict(qty_unit='', pieces_per_unit=None, provenance=dict(base, evidence=evidence, reason='silent'))
+    if '?' in units or units == {'PCS', 'PACK'}:
+        return dict(qty_unit='', pieces_per_unit=None, provenance=dict(base, reason='both', evidence='the file mentions both pieces and packs (' +
+                    '; '.join(f['evidence'] for f in found) + ')'))
+    unit = units.pop(); pers = {f['per'] for f in found if f['per']}
+    first = next(f for f in found if f['unit'] == unit)
+    per = 1 if unit == 'PCS' else (pers.pop() if len(pers) == 1 else None)
+    return dict(qty_unit=unit, pieces_per_unit=per, provenance=dict(sheet=sheet, cell=first['cell'], value=first['value'],
+                                                                    evidence=first['evidence'], said=said or None, reason='file'))
+
+
+def set_unit(o, unit):
+    o['qty_unit'] = unit['qty_unit']
+    if unit['qty_unit'] == 'PCS':
+        o['pieces_per_unit'] = 1
+    elif unit['qty_unit'] == 'PACK':
+        o['pieces_per_unit'] = unit['pieces_per_unit']
+    o.setdefault('provenance', {})['qty_unit'] = unit['provenance']
+    if unit['qty_unit'] == 'PACK' and unit['pieces_per_unit']:
+        o['provenance']['pieces_per_unit'] = dict(unit['provenance'], derivation=f'{unit["pieces_per_unit"]} pieces per pack: {unit["provenance"]["evidence"]}')
+    return o
+
+
+def unit_question(o):
+    """Plain question for an undecided unit, quoting what the file says (shown with the unit field)."""
+    p = (o.get('provenance') or {}).get('qty_unit') or {}
+    if p.get('reason') == 'both':
+        return 'The file mentions both pieces and packs — which are these quantities?'
+    if p.get('reason') == 'conflict':
+        ev = p.get('evidence') or 'the file and the saved layout disagree'
+        return ev[0].upper() + ev[1:] + ' — which is right?'
+    if p.get('said'):
+        return f'The file says only “{p["said"]}” — are these pieces or packs?'
+    return 'The file does not say whether these quantities are pieces or packs — which are they?'
 
 
 def matrix_blocks(g):
@@ -250,7 +402,7 @@ def matrix_lines(g, header, end, label_col, color_col, first_size, total_col):
 
 def merch_bom(g):
     blocks = matrix_blocks(g)
-    if not blocks or not g.find(ALIASES['buyer'], range(1, blocks[0]['header'])):
+    if not blocks or not g.find(g.fields.aliases('buyer'), range(1, blocks[0]['header'])):
         return None
     o = base_order(); header_fields(g, o, blocks[0]['header'])
     roles = {}
@@ -265,12 +417,29 @@ def merch_bom(g):
         return matrix_lines(g, b['header'], b['end'], b['gcol'], b['gcol'] + 1, b['ccol'] + 1, b['tcol']) if b else []
     o['order_lines'] = lines('order'); o['sample_lines'] = lines('sample')
     o['lines'] = deepcopy(o['sample_lines'] or o['order_lines'])
-    o['quantity_basis'] = 'sample' if o['sample_lines'] else 'unconfirmed'; o['pieces_per_unit'] = 1
+    o['quantity_basis'] = 'sample' if o['sample_lines'] else 'unconfirmed'
     o['warnings'] = ['Sample section selected. Order and summary repeats are excluded.' if o['sample_lines'] else
                      'No sample section found. Choose the quantity source.',
                      'BOM date is not an order confirmation date. Confirm the order date below.']
     packs(g, o, blocks[0]['header'])
+    merch_unit(g, o)
     return o
+
+
+def merch_unit(g, o):
+    """A merch BOM's size quantities are pieces when the buyer-order size table adds up to its QTY(IN PIECES)."""
+    total = sum(number(s.get('quantity')) or 0 for l in o['order_lines'] for s in l['sizes'])
+    pk = o.get('packs') or {}; base = dict(sheet=g.sheet['name'])
+    if pk.get('pieces') and total == pk['pieces']:
+        cell = pk['source']['pieces']['cell']
+        return set_unit(o, dict(qty_unit='PCS', pieces_per_unit=1, provenance=dict(
+            base, cell=cell, value=pk['pieces'], reason='file', evidence=f'the size table total {total:g} equals QTY(IN PIECES) {pk["pieces"]:g} in {cell}')))
+    if pk.get('pieces'):
+        ev = f'the size table totals {total:g} but QTY(IN PIECES) says {pk["pieces"]:g}'
+        o['warnings'].append(f'Quantity unit: {ev}. Confirm whether the size quantities are pieces or packs.')
+    else:
+        ev = 'the BOM does not say whether the size quantities are pieces or packs'
+    return set_unit(o, dict(qty_unit='', pieces_per_unit=None, provenance=dict(base, reason='silent', evidence=ev, said=None)))
 
 
 def packs(g, o, limit_row):
@@ -318,6 +487,7 @@ def buyer_contract(g, sheet):
         o['order_lines'] = [line]; o['lines'] = deepcopy(o['order_lines'])
         o['warnings'] = ['Buyer contract quantities are not identified as sample quantities. Confirm the quantity basis and pieces per source unit.',
             'Buyer, colour and order confirmation date require review; destination is not assumed to be buyer.']
+        set_unit(o, unit_evidence(g, dict(type='matrix', header_row=header, total_col=9, label_col=10), role='contract'))
         orders.append(o)
     return orders
 
@@ -504,23 +674,134 @@ def finish(o):
     return o
 
 
-def parse(content, templates=(), filename=''):
+def parse(content, templates=(), filename='', fields=None):
     fmt, sheets = readers.read(content, filename)
-    out = parse_sheets(sheets, templates)
+    out = parse_sheets(sheets, templates, fields)
     out['source_format'] = readers.LABELS[fmt]
     return out
 
 
-def parse_sheets(sheets, templates=()):
-    orders = []; formats = []; used = []
+def flat_headers(g):
+    """(header row, {field: column}) for each row that heads a one-row-per-size table: size and quantity
+    headings (a quantity heading may carry its unit, "Qty (pcs)"); style is a column or a header field."""
+    Fv = g.fields; names = {k: {norm(a) for a in Fv.aliases(k)} for k in Fv.column_keys}
+    quantity = names.get('quantity', set())
+    for row in range(1, min(g.rows, 80) + 1):
+        cells = [(c, norm(g.v(row, c))) for c in range(1, g.cols + 1) if isinstance(g.v(row, c), str)]
+        hit = {key: c for c, n in cells for key in Fv.column_keys if n in names[key]}
+        if 'quantity' not in hit:
+            q = next((c for c, n in cells if strip_units(n) != n and strip_units(n) in quantity), None)
+            if q:
+                hit['quantity'] = q
+        if {'size', 'quantity'} <= hit.keys():
+            yield row, hit
+
+
+AUTO_NOTES = ('Confirm whether these are sample quantities', 'Confirm whether the source quantities', 'The file says',
+              'The file mentions both', 'The file does not say whether', 'Read with the saved layout')
+
+
+def review_notes(o, lead=None):
+    """Replace the automatic unit/basis notes of an order with ones that are true now."""
+    o['warnings'] = [w for w in o.get('warnings', []) if not w.startswith(AUTO_NOTES)]
+    if lead:
+        o['warnings'].insert(0, lead)
+    if not o.get('qty_unit'):
+        o['warnings'].append(unit_question(o))
+    if o.get('quantity_basis') not in ('sample', 'order_demo'):
+        o['warnings'].append('Confirm whether these are sample quantities.')
+    return o
+
+
+def anchor_problems(g, t):
+    """Anchors whose label cell no longer says what it said when the template was saved."""
+    out = []
+    for key, a in sorted((t.get('anchors') or {}).items()):
+        if not a or not a.get('label_cell') or not a.get('label'):
+            continue
+        try:
+            now = g.v(*cell_ref(a['label_cell']))
+        except ValueError:
+            continue
+        if norm(now) != norm(a['label']):
+            out.append(f'{a["label_cell"]} now says “{text(now)}”, not “{a["label"]}”' if now not in (None, '') else
+                       f'{a["label_cell"]} is empty; it said “{a["label"]}”')
+    return out
+
+
+def choose_template(sheets, sheet, templates, fields):
+    """(template, orders, refusals). A template is applied only when the layout matches, every anchor label
+    is unchanged and the validator accepts its definition on this sheet; otherwise the reason is kept."""
+    from . import matcher
+    g = Grid(sheet, fields); refused = []
+    ranked = sorted(((template_score(sheet, t), t) for t in templates), key=lambda x: -x[0])
+    for score, t in ranked:
+        if score < 0.8:
+            break
+        reasons = anchor_problems(g, t)
+        if not reasons:
+            _, rejected = matcher.check(sheet, t['definition'], fields)
+            reasons = [r['reason'] for r in rejected]
+        orders = None
+        if not reasons:
+            try:
+                orders = apply_template(sheets, sheet, t['definition'], fields)
+            except ValueError as exc:
+                reasons = [str(exc)]
+        if not reasons:
+            return t, orders, refused
+        refused.append(dict(id=t['id'], name=t['name'], version=t.get('version', 1), sheet=sheet['name'], reasons=reasons))
+    return None, None, refused
+
+
+def restore_from_template(orders, t):
+    """A confirmed unit and quantity basis saved with the template come back; the file still wins when it
+    says something different (then the person is asked)."""
+    tag = f'saved layout “{t["name"]}” (version {t.get("version", 1)})'
+    unit = t.get('unit') or {}; basis = t.get('quantity_basis')
+    for o in orders:
+        prov = o.setdefault('provenance', {})
+        if unit.get('qty_unit') in ('PCS', 'PACK'):
+            per = 1 if unit['qty_unit'] == 'PCS' else unit.get('pieces_per_unit')
+            file_unit = (prov.get('qty_unit') or {}).get('reason') == 'file'
+            if not o.get('qty_unit') and not file_unit:
+                o['qty_unit'] = unit['qty_unit']; o['pieces_per_unit'] = per
+                prov['qty_unit'] = dict(derivation=f'Confirmed for the {tag}', reason='template', template=t['id'])
+                prov['pieces_per_unit'] = dict(derivation=f'Confirmed for the {tag}', reason='template', template=t['id'])
+            elif o.get('qty_unit') and (o['qty_unit'] != unit['qty_unit'] or
+                                        (o['qty_unit'] == 'PACK' and o.get('pieces_per_unit') and per and o['pieces_per_unit'] != per)):
+                said = 'pieces' if o['qty_unit'] == 'PCS' else f'packs{" of " + str(o["pieces_per_unit"]) if o.get("pieces_per_unit") else ""}'
+                saved = 'pieces' if unit['qty_unit'] == 'PCS' else f'packs{" of " + str(per) if per else ""}'
+                prov['qty_unit'] = dict(prov.get('qty_unit') or {}, reason='conflict',
+                                        evidence=f'the file says {said} but the {tag} says {saved}')
+                o['qty_unit'] = ''; o['pieces_per_unit'] = None
+            elif o.get('qty_unit') == 'PACK' and not o.get('pieces_per_unit') and per:
+                o['pieces_per_unit'] = per
+                prov['pieces_per_unit'] = dict(derivation=f'Confirmed for the {tag}', reason='template', template=t['id'])
+        if basis in ('sample', 'order_demo') and o.get('quantity_basis') not in ('sample', 'order_demo'):
+            o['quantity_basis'] = basis
+            prov['quantity_basis'] = dict(derivation=f'Confirmed for the {tag}', reason='template', template=t['id'])
+        review_notes(o, f'Read with the {tag}.')
+    return orders
+
+
+def parse_sheets(sheets, templates=(), fields=None):
+    from . import matcher
+    Fv = F.resolve(fields)
+    orders = []; formats = []; used = []; notes = []; refusals = []
     for sheet in sheets:
         if sheet['hidden']:
             continue
-        g = Grid(sheet); found = None
-        match = match_template(sheet, templates) if templates else None
-        if match:
-            found = apply_template(sheets, sheet, match[1]['definition'])
-            formats.append(f'Template: {match[1]["name"]}'); used.append(match[1]['id'])
+        g = Grid(sheet, Fv); found = None; mine = []
+        if templates:
+            t, found, refused = choose_template(sheets, sheet, templates, Fv)
+            for r in refused:
+                mine.append(f'Saved layout “{r["name"]}” (version {r["version"]}) was not used on sheet “{r["sheet"]}”: '
+                            + '; '.join(r['reasons']) + '. The file was read as a new layout.')
+            refusals += refused
+            if t:
+                restore_from_template(found, t)
+                formats.append(f'Template: {t["name"]}'); used.append(t['id'])
         if not found:
             o = merch_bom(g)
             if o:
@@ -530,17 +811,26 @@ def parse_sheets(sheets, templates=()):
             if found is not None:
                 formats.append('Buyer contract')
         if not found:
-            mapping = None
-            for row in range(1, min(sheet['rows'], 80) + 1):
-                hit = {key: cell['col'] for cell in sheet['cells'] if cell['row'] == row
-                       for key, aliases in ALIASES.items() if norm(cell['value']) in [norm(a) for a in aliases]}
-                if {'style', 'size', 'quantity'} <= hit.keys():
-                    mapping = {'sheet': sheet['name'], 'header_row': row, 'columns': hit}; break
-            if mapping:
-                found = parse_mapping(sheets, mapping); formats.append('Tabular orders')
+            for row, cols in flat_headers(g):
+                d = dict(fields={}, table=dict(type='flat', header_row=row, columns=cols))
+                if 'style' not in cols:
+                    at = header_value(g, 'style', row)
+                    if not at:
+                        continue
+                    d['fields']['style'] = address(at[1], at[0])
+                _, rejected = matcher.check(sheet, d, Fv)
+                if rejected:
+                    mine.append(f'The size/quantity table on “{sheet["name"]}” row {row} was not read automatically: '
+                                + '; '.join(r['reason'] for r in rejected) + '.')
+                    continue
+                found = apply_template(sheets, sheet, d, Fv); formats.append('Tabular orders')
                 for o in found:
-                    header_fields(g, o, mapping['header_row'], only_missing=True)
+                    header_fields(g, o, row, only_missing=True)
+                break
+        notes += mine
         if found:
+            for o in found:
+                o['warnings'] += [n for n in mine if n not in o['warnings']]
             attach_bom(g, found)
             uncalculated = [c['cell'] for c in sheet['cells'] if c.get('formula') and c.get('value') is None]
             if uncalculated:
@@ -550,17 +840,18 @@ def parse_sheets(sheets, templates=()):
                                             f'(e.g. {", ".join(uncalculated[:4])}). Open the file in Excel, save it, and upload again.')
             orders.extend(finish(o) for o in found)
     return dict(sheets=sheets, orders=orders, format=', '.join(dict.fromkeys(formats)) or 'Needs column mapping',
-                templates_used=used)
+                templates_used=used, notes=notes, templates_refused=refusals)
 
 
-def parse_mapping(sheets, mapping):
+def parse_mapping(sheets, mapping, fields=None):
+    Fv = F.resolve(fields)
     sheet = next((s for s in sheets if s['name'] == mapping['sheet']), None)
     if not sheet:
         raise ValueError('Select a worksheet.')
     row = int(mapping['header_row']); columns = mapping['columns']
     if not {'style', 'size', 'quantity'} <= columns.keys():
         raise ValueError('Map style, size and quantity columns at minimum.')
-    if any(k not in ALIASES or not isinstance(c, int) or c < 1 or c > sheet['cols'] for k, c in columns.items()):
+    if any(k not in Fv.column_keys or not isinstance(c, int) or c < 1 or c > sheet['cols'] for k, c in columns.items()):
         raise ValueError('Invalid column mapping.')
     cells = {(c['row'], c['col']): c for c in sheet['cells']}; groups = {}
     for r in range(row + 1, sheet['rows'] + 1):
@@ -594,16 +885,19 @@ def parse_mapping(sheets, mapping):
     return list(groups.values())
 
 
-def validate_definition(sheet, d):
+def validate_definition(sheet, d, fields=None):
     """A template/mapping definition refers only to known fields and real cells of this sheet."""
+    Fv = F.resolve(fields)
     fields = d.get('fields') or {}
     for k, ref in fields.items():
-        if k not in HEADER_FIELDS:
+        if k not in Fv.header_keys:
             raise ValueError(f'Unknown header field {k}.')
         cell_ref(ref)
     t = d.get('table') or {}
     kind = t.get('type')
     if kind == 'flat':
+        if not isinstance(t.get('header_row'), int) or t['header_row'] < 1:
+            raise ValueError('Choose the header row of the table.')
         if not {'style', 'size', 'quantity'} <= set(t.get('columns', {})) and not ('style' in fields and {'size', 'quantity'} <= set(t.get('columns', {}))):
             raise ValueError('Map size and quantity columns, and style either as a column or a header cell.')
     elif kind == 'matrix':
@@ -617,9 +911,10 @@ def validate_definition(sheet, d):
     return d
 
 
-def apply_template(sheets, sheet, d):
-    validate_definition(sheet, d)
-    g = Grid(sheet); fields = d.get('fields') or {}; t = d['table']
+def apply_template(sheets, sheet, d, fields=None):
+    Fv = F.resolve(fields)
+    validate_definition(sheet, d, Fv)
+    g = Grid(sheet, Fv); fields = d.get('fields') or {}; t = d['table']
     if t['type'] == 'flat':
         cols = {k: int(v) for k, v in t['columns'].items()}
         if 'style' not in cols:
@@ -630,9 +925,9 @@ def apply_template(sheets, sheet, d):
                                              for rr in range(int(t['header_row']) + 1, sheet['rows'] + 1)
                                              if any(g.v(rr, cc) not in (None, '') for cc in (cols['size'], cols['quantity']))]
             cols['style'] = temp['cols']
-            orders = parse_mapping([temp], dict(sheet=sheet['name'], header_row=int(t['header_row']), columns=cols))
+            orders = parse_mapping([temp], dict(sheet=sheet['name'], header_row=int(t['header_row']), columns=cols), Fv)
         else:
-            orders = parse_mapping(sheets, dict(sheet=sheet['name'], header_row=int(t['header_row']), columns=cols))
+            orders = parse_mapping(sheets, dict(sheet=sheet['name'], header_row=int(t['header_row']), columns=cols), Fv)
     else:
         header = int(t['header_row']); last = int(t['last_size_col'])
         label_col = int(t.get('label_col') or 0) or None; color_col = int(t.get('color_col') or 0) or None
@@ -649,10 +944,11 @@ def apply_template(sheets, sheet, d):
                               sizes=[dict(size=text(g.v(header, c)), quantity=g.v(r, c), source=g.p(r, c), size_source=g.p(header, c))
                                      for c in range(int(t['first_size_col']), last + 1) if g.v(header, c) is not None]))
         o['lines'] = lines; o['order_lines'] = deepcopy(lines)
-        o['warnings'] = ['Read with a saved layout template. Confirm the quantity source and pieces per unit.']
         orders = [o]
+    unit = unit_evidence(g, t)
     for o in orders:
         for k, ref in fields.items():
             r, c = cell_ref(ref)
-            o[k] = text(g.v(r, c)); o['provenance'][k] = g.p(r, c)
+            o[k] = field_value(g, r, c, k); o['provenance'][k] = g.p(r, c)
+        review_notes(set_unit(o, deepcopy(unit)))
     return orders

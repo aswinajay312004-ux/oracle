@@ -191,3 +191,47 @@ def test_explorer_uses_catalog_names_decoded_masters_and_links(api):
     assert by['BUYMAS']['rows'][0]['BUYERNAME'] == 'NEXT' and by['BUYMAS']['direction'] == 'up'
     assert api.get('/api/explorer/tables/NOT_A_TABLE').status_code == 404
     assert api.get('/api/explorer/tables/ORDMAS?column=BAD&value=x').status_code == 404
+
+
+def test_explorer_business_column_order_and_exact_order_lookup(api, world):
+    page = api.get('/api/explorer/tables/ORDMAS?limit=5').json()
+    assert page['display'] == world['kb'].table('ORDMAS')['display'] and page['display'][0] == 'DOCID' and page['label'] == 'DOCID'
+    q = '/api/explorer/tables/ORDMAS?column={}&value={}{}'
+    exact = api.get(q.format('DOCID', 'pk/26-27/s/9001', '&exact=true')).json()             # whole reference, any case
+    assert exact['total'] == 1 and exact['rows'][0]['ORDMASID'] == 101
+    assert api.get(q.format('DOCID', '9001', '&exact=true')).json()['total'] == 0              # part of it: not exact
+    assert api.get(q.format('DOCID', '9001', '')).json()['total'] == 1                         # ...but contains finds it
+    assert api.get(q.format('ORDMASID', '10', '')).json()['total'] == 4                        # 101-104 all contain "10"
+    assert api.get(q.format('ORDMASID', '10', '&exact=true')).json()['total'] == 0
+    assert [r['ORDMASID'] for r in api.get(q.format('ORDMASID', '101', '&exact=true')).json()['rows']] == [101]
+    # a line's or size's order ID shows the order reference, not just the raw ID
+    assert api.get('/api/explorer/tables/ORDSIZE?limit=50').json()['decoded']['ORDMASID']['101'] == 'PK/26-27/S/9001'
+
+
+def test_explorer_order_view_nests_sizes_under_lines(api, monkeypatch):
+    rel = api.get('/api/explorer/related/ORDMAS/101').json()
+    assert rel['key'] == 'ORDMASID' and rel['label'] == 'DOCID' and rel['display'][0] == 'DOCID'
+    assert {c['name'] for c in rel['columns']} >= {'DOCID', 'BUYER', 'OQTY'} and rel['decoded']['BUYER']['1'] == 'NEXT'
+    by = {g['table']: g for g in rel['related']}
+    sizes, lines = by['ORDSIZE'], by['ORDSTYLE']
+    assert {k: sizes['under'][k] for k in ('table', 'pairs', 'status')} == dict(table='ORDSTYLE', pairs=[['ORDMASID', 'ORDMASID'], ['SUB3_SUBNO', 'SUBNO']], status='verified')
+    assert lines['under'] is None and by['BUYMAS']['under'] is None and by['ORDYARN']['under']['table'] == 'ORDFAB'
+    assert all(r['SUBNO'] for r in lines['rows']) and all(r['SUB3_SUBNO'] for r in sizes['rows'])   # rows carry the link values
+    assert sum(r['RQTY'] for r in sizes['rows']) == 450 and sizes['total'] == 5 and not sizes['more']
+    assert sizes['filter'] == {'column': 'ORDMASID', 'value': 101} and sizes['pairs'] == [['ORDMASID', 'ORDMASID']]
+    assert sizes['decoded']['GSIZE']['31'] == '3-6M'
+    assert all(len({c['name'] for c in g['columns']}) == len(g['columns']) for g in rel['related'])  # no column twice
+    # a big order: the first rows, the exact total, and the full list through an exact filter
+    monkeypatch.setattr(main, 'REL_ROWS', 2)
+    sizes = {g['table']: g for g in api.get('/api/explorer/related/ORDMAS/101').json()['related']}['ORDSIZE']
+    assert sizes['more'] and len(sizes['rows']) == 2 and sizes['total'] == 5
+    assert api.get('/api/explorer/tables/ORDSIZE?column=ORDMASID&value=101&exact=true').json()['total'] == 5
+    assert api.get('/api/explorer/related/ORDMAS/999').status_code == 404
+
+
+def test_explorer_counts_are_approximate_only_for_very_large_unfiltered_tables(api, world, monkeypatch):
+    monkeypatch.setitem(world['kb'].table('ORDSIZE'), 'rows', 5_000_000)
+    page = api.get('/api/explorer/tables/ORDSIZE?limit=5').json()
+    assert page['approx'] is True and page['total'] == 5_000_000                       # statistics, marked ≈ on screen
+    page = api.get('/api/explorer/tables/ORDSIZE?column=ORDMASID&value=101&exact=true').json()
+    assert page['approx'] is False and page['total'] == 5                                # a filter is always counted
