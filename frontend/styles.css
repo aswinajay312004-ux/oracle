@@ -543,3 +543,52 @@ dialog.confirm ul { padding-left: 18px; color: var(--ink-2); }
 .fabric-table td.w-line select { min-width: 150px; }
 .fabric-table td.w-wide input { min-width: 140px; }
 .fabric-table .yarn-btn { white-space: nowrap; font-size: 12.5px; }
+
+/* ---------- explorer-ux: grid toggles, ≈ notes, order record drawer ---------- */
+.filter-bar input[type=checkbox] { width: auto; height: auto; }
+.filter-bar #f-op { width: 120px; }
+.ex-toggles { display: flex; gap: 6px 16px; flex-wrap: wrap; align-items: center; min-height: 34px; }
+.ex-note { margin: 8px 4px 2px; padding: 8px 6px 2px; border-top: 1px solid var(--line-2); font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.ex-approx { text-decoration: underline dotted; text-underline-offset: 2px; cursor: help; }
+.ex-cols-note { padding: 10px 16px 0; }
+.ex-back { margin-bottom: 2px; }
+details.ex-more > summary { cursor: pointer; font-weight: 600; font-size: 12.5px; color: var(--ink-2); padding: 2px 0 8px; }
+.ex-masters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ex-sub { font-size: 10.5px; letter-spacing: .1em; font-weight: 700; color: var(--faint); text-transform: uppercase; margin-right: 4px; }
+.ex-master { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-weight: 500; line-height: 1.3; max-width: 240px; }
+.ex-master:hover { border-color: var(--master); background: var(--master-soft); }
+.ex-master small { font-size: 10.5px; color: var(--muted); }
+.ex-master b { font-size: 12.5px; color: var(--ink); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-master.unconfirmed { border-style: dashed; border-color: var(--warn-line); }
+.ex-jump { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.ex-jump .count-badge { margin-left: 4px; }
+.rel-section { scroll-margin-top: 8px; }
+.rel-section h4 { flex-wrap: wrap; }
+.rel-section .ex-on { margin: -2px 0 6px; overflow-wrap: anywhere; }
+.ex-rel-table { max-height: 320px; }
+.ex-rel-table td { white-space: nowrap; }
+.ex-rel-table tfoot td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ex-line { display: inline-grid; place-items: center; min-width: 20px; height: 18px; padding: 0 4px; border-radius: 5px; background: var(--brand-soft); color: var(--brand); font-weight: 750; font-size: 11px; margin-right: 4px; }
+.record-sections { grid-template-columns: minmax(0, 1fr); }
+
+/* ---------- graph-interactions: zoom, pan and fit for every flowchart (graph.js) ---------- */
+.flow-wrap.gviewport, .gviewport { position: relative; overflow: hidden; overflow: clip; }
+.gviewport > .gsvg { display: block; width: 100%; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.gviewport.panning > .gsvg, .gviewport.panning .gnode, .gviewport.panning .gplus { cursor: grabbing; }
+.gviewport > .gsvg:focus { outline: none; }
+.gviewport > .gsvg:focus-visible { outline: 2px solid var(--brand-2); outline-offset: -2px; }
+.gviewport .gnode:focus-visible rect.box { stroke: var(--brand-2); stroke-width: 3; }
+.gviewport .gplus:focus { outline: none; }
+.gviewport .gplus:focus-visible circle { fill: var(--brand-soft); stroke-width: 2.4; }
+.gtools { position: absolute; right: 10px; bottom: 10px; z-index: 3; display: flex; align-items: center; gap: 1px; padding: 3px;
+  background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 1px 2px rgba(9,30,28,.06), 0 6px 18px rgba(9,30,28,.08); backdrop-filter: blur(6px); }
+.gtools button { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--ink-2); box-shadow: none; }
+.gtools button:hover:not([aria-disabled="true"]) { background: var(--hover); color: var(--ink); }
+.gtools button:active:not([aria-disabled="true"]) { background: var(--line-2); }
+.gtools button[aria-disabled="true"] { opacity: .35; cursor: default; }
+.gtools button:focus-visible { outline: 2px solid var(--brand-2); outline-offset: -2px; }
+.flow-wrap .gtools svg { display: block; width: 15px; height: 15px; margin: 0; }
+.gzoom { min-width: 42px; text-align: center; font-size: 11.5px; font-weight: 650; color: var(--ink-2); font-variant-numeric: tabular-nums; cursor: default; user-select: none; }
+.gsep { width: 1px; height: 18px; margin: 0 3px; background: var(--line); }
+@media (hover: hover) { .gtools { opacity: .88; transition: opacity .15s; } .gviewport:hover .gtools, .gtools:focus-within { opacity: 1; } }
+@media print { .gtools { display: none; } }

@@ -10,7 +10,7 @@ from .config import DATA
 ROLES = ('admin', 'approver', 'operator', 'viewer')
 ORDER_FIELDS = ('buyer', 'style', 'description', 'po_number', 'order_ref', 'ship_date', 'order_date', 'season', 'merch',
                 'sample_type', 'pieces_per_unit', 'quantity_basis', 'exporter', 'against', 'department', 'gender',
-                'packing_type', 'components')
+                'packing_type', 'components', 'qty_unit')
 FABRIC_FIELDS = ('component', 'portion', 'line', 'color', 'base_color', 'quality', 'gsm', 'content', 'count', 'dia',
                  'yy', 'rejection')
 YARN_FIELDS = ('count', 'color', 'percent', 'description')
@@ -48,7 +48,15 @@ def init():
         CREATE TABLE IF NOT EXISTS nl_examples(id INTEGER PRIMARY KEY,masked TEXT NOT NULL,question TEXT NOT NULL,intent TEXT NOT NULL,
             actor TEXT,at TEXT,uses INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS chat_log(id TEXT PRIMARY KEY,username TEXT,at TEXT,question TEXT,payload TEXT,feedback TEXT);
+        CREATE TABLE IF NOT EXISTS field_settings(key TEXT PRIMARY KEY,required INTEGER,aliases TEXT,actor TEXT,at TEXT);
         ''')
+        tcols = {r['name'] for r in c.execute('PRAGMA table_info(templates)')}
+        # Additive migration: versioned buyer templates (docs/EXCEL_UNDERSTANDING.md §6).
+        for col, ddl in (('buyer', "TEXT NOT NULL DEFAULT ''"), ('version', 'INTEGER NOT NULL DEFAULT 1'), ('family', 'TEXT'),
+                         ('anchors', 'TEXT'), ('unit', 'TEXT'), ('quantity_basis', 'TEXT')):
+            if col not in tcols:
+                c.execute(f'ALTER TABLE templates ADD COLUMN {col} {ddl}')
+        c.execute('UPDATE templates SET family=id WHERE family IS NULL')
         cols = {r['name'] for r in c.execute('PRAGMA table_info(users)')}
         # Additive migration: the original single account becomes the administrator.
         if 'role' not in cols:
@@ -103,20 +111,39 @@ def set_mapping_status(table, column, status, actor, note=''):
 
 
 # --- templates ---------------------------------------------------------------
+def _template(r):
+    return dict(id=r['id'], name=r['name'], buyer=r['buyer'] or '', version=r['version'] or 1, family=r['family'] or r['id'],
+                signature=r['signature'], labels=json.loads(r['labels']), definition=json.loads(r['definition']),
+                anchors=json.loads(r['anchors']) if r['anchors'] else None, unit=json.loads(r['unit']) if r['unit'] else None,
+                quantity_basis=r['quantity_basis'], created_by=r['created_by'], created_at=r['created_at'],
+                uses=r['uses'], active=bool(r['active']))
+
+
 def templates(active_only=True):
+    """Active templates for parsing; with active_only=False the whole version history, newest version first per layout."""
     with db() as c:
-        rows = c.execute('SELECT * FROM templates' + (' WHERE active=1' if active_only else '') + ' ORDER BY uses DESC,created_at DESC').fetchall()
-        return [dict(id=r['id'], name=r['name'], signature=r['signature'], labels=json.loads(r['labels']),
-                     definition=json.loads(r['definition']), created_by=r['created_by'], created_at=r['created_at'],
-                     uses=r['uses'], active=bool(r['active'])) for r in rows]
+        order = ' ORDER BY uses DESC,created_at DESC' if active_only else ' ORDER BY lower(name),family,version DESC'
+        rows = c.execute('SELECT * FROM templates' + (' WHERE active=1' if active_only else '') + order).fetchall()
+        return [_template(r) for r in rows]
 
 
-def save_template(name, signature, labels, definition, actor):
-    tid = uuid.uuid4().hex
+def save_template(name, signature, labels, definition, actor, buyer='', anchors=None, unit=None, quantity_basis=None):
+    """Save a confirmed layout. The same name, or the same signature for the same buyer, is a new version of
+    that layout: version n+1 becomes the active one and older versions are kept, inactive, as history."""
+    tid = uuid.uuid4().hex; buyer = ' '.join(str(buyer or '').split())
     with db() as c:
-        c.execute('INSERT INTO templates(id,name,signature,labels,definition,created_by,created_at) VALUES (?,?,?,?,?,?,?)',
-                  (tid, name, signature, json.dumps(sorted(labels)), json.dumps(definition), actor, now()))
-    return tid
+        prev = c.execute("SELECT family, max(version) AS v FROM templates WHERE lower(name)=lower(?) "
+                         "OR (signature=? AND buyer<>'' AND upper(buyer)=upper(?)) GROUP BY family ORDER BY v DESC LIMIT 1",
+                         (name, signature, buyer)).fetchone()
+        family = prev['family'] if prev else tid
+        version = (prev['v'] or 0) + 1 if prev else 1
+        c.execute('UPDATE templates SET active=0 WHERE family=?', (family,))
+        c.execute('INSERT INTO templates(id,name,signature,labels,definition,created_by,created_at,buyer,version,family,anchors,unit,quantity_basis) '
+                  'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                  (tid, name, signature, json.dumps(sorted(labels)), json.dumps(definition), actor, now(), buyer, version, family,
+                   None if anchors is None else json.dumps(anchors, ensure_ascii=False),
+                   None if unit is None else json.dumps(unit), quantity_basis))
+    return dict(id=tid, version=version, family=family)
 
 
 def template_used(tid):
@@ -125,9 +152,32 @@ def template_used(tid):
 
 
 def set_template_active(tid, active):
+    """Activating one version deactivates the other versions of the same layout (one active version each)."""
     with db() as c:
-        if c.execute('UPDATE templates SET active=? WHERE id=?', (1 if active else 0, tid)).rowcount != 1:
+        row = c.execute('SELECT family FROM templates WHERE id=?', (tid,)).fetchone()
+        if not row:
             raise KeyError('Template not found')
+        if active:
+            c.execute('UPDATE templates SET active=0 WHERE family=? AND id<>?', (row['family'] or tid, tid))
+        c.execute('UPDATE templates SET active=? WHERE id=?', (1 if active else 0, tid))
+
+
+# --- order fields (aliases / required) -------------------------------------------
+def field_settings():
+    with db() as c:
+        return {r['key']: dict(required=None if r['required'] is None else bool(r['required']),
+                               aliases=None if r['aliases'] is None else json.loads(r['aliases']), actor=r['actor'], at=r['at'])
+                for r in c.execute('SELECT * FROM field_settings')}
+
+
+def set_field_setting(key, actor, required=None, aliases=None):
+    """Save one field's changes; None keeps that part as it is."""
+    with db() as c:
+        old = c.execute('SELECT * FROM field_settings WHERE key=?', (key,)).fetchone()
+        req = (1 if required else 0) if required is not None else (old['required'] if old else None)
+        als = json.dumps(aliases, ensure_ascii=False) if aliases is not None else (old['aliases'] if old else None)
+        c.execute('INSERT INTO field_settings VALUES (?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET required=excluded.required,'
+                  'aliases=excluded.aliases,actor=excluded.actor,at=excluded.at', (key, req, als, actor, now()))
 
 
 # --- drafts --------------------------------------------------------------------

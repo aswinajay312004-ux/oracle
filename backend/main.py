@@ -941,15 +941,22 @@ def explorer_tables(user=Depends(authenticated)):
         _db(sources)
         counts = table_counts(kb, sources, list(tables)) if len(tables) <= 300 else {t: (m.get('rows'), True) for t, m in tables.items()}
     return [dict(table=t, columns=len(m['columns']), rows=counts[t][0], approx=counts[t][1], business=m['business'],
-                 kind=m['kind'], description=m['description'], key=m.get('key'),
+                 kind=m['kind'], description=m['description'], key=m.get('key'), label=m.get('label'),
                  links=sum(1 for j in kb.joins if t in (j['child'], j['parent']))) for t, m in tables.items()]
 
 
 def _decode(kb, execute, dialect, table, rows):
-    """{column: {id: label}} for reference columns on this page (master labels instead of raw IDs)."""
-    out = {}
-    for col, m in kb.table(table)['columns'].items():
-        master = kb.table(m.get('references') or '')
+    """{column: {id: label}} for columns on this page that point at a named record: master references, and
+    single-column confirmed links to a parent (an order line's order ID shows the order reference)."""
+    out = {}; t = kb.table(table)
+    targets = {c: m['references'] for c, m in t['columns'].items() if m.get('references')}
+    for j in kb.joins:
+        if j['child'] == table and len(j['pairs']) == 1 and j['status'] in ('verified', 'declared'):
+            col, pcol = j['pairs'][0]
+            if col != t.get('key') and (kb.table(j['parent']) or {}).get('key') == pcol:
+                targets.setdefault(col, j['parent'])
+    for col, ref in targets.items():
+        master = kb.table(ref)
         if not master or not master.get('label') or not master.get('key'):
             continue
         ids = sorted({r[col] for r in rows if isinstance(r.get(col), (int, float))})[:500]
@@ -968,10 +975,17 @@ def _rows(execute, sql, binds, names, n):
     return [{k: engine.cell(v) for k, v in zip(names, r)} for r in execute(sql, binds, n)]
 
 
+def _columns(meta, names=None):
+    return [dict(name=c, type=m['type'], label=m['business'], role=m['role'], references=m.get('references'))
+            for c, m in ((c, meta['columns'][c]) for c in (names or meta['columns']))]
+
+
 @app.get('/api/explorer/tables/{table}')
 def explorer_rows(table: str, column: str | None = None, value: str | None = Query(default=None, max_length=100),
-                  limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0, le=100000),
+                  exact: bool = False, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0, le=100000),
                   after: str | None = Query(default=None, max_length=40), user=Depends(authenticated)):
+    """One page of a table. column + value filter by 'contains' (any case); exact=true matches the whole
+    value instead (a record ID or an order reference), using the plain column for numbers so indexes help."""
     table = table.upper(); kb = knowledge_base(); meta = _oracle_tables(kb).get(table)
     if not IDENT.match(table) or not meta:
         raise HTTPException(404, 'Table not available.')
@@ -980,10 +994,15 @@ def explorer_rows(table: str, column: str | None = None, value: str | None = Que
     with query_sources() as sources:
         execute, dialect = _db(sources)
         if column and value:
-            column = column.upper()
+            column = column.upper(); value = value.strip()
             if column not in names:
                 raise HTTPException(404, 'Column not available.')
-            where.append(f'{dialect.text(column)} LIKE :v'); binds['v'] = f'%{value.upper()}%'
+            if exact and meta['columns'][column]['type'] == 'NUMBER' and re.fullmatch(r'-?\d{1,38}', value):
+                where.append(f'{column} = :v'); binds['v'] = int(value)
+            elif exact:
+                where.append(f'{dialect.text(column)} = :v'); binds['v'] = value.upper()
+            else:
+                where.append(f'{dialect.text(column)} LIKE :v'); binds['v'] = f'%{value.upper()}%'
         key = meta.get('key') if meta.get('key') in names and meta['columns'][meta['key']]['type'] == 'NUMBER' else None
         cond = (' WHERE ' + ' AND '.join(where)) if where else ''
         total, approx = _count(execute, dialect, table, meta, cond, binds)
@@ -996,18 +1015,33 @@ def explorer_rows(table: str, column: str | None = None, value: str | None = Que
             sql = dialect.page(select + cond + f' ORDER BY {names[0]} DESC', limit, offset)
         rows = _rows(execute, sql, binds, names, limit)
         decoded = _decode(kb, execute, dialect, table, rows)
-    return dict(table=table, business=meta['business'], description=meta['description'], key=key,
-                columns=[dict(name=c, type=m['type'], label=m['business'], role=m['role'], references=m.get('references')) for c, m in meta['columns'].items()],
+    return dict(table=table, business=meta['business'], description=meta['description'], key=key, label=meta.get('label'),
+                display=meta['display'], columns=_columns(meta),
                 total=total, approx=approx, rows=rows, offset=offset, limit=limit, decoded=decoded,
                 next_after=rows[-1][key] if key and len(rows) == limit else None)
 
 
+REL_ROWS = 50   # child rows listed per linked table in a record view (a big order has many size rows)
+_LINK_RANK = {'verified': 0, 'declared': 0, 'proposed': 1, 'inferred': 2}
+
+
 @app.get('/api/explorer/related/{table}/{pk}')
 def explorer_related(table: str, pk: int, user=Depends(authenticated)):
-    """Records linked to one record through the relationship map (parents and children)."""
+    """One full record plus the records linked to it through the relationship map (parents and children).
+    A child table that also hangs under another child (size rows under order lines) says so in 'under',
+    so the page can show which line each size row belongs to."""
     kb = knowledge_base(); t = _table_meta(kb, table.upper())
     if not t.get('key') or t.get('source') == 'local':
         raise HTTPException(409, 'This table has no single record ID.')
+    neighbours = _neighbours(kb, t['name'])
+    downs = {n['table'] for n in neighbours if n['direction'] == 'down'} - {t['name']}
+    under = {}
+    for j in sorted(kb.joins, key=lambda j: _LINK_RANK.get(j['status'], 9)):
+        if j['child'] in downs and j['parent'] in downs and j['child'] != j['parent'] and j['child'] not in under:
+            under[j['child']] = dict(table=j['parent'], pairs=j['pairs'], status=j['status'], label=j['label'])
+    need = {}   # columns each side of an 'under' link needs so rows can be matched
+    for child, u in under.items():
+        need.setdefault(child, []).extend(c for c, _ in u['pairs']); need.setdefault(u['table'], []).extend(p for _, p in u['pairs'])
     out = []
     with query_sources() as sources:
         execute, dialect = _db(sources)
@@ -1016,7 +1050,7 @@ def explorer_related(table: str, pk: int, user=Depends(authenticated)):
         if not found:
             raise HTTPException(404, 'Record not found.')
         record = found[0]
-        for n in _neighbours(kb, t['name']):
+        for n in neighbours:
             j = next(x for x in kb.joins if x['id'] == n['join'])
             other = kb.table(n['table'])
             conds = [(p, record.get(ch)) for ch, p in j['pairs']] if n['direction'] == 'up' else [(ch, record.get(p)) for ch, p in j['pairs']]
@@ -1024,20 +1058,25 @@ def explorer_related(table: str, pk: int, user=Depends(authenticated)):
                 continue
             binds = {f'v{i}': v for i, (_, v) in enumerate(conds)}
             where = ' AND '.join(f'{col} = :v{i}' for i, (col, _) in enumerate(conds))
-            cols = list(dict.fromkeys([c for c in other['display']] + [c for c, m in other['columns'].items() if m['role'] not in ('system', 'key')]))[:24]
-            if other.get('key'):
-                cols.append(other['key'])
-            cols += [ch for ch, _ in j['pairs'] if ch not in cols and ch in other['columns']] + [p for _, p in j['pairs'] if p not in cols and p in other['columns']]
+            cols = list(dict.fromkeys(other['display'] + [c for c, m in other['columns'].items() if m['role'] not in ('system', 'key')]))[:24]
+            cols = list(dict.fromkeys(cols + ([other['key']] if other.get('key') else []) + need.get(other['name'], []) +
+                                      [c for pair in j['pairs'] for c in pair if c in other['columns']]))
+            limit = REL_ROWS if n['direction'] == 'down' else 20
             try:
-                rows = _rows(execute, dialect.limit(f'SELECT {", ".join(cols)} FROM {dialect.table(other["name"])} WHERE {where}', 21), binds, cols, 21)
+                rows = _rows(execute, dialect.limit(f'SELECT {", ".join(cols)} FROM {dialect.table(other["name"])} WHERE {where}', limit + 1), binds, cols, limit + 1)
             except Exception:
                 continue
-            if rows:
-                out.append(dict(n, rows=rows[:20], more=len(rows) > 20, key=other.get('key'), label=other.get('label'),
-                                columns=[dict(name=c, label=other['columns'][c]['business'], role=other['columns'][c]['role']) for c in cols],
-                                decoded=_decode(kb, execute, dialect, other['name'], rows[:20])))
+            if not rows:
+                continue
+            more = len(rows) > limit; rows = rows[:limit]
+            total = _count(execute, dialect, other['name'], other, f' WHERE {where}', binds)[0] if more else len(rows)
+            out.append(dict(n, rows=rows, more=more, total=total, key=other.get('key'), label=other.get('label'), display=other['display'], pairs=j['pairs'],
+                            columns=_columns(other, cols), decoded=_decode(kb, execute, dialect, other['name'], rows),
+                            under=under.get(other['name']) if n['direction'] == 'down' else None,
+                            filter=dict(column=conds[0][0], value=conds[0][1]) if len(conds) == 1 else None))
         decoded = _decode(kb, execute, dialect, t['name'], [record])
-    return dict(table=t['name'], business=t['business'], record=record, related=out, decoded=decoded)
+    return dict(table=t['name'], business=t['business'], key=t['key'], label=t.get('label'), display=t['display'],
+                columns=_columns(t), record=record, related=out, decoded=decoded)
 
 
 # --- assistant --------------------------------------------------------------------------

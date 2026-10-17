@@ -265,3 +265,75 @@ def as_json_records(content):
     rows = max(r for r, _ in cells); cols = max(c for _, c in cells)
     head = [cells.get((1, c)) for c in range(1, cols + 1)]
     return json.dumps([{h: cells.get((r, c)) for c, h in enumerate(head, 1)} for r in range(2, rows + 1)]).encode()
+
+
+# --- acceptance fixtures (tests/test_acceptance.py, docs/EXCEL_UNDERSTANDING.md section 8) ------------
+ZEN_SIZES = ['S', 'M', 'L', 'XL']
+
+
+def zen_kids_po(buyer='ZEN KIDS', style='ZK-1001', description='BABY ROMPER', po='ZK/PO/7781', ship=datetime(2027, 1, 15),
+                season='SS-27', lines=(('NAVY', '', (10, 20, 30, 40)), ('GREY', 'repeat style', (5, 5, 5, 5))),
+                title='ZEN KIDS LTD', ship_label='Ship Date'):
+    """A buyer PO no built-in detector knows: 'label | value' rows in A:B (A4:B9) and a colour x size
+    matrix (header row 11: Colour, Remark, S..XL, Total). Nothing in the file says pieces or packs."""
+    wb = Workbook(); ws = wb.active; ws.title = 'PO'
+    ws['A1'], ws['A2'] = title, 'PURCHASE ORDER'
+    for r, (label, value) in enumerate([('Customer', buyer), ('Article No', style), ('Description', description),
+                                        ('PO No', po), (ship_label, ship), ('Season', season)], start=4):
+        ws.cell(r, 1, label); ws.cell(r, 2, value)
+    for c, h in enumerate(['Colour', 'Remark', *ZEN_SIZES, 'Total'], 1):
+        ws.cell(11, c, h)
+    for r, (colour, remark, qty) in enumerate(lines, start=12):
+        ws.cell(r, 1, colour)
+        if remark:
+            ws.cell(r, 2, remark)
+        for c, q in enumerate(qty, 3):
+            ws.cell(r, c, q)
+        ws.cell(r, 7, sum(qty))
+    return save(wb)
+
+
+def blue_bay_po():
+    """Another buyer's PO that looks like ZEN KIDS at a glance, but its labels are moved and renamed:
+    PO/date block on the left, Brand/Style on the right, US 'Color', kids sizes in years."""
+    wb = Workbook(); ws = wb.active; ws.title = 'PO'
+    ws['A1'], ws['A2'] = 'BLUE BAY LTD', 'PURCHASE ORDER'
+    ws['A4'], ws['B4'] = 'Purchase Order No', 'BB/PO/0042'
+    ws['A5'], ws['B5'] = 'Ex-Factory Date', datetime(2027, 4, 2)
+    ws['A6'], ws['B6'] = 'Season', 'HS-27'
+    ws['D4'], ws['E4'] = 'Brand', 'BLUE BAY'
+    ws['D5'], ws['E5'] = 'Style No', 'BB-3300'
+    ws['D6'], ws['E6'] = 'Description', 'GIRLS SUNDRESS'
+    for c, h in enumerate(['Color', '2Y', '3Y', '4Y', '5Y', 'Total'], 1):
+        ws.cell(9, c, h)
+    for r, (colour, qty) in enumerate([('TEAL', (8, 12, 16, 20)), ('CORAL', (4, 6, 8, 10))], start=10):
+        ws.cell(r, 1, colour)
+        for c, q in enumerate(qty, 2):
+            ws.cell(r, c, q)
+        ws.cell(r, 6, sum(qty))
+    return save(wb)
+
+
+def flat_qty_orders(qty_header='Qty'):
+    """Flat buyer sheet 'Style | Colour | Size | <qty_header>' with 500-ish quantities (total 2500)."""
+    wb = Workbook(); ws = wb.active; ws.title = 'Orders'
+    ws.append(['Style', 'Colour', 'Size', qty_header])
+    for row in [('FL-500', 'RED', 'S', 500), ('FL-500', 'RED', 'M', 520), ('FL-500', 'RED', 'L', 480),
+                ('FL-500', 'BLUE', 'S', 510), ('FL-500', 'BLUE', 'M', 490)]:
+        ws.append(row)
+    return save(wb)
+
+
+def wrong_mapping_po():
+    """A PO with a retailer name 'NEXT' (H3) in the date block and a free-text Remarks column (D) beside
+    the quantities (C): the cells a careless mapper, person or AI, picks for Ship date and Quantity."""
+    wb = Workbook(); ws = wb.active; ws.title = 'PO'
+    for r, (a, b, g, h) in enumerate([('Customer', 'ACME KIDS', 'Ship Date', datetime(2027, 2, 1)),
+                                      ('Style No', 'AC-77', 'Season', 'AW-27'),
+                                      ('PO No', 'AC/PO/31', 'Retailer', 'NEXT')], start=1):
+        ws.cell(r, 1, a); ws.cell(r, 2, b); ws.cell(r, 7, g); ws.cell(r, 8, h)
+    ws.append([])
+    ws.append(['Colour', 'Size', 'Qty', 'Remarks'])
+    for row in [('NAVY', 'S', 120, 'urgent'), ('NAVY', 'M', 140, 'repeat'), ('GREY', 'S', 110, 'new shade')]:
+        ws.append(row)
+    return save(wb)
