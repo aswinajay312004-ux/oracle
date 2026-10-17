@@ -485,7 +485,16 @@ def test_powershell_scripts_are_ascii_and_windows_powershell_51_safe(name):
         assert token not in code, f'{token} needs PowerShell 7'
 
 
-@pytest.mark.skipif(not POWERSHELL, reason='PowerShell is not installed')
+@pytest.mark.parametrize('path', ROOT_PS, ids=lambda p: p.name)
+def test_laptop_powershell_scripts_are_ascii_and_windows_powershell_51_safe(path):
+    text = path.read_text(encoding='utf-8')
+    assert text.isascii(), 'Windows PowerShell 5.1 reads a script without a BOM as ANSI'
+    code = '\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('#'))
+    for token in ('??', '?.', '&&', '||', '-Parallel'):
+        assert token not in code, f'{token} needs PowerShell 7'
+
+
+@needs_ps
 def test_powershell_scripts_parse(tmp_path):
     checker = tmp_path / 'parse.ps1'
     checker.write_text('''$bad = 0
@@ -496,7 +505,7 @@ foreach ($f in $args) {
 }
 exit $bad
 ''', encoding='ascii')
-    files = [str(DEPLOY / n) for n in PS_SCRIPTS]
+    files = [str(DEPLOY / n) for n in PS_SCRIPTS] + [str(p) for p in ROOT_PS]
     r = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(checker), *files],
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -518,3 +527,643 @@ def test_scripts_pin_the_winsw_build_and_the_runbook_covers_operations():
     for script in re.findall(r'[\w-]+\.ps1', runbook):
         assert (DEPLOY / script).exists() or (ROOT / script).exists() or (ROOT / 'scripts' / script).exists(), script
     assert not re.search(r'(ORACLE_PASSWORD|POPPYS_ORACLE_PASSWORD)\s*[=:]\s*["\']?[A-Za-z0-9]', runbook)
+
+
+# --- review findings: database versions, restore safety, audit key and anchor --------------------------------------------------
+def app_data(data, entries=3):
+    """A real POPPYS AI data folder made by the app's own code (backend/local_store.py, current schema): the database
+    with a keyed audit history, data/audit.key and data/audit.anchor. Run in a separate Python, so this test module's
+    imports never point the app at a temporary folder."""
+    code = ('import sys\nfrom backend import local_store as s\ns.init()\n'
+            'for i in range(int(sys.argv[1])):\n    s.audit("admin", "test_event", "t%d" % i, n=i)\n')
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith('POPPYS_')}
+    env['POPPYS_DATA_DIR'] = str(data)
+    data.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run([sys.executable, '-c', code, str(entries)], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return data
+
+
+def fake_release(tmp_path, schema, name='release-old'):
+    release = tmp_path / name
+    (release / 'backend').mkdir(parents=True)
+    (release / 'backend' / 'local_store.py').write_text(f'SCHEMA_VERSION = {schema}\n', encoding='utf-8')
+    return release
+
+
+def set_user_version(db, n):
+    with closing(sqlite3.connect(db)) as c:
+        c.execute(f'PRAGMA user_version={int(n)}')
+        c.commit()
+
+
+def test_app_schema_version_is_read_from_the_source_without_importing_it(tmp_path):
+    from backend import local_store
+    assert bk.app_schema_version(ROOT) == local_store.SCHEMA_VERSION
+
+    def app_with(text, name):
+        root = tmp_path / name
+        (root / 'backend').mkdir(parents=True)
+        if text is not None:
+            (root / 'backend' / 'local_store.py').write_text(text, encoding='utf-8')
+        return root
+    assert bk.app_schema_version(app_with('SCHEMA_VERSION = 7\n', 'plain')) == 7
+    assert bk.app_schema_version(app_with('MIGRATIONS = ((1, a), (2, b), (5, c))\nSCHEMA_VERSION = MIGRATIONS[-1][0]\n', 'list')) == 5
+    assert bk.app_schema_version(app_with('def init():\n    pass\n', 'before-migrations')) == 0
+    assert bk.app_schema_version(app_with(None, 'none')) is None
+    with pytest.raises(bk.Problem):
+        bk.app_schema_version(app_with('SCHEMA_VERSION = compute()\n', 'unknown'))
+
+
+def test_db_info_reads_the_database_only_and_says_when_a_release_cannot_open_it(app, tmp_path, capsys):
+    release = fake_release(tmp_path, 3)
+    set_user_version(app.db, 3)
+    assert run('--db-info', '--data-dir', app.data, '--app-root', release, '--log', 'none') == bk.OK
+    set_user_version(app.db, 4)                                   # what a newer release's migration does
+    before = sha(app.db), app.db.stat().st_mtime_ns
+    capsys.readouterr()
+    assert run('--db-info', '--data-dir', app.data, '--app-root', release, '--log', 'none') == bk.REFUSED
+    out = capsys.readouterr().out
+    assert 'Schema version: 4' in out and 'knows schema 3' in out and '2 users, 60 drafts, 120 audit' in out
+    assert (sha(app.db), app.db.stat().st_mtime_ns) == before, 'read-only: the live database is not touched'
+    assert run('--db-info', '--data-dir', tmp_path / 'nothing', '--log', 'none') == bk.USAGE
+
+
+def test_restore_refuses_a_backup_from_a_newer_schema_unless_allowed(app, tmp_path, capsys):
+    release = fake_release(tmp_path, 3)
+    set_user_version(app.db, 4)
+    assert backup(app) == bk.OK
+    z = only_zip(app.dest)
+    live = tmp_path / 'live'
+    live.mkdir()
+    shutil.copy(app.db, live / 'poppys.sqlite3')
+    set_user_version(live / 'poppys.sqlite3', 3)
+    before = sha(live / 'poppys.sqlite3')
+    capsys.readouterr()
+    assert run('--restore', z, '--to', live, '--force', '--port', 0, '--app-root', release, '--log', 'none') == bk.REFUSED
+    out = capsys.readouterr().out
+    assert 'newer POPPYS AI (database schema 4)' in out and 'knows schema 3' in out and '--allow-newer-schema' in out
+    assert sha(live / 'poppys.sqlite3') == before and not list(live.glob('*.before-restore-*')), 'nothing was changed'
+    assert run('--restore', z, '--to', live, '--force', '--port', 0, '--app-root', release, '--log', 'none', '--allow-newer-schema') == bk.OK
+    assert 'WARNING' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('fail_on', ['placing the restored database', 'moving the journal aside'])
+def test_a_restore_that_fails_half_way_puts_every_file_back(app, monkeypatch, capsys, fail_on):
+    assert backup(app) == bk.OK
+    z = only_zip(app.dest)
+    with closing(sqlite3.connect(app.db)) as c:
+        c.execute("INSERT INTO users VALUES ('later', 'viewer')")
+        c.commit()
+    (app.data / 'poppys.sqlite3-journal').write_bytes(b'')       # moved aside right after the database
+    before = {p.name: sha(p) for p in app.data.iterdir() if p.is_file()}
+    real = os.replace
+
+    def flaky(src, dst):
+        src, dst = Path(src), Path(dst)
+        if fail_on.startswith('placing') and '.partial-restore-' in str(src) and dst.name == 'poppys.sqlite3':
+            raise PermissionError(13, 'The process cannot access the file because it is being used by another process', str(dst))
+        if fail_on.startswith('moving') and src.name == 'poppys.sqlite3-journal' and '.before-restore-' in dst.name:
+            raise PermissionError(13, 'The process cannot access the file because it is being used by another process', str(src))
+        return real(src, dst)
+    monkeypatch.setattr(bk.os, 'replace', flaky)
+    code = run('--restore', z, '--to', app.data, '--force', '--port', 0, '--log', 'none')
+    monkeypatch.undo()
+    out = capsys.readouterr().out
+    assert code == (bk.FAILED if fail_on.startswith('placing') else bk.REFUSED), out
+    assert 'Nothing was changed' in out and 'put back' in out
+    assert {p.name: sha(p) for p in app.data.iterdir() if p.is_file()} == before, 'every file is back, unchanged'
+    assert not [p for p in app.data.iterdir() if '.before-restore-' in p.name or p.name.startswith('.partial-restore')]
+    assert not (app.data / 'config-from-backup').exists(), 'a folder the restore created is removed again'
+    with closing(sqlite3.connect(app.db)) as c:
+        assert c.execute('SELECT count(*) FROM users').fetchone()[0] == 3
+
+
+def test_rollback_never_starts_the_service_without_its_database():
+    text = (DEPLOY / 'rollback.ps1').read_text(encoding='utf-8')
+    i = text.index("$ToolsBackupPy, '--restore'")
+    failure = text[i:text.index("Write-Step \"4. Switching to $To\"")]
+    assert failure.index('Test-Path -LiteralPath $LiveDb') < failure.index('Start-AppService'), 'checked before the restart'
+    assert "'start=', 'demand'" in failure, 'not even at the next Windows start'
+    assert 'The database was not changed' not in text
+
+
+def test_rollback_checks_the_database_version_and_upgrade_hands_over_the_pre_upgrade_backup():
+    rb = (DEPLOY / 'rollback.ps1').read_text(encoding='utf-8')
+    assert "'--db-info', '--data-dir', $DataDir, '--app-root', $target" in rb
+    assert "'--restore', $RestoreDatabase, '--to', $DataDir, '--force',\n      '--app-root', $target" in rb, 'the restore checks the version too'
+    main = rb[rb.index('$ToolsBackupPy = Resolve-RealPath'):]
+    assert main.index('Test-DatabaseFit') < main.index('Stop-Service -Name $ServiceName'), 'a refusal costs no downtime'
+    assert '$RestoreDatabase = $PreUpgradeBackup' in main and 'Get-NewerDatabaseText' in main
+    assert main.index("Write-Step \"2. Checking") < main.index('Set-Junction $CurrentLink $target')
+    up = (DEPLOY / 'upgrade.ps1').read_text(encoding='utf-8')
+    auto = up[up.index('rolling back to $oldVersion automatically'):]
+    assert 'PreUpgradeBackup = $backupZip.FullName' in auto
+    runbook = (ROOT / 'docs' / 'RUNBOOK.md').read_text(encoding='utf-8')
+    section = runbook[runbook.index('## 7. Rollback'):runbook.index('## 8.')]
+    assert 'The database is not changed. That is right in nearly every case' not in section
+    assert 'newer database' in section and '-RestoreDatabase' in section
+
+
+def test_pre_upgrade_backups_are_never_pruned_by_the_upgrade(app):
+    pre = app.dest / 'pre-upgrade'
+    first = dt.datetime(2026, 10, 17, 10, 0)
+    for hours in (0, 3):                                          # a failed attempt in the morning, a second one later
+        bk.make_backup(app.data, pre, app.root, label='pre-upgrade-0.9.0', prune_old=False, now=first + dt.timedelta(hours=hours))
+    assert len(list(pre.glob('poppys-backup-20261017-*-pre-upgrade-0.9.0.zip'))) == 2
+    up = (DEPLOY / 'upgrade.ps1').read_text(encoding='utf-8')
+    call = re.search(r'\$code = Invoke-NativeTimeout \$python @\((.*?)\) \(\$BackupMinutes \* 60\)', up, re.S).group(1)
+    assert "'--dest', $preDir" in call and "'--no-prune'" in call
+
+
+def test_backup_finishes_while_the_app_writes_continuously(app):
+    """A step-wise copy (backup(pages=1024)) starts again after every write by another connection: with the app writing
+    every few milliseconds it never finished. The one-step copy does, in about a second."""
+    with closing(sqlite3.connect(app.db)) as c:
+        c.execute('CREATE TABLE filler(id INTEGER PRIMARY KEY, v BLOB)')
+        c.executemany('INSERT INTO filler(v) VALUES (?)', [(os.urandom(2000),) for _ in range(3000)])
+        c.commit()
+    writer = subprocess.Popen([sys.executable, '-c', 'import os, sqlite3, sys, time\nc = sqlite3.connect(sys.argv[1], timeout=20)\n'
+                               'while True:\n    with c:\n        c.execute("UPDATE filler SET v=? WHERE id=1", (os.urandom(2000),))\n'
+                               '    time.sleep(0.005)\n', str(app.db)])
+    try:
+        time.sleep(0.3)
+        r = subprocess.run([sys.executable, str(ROOT / 'scripts' / 'backup.py'), '--data-dir', str(app.data), '--app-root', str(app.root),
+                            '--dest', str(app.dest), '--log', 'none', '--no-prune'], capture_output=True, text=True, timeout=60)
+    finally:
+        writer.kill()
+        writer.wait()
+    assert r.returncode == 0, r.stdout + r.stderr
+    up = (DEPLOY / 'upgrade.ps1').read_text(encoding='utf-8')
+    assert "'taskkill.exe' @('/PID', [string]$proc.Id, '/T', '/F')" in up, 'the upgrade stops a backup that runs too long'
+
+
+def test_backup_carries_the_audit_key_and_anchor_and_a_restore_keeps_the_history_provable(tmp_path, capsys):
+    data = app_data(tmp_path / 'data')
+    dest = tmp_path / 'backups'
+    assert run('--data-dir', data, '--dest', dest, '--log', 'none') == bk.OK
+    z = only_zip(dest)
+    with zipfile.ZipFile(z) as f:
+        manifest = json.loads(f.read('manifest.json'))
+        for name in bk.AUDIT_MEMBERS:
+            body = f.read(name)
+            assert body == (data / name.split('/')[1]).read_bytes()
+            assert manifest['members'][name] == {'sha256': hashlib.sha256(body).hexdigest(), 'size': len(body)}
+        assert not [n for n in f.namelist() if '.env' in n or 'secret' in n]
+    capsys.readouterr()
+    assert run('--verify', z, '--log', 'none') == bk.OK
+    assert 'audit key and anchor ..................... ok' in capsys.readouterr().out
+    fresh = tmp_path / 'restored'
+    assert run('--restore', z, '--to', fresh, '--log', 'none') == bk.OK
+    assert 'Audit history of the restored data: ok (3 entries' in capsys.readouterr().out
+    assert bk.check_audit_chain(ROOT, fresh)['ok'] is True
+
+
+def test_restore_force_brings_back_the_anchor_of_the_restored_database(tmp_path):
+    data = app_data(tmp_path / 'data', entries=2)
+    dest = tmp_path / 'backups'
+    assert run('--data-dir', data, '--dest', dest, '--log', 'none') == bk.OK
+    app_data(data, entries=3)                                     # later work: the live anchor now names entry 5
+    assert bk.check_audit_chain(ROOT, data)['last_id'] == 5
+    assert run('--restore', only_zip(dest), '--to', data, '--force', '--port', 0, '--log', 'none') == bk.OK
+    result = bk.check_audit_chain(ROOT, data)
+    assert result['ok'] is True and result['last_id'] == 2, f'the anchor came back with its database: {result}'
+    assert list(data.glob('audit.anchor.before-restore-*')) and list(data.glob('audit.key.before-restore-*')), 'moved aside, not deleted'
+
+
+def without_member(z, member):
+    """The zip as an older backup.py wrote it: without `member` and its manifest entry."""
+    def change(name, body):
+        if name == member:
+            return None
+        if name == 'manifest.json':
+            manifest = json.loads(body)
+            manifest['members'].pop(member)
+            return json.dumps(manifest).encode()
+        return body
+    rebuild(z, change)
+    z.with_name(z.name + '.sha256').unlink(missing_ok=True)
+
+
+def test_a_backup_without_the_audit_key_is_flagged(tmp_path, capsys):
+    data = app_data(tmp_path / 'data')
+    dest = tmp_path / 'backups'
+    assert run('--data-dir', data, '--dest', dest, '--log', 'none') == bk.OK
+    z = only_zip(dest)
+    without_member(z, 'data/audit.key')
+    capsys.readouterr()
+    assert run('--verify', z, '--log', 'none') == bk.OK, 'the data itself is complete'
+    assert 'WARNING: this backup has no audit key (audit.key)' in capsys.readouterr().out
+    assert run('--restore', z, '--to', tmp_path / 'fresh', '--log', 'none') == bk.AUDIT_UNPROVEN
+    out = capsys.readouterr().out
+    assert 'RESTORED, but the audit history cannot be proven untouched' in out and 'audit key file' in out
+    assert run('--drill', z, '--log', 'none') == bk.FAILED, 'a drill must prove the audit history'
+    assert bk.looks_secret('data/server.key') and bk.looks_secret('config/audit.key') and not bk.looks_secret('data/audit.key')
+
+
+def test_an_older_backup_without_an_anchor_gets_one_from_the_restored_database(tmp_path, capsys):
+    data = app_data(tmp_path / 'data')
+    dest = tmp_path / 'backups'
+    assert run('--data-dir', data, '--dest', dest, '--log', 'none') == bk.OK
+    z = only_zip(dest)
+    without_member(z, 'data/audit.anchor')
+    fresh = tmp_path / 'fresh'
+    capsys.readouterr()
+    assert run('--restore', z, '--to', fresh, '--log', 'none') == bk.OK
+    assert 'a new one was written from the restored database' in capsys.readouterr().out
+    assert json.loads((fresh / 'audit.anchor').read_text(encoding='utf-8'))['id'] == 3
+
+
+def test_drill_proves_the_audit_history_and_fails_on_a_wrong_key(tmp_path, capsys):
+    data = app_data(tmp_path / 'data')
+    dest = tmp_path / 'backups'
+    assert run('--data-dir', data, '--dest', dest, '--log', 'none') == bk.OK
+    z = only_zip(dest)
+    capsys.readouterr()
+    assert run('--drill', z, '--log', 'none') == bk.OK
+    assert 'Audit history of the restored data: ok' in capsys.readouterr().out
+    other = secrets.token_hex(32).encode()
+
+    def change(name, body):
+        if name == 'data/audit.key':
+            return other
+        if name == 'manifest.json':
+            manifest = json.loads(body)
+            manifest['members']['data/audit.key'] = {'sha256': hashlib.sha256(other).hexdigest(), 'size': len(other)}
+            return json.dumps(manifest).encode()
+        return body
+    rebuild(z, change)
+    z.with_name(z.name + '.sha256').unlink()
+    assert run('--drill', z, '--log', 'none') == bk.FAILED
+    assert 'rewritten' in capsys.readouterr().out
+
+
+# --- PowerShell functions, taken out of the scripts with the PowerShell parser -------------------------------------------------
+def ps_run(tmp_path, script, functions, body, env=None, timeout=120):
+    """Define `functions` from `script` (parsed, the script itself is not run) and run `body`; returns its output.
+    Inputs travel through environment variables, never through command-line quoting."""
+    runner = tmp_path / f'ps-run-{len(list(tmp_path.glob("ps-run-*.ps1")))}.ps1'
+    names = ', '.join(f"'{n}'" for n in functions)
+    runner.write_text("$ErrorActionPreference = 'Stop'\n$tokens = $null; $errors = $null\n"
+                      '$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:PS_SCRIPT, [ref]$tokens, [ref]$errors)\n'
+                      f'foreach ($name in @({names})) {{\n'
+                      '  $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)\n'
+                      '  if (-not $fn) { throw "function $name is missing" }\n'
+                      '  . ([scriptblock]::Create($fn.Extent.Text))\n}\n' + body + '\n', encoding='ascii')
+    full = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    full.update(env or {})
+    full['PS_SCRIPT'] = str(script)
+    r = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(runner)],
+                       capture_output=True, text=True, timeout=timeout, env=full)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return r.stdout
+
+
+def argv_split(line):
+    """Split a command line the way python.exe builds sys.argv on Windows (the Microsoft C runtime rules)."""
+    args, cur, i, quoted, have = [], [], 0, False, False
+    while i < len(line):
+        c = line[i]
+        if c == '\\':
+            j = i
+            while j < len(line) and line[j] == '\\':
+                j += 1
+            n = j - i
+            if j < len(line) and line[j] == '"':
+                cur.append('\\' * (n // 2))
+                if n % 2:
+                    cur.append('"')
+                    j += 1
+            else:
+                cur.append('\\' * n)
+            i, have = j, True
+        elif c == '"':
+            if quoted and i + 1 < len(line) and line[i + 1] == '"':
+                cur.append('"')
+                i += 2
+            else:
+                quoted, have, i = not quoted, True, i + 1
+        elif c in ' \t' and not quoted:
+            if have:
+                args.append(''.join(cur))
+                cur, have = [], False
+            i += 1
+        else:
+            cur.append(c)
+            have, i = True, i + 1
+    if have:
+        args.append(''.join(cur))
+    return args
+
+
+ARG_VALUES = ['--data-dir', 'C:\\ProgramData\\PoppysAI\\data', '--copy-to', 'E:\\', 'D:\\Poppys Backups\\', 'x"y', 'C:\\a b\\c"d\\', '',
+              'D:\\A&B', '100%', '--include-uploads']
+
+
+@needs_ps
+@pytest.mark.parametrize('script,function', [('backup-task.ps1', 'Join-CommandLine'), ('upgrade.ps1', None)])
+def test_command_lines_survive_windows_argument_splitting(tmp_path, script, function):
+    # Before the fix, -SecondCopy E:\ was written as --copy-to "E:\" and Python read E:" plus everything after it.
+    assert argv_split('--copy-to "E:\\" --include-uploads') == ['--copy-to', 'E:" --include-uploads']
+    join = (f'{function} $values' if function else "(@($values | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join ' ')")
+    out = ps_run(tmp_path, DEPLOY / script, ['ConvertTo-CommandLineArgument'] + ([function] if function else []),
+                 f'$values = @($env:PS_VALUES | ConvertFrom-Json)\nWrite-Output ({join})', env={'PS_VALUES': json.dumps(ARG_VALUES)})
+    line = out.rstrip('\r\n')
+    assert argv_split(line) == ARG_VALUES, line
+    assert ' E:\\ ' in line, 'a drive root needs no quotes at all'
+
+
+@needs_ps
+def test_backup_task_refresh_reads_the_old_second_copy_folder(tmp_path):
+    cases = ['-E -s -X utf8 "C:\\p\\backup.py" --dest "C:\\d" --copy-to "E:\\" --include-uploads',   # written before the fix
+             '--dest C:\\d --copy-to E:\\ --include-uploads', '--copy-to "D:\\Poppys Backups\\\\"', '--dest C:\\d']
+    out = ps_run(tmp_path, DEPLOY / 'backup-task.ps1', ['Get-CopyToOption'],
+                 "foreach ($a in @($env:PS_CASES | ConvertFrom-Json)) { Write-Output ('[' + (Get-CopyToOption $a) + ']') }",
+                 env={'PS_CASES': json.dumps(cases)})
+    assert out.split() == ['[E:\\]', '[E:\\]', '[D:\\Poppys', 'Backups\\]', '[]']
+
+
+@needs_ps
+def test_nightly_task_picks_the_active_releases_python_when_it_runs(tmp_path):
+    wrapper = tmp_path / 'nightly-backup.cmd'
+    ps_run(tmp_path, DEPLOY / 'backup-task.ps1', ['Write-BackupWrapper'], 'Write-BackupWrapper $env:PS_OUT $env:PS_APP',
+           env={'PS_OUT': str(wrapper), 'PS_APP': 'C:\\ProgramData\\PoppysAI\\current'})
+    raw = wrapper.read_bytes()
+    assert raw.isascii() and raw.endswith(b'\r\n') and b'\n' not in raw.replace(b'\r\n', b''), 'cmd.exe wants CRLF lines'
+    text = raw.decode('ascii')
+    assert 'set "APP=C:\\ProgramData\\PoppysAI\\current"' in text
+    assert text.index('%APP%\\python\\python.exe') < text.index('%APP%\\.venv\\Scripts\\python.exe'), 'the same choice as the service'
+    assert '"%PY%" -E -s -X utf8 "%APP%\\scripts\\backup.py" %*' in text and text.rstrip().endswith('exit /b %ERRORLEVEL%')
+    task = (DEPLOY / 'backup-task.ps1').read_text(encoding='utf-8')
+    assert '$program = Join-Path $InstallRoot $WrapperName' in task and 'New-ScheduledTaskAction -Execute $program -Argument $argString' in task
+    up = (DEPLOY / 'upgrade.ps1').read_text(encoding='utf-8')
+    assert "Invoke-Helper 'backup-task.ps1' @{ InstallRoot = $InstallRoot; Refresh = $true }" in up
+
+
+@needs_ps
+def test_rollback_restores_the_restart_settings_of_poppysai_xml(tmp_path):
+    out = ps_run(tmp_path, DEPLOY / 'rollback.ps1', ['ConvertTo-Millisecond', 'Get-RecoverySetting', 'Write-Note'],
+                 '$s = Get-RecoverySetting $env:PS_XML\nWrite-Output ("{0}|{1}" -f $s.Reset, $s.Actions)', env={'PS_XML': str(DEPLOY / 'PoppysAI.xml')})
+    assert out.strip().splitlines()[-1] == '3600|restart/10000/restart/30000/restart/60000'
+    rb = (DEPLOY / 'rollback.ps1').read_text(encoding='utf-8')
+    assert "@('failure', $ServiceName, 'reset=', '0', 'actions=', '\"\"')" in rb
+    main = rb[rb.index('$ToolsBackupPy = Resolve-RealPath'):]
+    assert main.index('Suspend-ServiceRecovery') < main.index('Stop-Service -Name $ServiceName -Force') < main.index('Set-Junction')
+    start = re.search(r'function Start-AppService \{(.*?)\n\}', rb, re.S).group(1)
+    assert start.index('Resume-ServiceRecovery') < start.index('Start-Service')
+    assert re.search(r'function Stop-Switch\(.*?\{\s*Resume-ServiceRecovery', rb, re.S), 'every failure turns it on again'
+
+
+def force_remove(func, path, exc):
+    os.chmod(path, 0o700)            # git marks pack files read-only on Windows
+    func(path)
+
+
+@needs_ps
+@pytest.mark.skipif(not GIT, reason='git is not installed')
+def test_release_version_of_a_git_checkout_names_the_commit(tmp_path):
+    repo = tmp_path / 'checkout'
+    (repo / 'backend').mkdir(parents=True)
+    (repo / 'VERSION').write_text('0.9.0\n', encoding='ascii')
+    (repo / 'backend' / 'main.py').write_text('x = 1\n', encoding='ascii')
+    genv = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+
+    def git(*a):
+        return subprocess.run([GIT, '-c', 'user.name=t', '-c', 'user.email=t@example.com', *a], cwd=repo, env=genv, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def version():
+        return ps_run(tmp_path, DEPLOY / 'install-service.ps1', ['Get-ContentHash', 'Get-GitOutput', 'Get-ReleaseVersion', 'Write-Note'],
+                      'Write-Output (Get-ReleaseVersion $env:PS_DIR)', env={'PS_DIR': str(repo)}).strip().splitlines()[-1]
+    git('init', '-q')
+    git('add', '-A')
+    git('commit', '-q', '-m', 'one')
+    first = git('rev-parse', '--short=7', 'HEAD')
+    assert version() == f'0.9.0-{first}'
+    (repo / 'backend' / 'main.py').write_text('x = 2\n', encoding='ascii')
+    assert re.fullmatch(rf'0\.9\.0-{first}-dirty-[0-9a-f]{{8}}', version()), 'uncommitted changes are a release of their own'
+    git('commit', '-q', '-am', 'two')
+    assert version() == f"0.9.0-{git('rev-parse', '--short=7', 'HEAD')}", 'a git pull is a new release, with the same VERSION'
+    shutil.rmtree(repo / '.git', onexc=force_remove)
+    assert version() == '0.9.0', 'a release zip (no .git) keeps its VERSION'
+
+
+@needs_ps
+@pytest.mark.skipif(not GIT, reason='git is not installed')
+def test_release_copy_of_docs_takes_only_the_files_git_tracks(tmp_path):
+    repo = tmp_path / 'checkout'
+    (repo / 'docs' / 'sub').mkdir(parents=True)
+    (repo / 'docs' / 'workbook_analysis').mkdir()
+    (repo / '.gitignore').write_text('docs/workbook_analysis/\ndocs/live_sample_records.txt\n', encoding='ascii')
+    (repo / 'docs' / 'RUNBOOK.md').write_text('# runbook\n', encoding='ascii')
+    (repo / 'docs' / 'sub' / 'live_schema_columns.json').write_text('{}\n', encoding='ascii')
+    (repo / 'docs' / 'workbook_analysis' / 'client order.txt').write_text('buyer prices\n', encoding='ascii')
+    (repo / 'docs' / 'live_sample_records.txt').write_text('real rows\n', encoding='ascii')
+    genv = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    for args in (('init', '-q'), ('add', '-A'), ('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'docs')):
+        subprocess.run([GIT, *args], cwd=repo, env=genv, check=True, capture_output=True)
+    release = tmp_path / 'release'
+    (release / 'docs').mkdir(parents=True)
+    (release / 'docs' / 'stale.md').write_text('from an earlier copy\n', encoding='ascii')
+    ps_run(tmp_path, DEPLOY / 'install-service.ps1', ['Copy-Doc', 'Get-GitOutput', 'Write-Note', 'Invoke-Native'],
+           'Copy-Doc $env:PS_FROM $env:PS_TO', env={'PS_FROM': str(repo), 'PS_TO': str(release)})
+    assert sorted(p.relative_to(release).as_posix() for p in release.rglob('*') if p.is_file()) == ['docs/RUNBOOK.md', 'docs/sub/live_schema_columns.json']
+    install = (DEPLOY / 'install-service.ps1').read_text(encoding='utf-8')
+    parts = re.search(r"function Copy-Release.*?foreach \(\$part in @\(([^)]*)\)\)", install, re.S).group(1)
+    assert "'docs'" not in parts and 'Copy-Doc $From $To' in install
+
+
+# --- setup.ps1: every step's exit code is checked -------------------------------------------------------------------------------------
+FAKE_PYTHON = '''#!/bin/sh
+echo "$*" >> "$SETUP_LOG"
+if [ -n "$FAIL_ON" ]; then
+  case "$*" in *"$FAIL_ON"*) echo "stand-in failure for: $*" >&2; exit 1 ;; esac
+fi
+if [ "$1" = "-c" ]; then echo 3.13; fi
+exit 0
+'''
+SETUP_CASES = {   # case: (FAIL_ON, message, last program that ran)
+    'no-py': (None, 'The Python launcher (py) was not found', None),
+    'pip': ('pip install --upgrade', 'Updating pip failed', 'pip install --upgrade'),
+    'docker-missing': ('', 'Docker was not found', 'pip install -r'),
+    'bootstrap': ('bootstrap_local.py', 'Creating the POPPYS_APP account failed', 'bootstrap_local.py'),
+    'grant': ('grant_bom_tables.py', 'Granting the Oracle permissions failed', 'grant_bom_tables.py'),
+    'check': ('check_oracle.py', 'The Oracle check found a problem', 'check_oracle.py'),
+    'ok': ('', 'Setup finished. Next: .\\.venv\\Scripts\\python.exe scripts\\discover_schema.py', 'check_oracle.py'),
+}
+
+
+@needs_ps
+@pytest.mark.skipif(os.name == 'nt', reason='the stand-in programs are shell scripts')
+@pytest.mark.parametrize('case', list(SETUP_CASES))
+def test_setup_stops_at_the_first_failing_step(tmp_path, case):
+    fail_on, message, last = SETUP_CASES[case]
+    work = tmp_path / 'repo'
+    work.mkdir()
+    shutil.copy(ROOT / 'setup.ps1', work / 'setup.ps1')
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    log = tmp_path / 'calls.log'
+    log.write_text('')
+    if fail_on is not None:                                       # an existing .venv; 'no-py' has none and no py launcher
+        venv = work / '.venv' / 'Scripts'
+        venv.mkdir(parents=True)
+        (venv / 'python.exe').write_text(FAKE_PYTHON)
+        (venv / 'python.exe').chmod(0o755)
+    if case not in ('no-py', 'docker-missing'):
+        (bin_dir / 'docker').write_text('#!/bin/sh\necho true\n')
+        (bin_dir / 'docker').chmod(0o755)
+    env = {**os.environ, 'PATH': str(bin_dir), 'SETUP_LOG': str(log), 'FAIL_ON': fail_on or ''}
+    r = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(work / 'setup.ps1')],
+                       capture_output=True, text=True, timeout=120, env=env, cwd=work)
+    out = r.stdout + r.stderr
+    assert message in out, out
+    calls = log.read_text().splitlines()
+    if case == 'ok':
+        assert r.returncode == 0 and 'FAILED' not in out
+    else:
+        assert r.returncode == 1 and 'FAILED:' in out and 'Setup finished' not in out, out
+    if last:
+        assert last in calls[-1], calls
+    else:
+        assert calls == []
+
+
+def test_setup_checks_each_program_and_names_the_venv_python():
+    text = (ROOT / 'setup.ps1').read_text(encoding='utf-8')
+    lines = [x.strip() for x in text.splitlines()]
+    for i, line in enumerate(lines):
+        if line.startswith('& '):
+            assert 'LASTEXITCODE' in lines[i + 1], f'no exit-code check after: {line}'
+    assert text.index("Get-Command py") < text.index('& py -3.13'), 'a missing launcher is found before $LASTEXITCODE is read'
+    assert 'Next: python scripts' not in text
+
+
+# --- the test-side guard for real-Oracle tests (tests/conftest.py) --------------------------------------------------------------
+def load_conftest():
+    spec = importlib.util.spec_from_file_location('poppys_conftest', ROOT / 'tests' / 'conftest.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize('dsn,local', [
+    ('127.0.0.1:1521/FREEPDB1', True), ('localhost/FREEPDB1', True), ('//LOCALHOST:1521/X', True), ('[::1]:1521/FREEPDB1', True),
+    ('tcp://127.0.0.1:1521/FREEPDB1?connect_timeout=5', True), ('127.0.0.1:1521,localhost:1522/X', True), ('127.0.0.2:1521/X', True),
+    ('(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=127.0.0.1)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=FREEPDB1)))', True),
+    ('db.example.com:1521/PROD', False), ('10.0.0.5/ORCL', False), ('ORCLPDB', False), ('127.0.0.1:1521,erp-db:1521/X', False),
+    ('(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=erp.example.com)(PORT=1521)))', False), ('[2001:db8::1]:1521/X', False)])
+def test_oracle_write_tests_only_run_against_this_computer(dsn, local):
+    assert (load_conftest().remote_oracle_reason(dsn) is None) == local
+
+
+def test_pytest_refuses_to_start_oracle_tests_against_another_computer():
+    env = {k: v for k, v in os.environ.items()}
+    env.update(POPPYS_TEST_ORACLE='1', POPPYS_ORACLE_DSN='erp-db.example.com:1521/PROD')
+    cmd = [sys.executable, '-m', 'pytest', '-q', '--collect-only', '-p', 'no:cacheprovider', 'tests/test_backup.py']
+    r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    assert r.returncode == 4 and 'erp-db.example.com, not this computer' in r.stdout + r.stderr, r.stdout + r.stderr
+    env['POPPYS_ORACLE_DSN'] = '127.0.0.1:1521/FREEPDB1'                # the CI Oracle job and the laptop's container
+    r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- the remaining Windows-script findings ------------------------------------------------------------------------------------------
+def test_reinstall_asks_which_database_when_the_checkout_one_is_newer():
+    text = (DEPLOY / 'install-service.ps1').read_text(encoding='utf-8')
+    assert "[ValidateSet('Source', 'Installed')][string]$UseDatabase" in text
+    assert text.index('$sourceTime -gt $liveTime') < text.index("Write-Step 'Stopping the running service'"), 'asked before anything stops'
+    question = text[text.index('$sourceTime -gt $liveTime'):text.index("Write-Step 'Stopping the running service'")]
+    assert "'--db-info'" in question and '-UseDatabase Source' in question and '-UseDatabase Installed' in question
+    assert "if ($replacing) { $restoreArgs += '--force' }" in text, 'the service database is moved aside by the restore, not deleted'
+
+
+def test_install_never_copies_over_the_active_release():
+    text = (DEPLOY / 'install-service.ps1').read_text(encoding='utf-8')
+    guard = text[text.index('$repairOnly = $InPlace'):text.index('# Which database')]
+    assert '$ActiveVersion -ieq $Version' in guard and '(Get-ContentHash $Source) -ne (Get-ContentHash $Release)' in guard
+    assert 'Initialize-Release -From $Source -Release $Release -Ver $Version -InPlace $repairOnly' in text
+    staged = text[text.index('if ($StageOnly) {'):]
+    assert staged.index('exit 3') < staged.index('Initialize-Release'), 'upgrade.ps1 staging never touches the active release either'
+
+
+@pytest.mark.parametrize('name', ['install-service.ps1', 'rollback.ps1'])
+def test_settings_copy_is_protected_before_it_reaches_the_release_folder(name):
+    text = (DEPLOY / name).read_text(encoding='utf-8')
+    fn = re.search(r'function Sync-OracleSetting.*?\n\}\n', text, re.S).group(0)
+    assert "Join-Path $ConfigDir ('.env.poppys.staging-'" in fn
+    assert fn.index('Protect-SettingsFile $staged') < fn.index('[System.IO.File]::Move($staged, $copy)')
+    assert 'Copy-Item -LiteralPath $master -Destination $copy' not in fn
+    assert 'Remove-Item -LiteralPath $staged -Force' in fn, 'fail closed: nothing unprotected is left behind'
+
+
+def test_upgrade_failure_prints_the_full_path_of_rollback():
+    up = (DEPLOY / 'upgrade.ps1').read_text(encoding='utf-8')
+    assert "$rollbackScript = Join-Path $newRelease 'deploy\\windows\\rollback.ps1'" in up
+    assert "\"& '$rollbackScript' -To $oldVersion -RestoreDatabase '$($backupZip.FullName)'\"" in up
+
+
+def test_password_rotation_never_shows_the_new_password():
+    runbook = (ROOT / 'docs' / 'RUNBOOK.md').read_text(encoding='utf-8')
+    section = runbook[runbook.index('## 10. Rotate the Oracle password'):runbook.index('## 11.')]
+    assert 'whenever sqlerror exit failure' in section
+    line = next(x for x in section.splitlines() if 'docker exec -i oracle26ai sqlplus' in x)
+    assert line.rstrip().endswith('| Out-Null'), 'SQL*Plus echoes the failing statement, password included'
+    assert '$LASTEXITCODE' in section and 'if ($ok)' in section
+
+
+def test_every_launcher_ignores_proxy_headers():
+    """Every client is 127.0.0.1, which uvicorn trusts for X-Forwarded-For by default: with proxy headers on, any local
+    program could choose the address the sign-in throttle counts."""
+    assert '--no-proxy-headers' in (ROOT / 'start.ps1').read_text(encoding='utf-8')
+    assert '--no-proxy-headers' in ET.parse(DEPLOY / 'PoppysAI.xml').getroot().findtext('arguments').split()
+    assert '--no-proxy-headers' in bk.uvicorn_command(8018)
+    assert 'subprocess.Popen(uvicorn_command(port)' in (ROOT / 'scripts' / 'backup.py').read_text(encoding='utf-8')
+    assert 'proxy_headers=False' in (ROOT / 'tests' / 'demo_server.py').read_text(encoding='utf-8')
+    runbook = (ROOT / 'docs' / 'RUNBOOK.md').read_text(encoding='utf-8')
+    for line in [x for x in runbook.splitlines() if 'uvicorn backend.main:app' in x]:
+        assert '--no-proxy-headers' in line, line
+
+
+def test_readonly_account_settings_go_into_the_service_master_copy(tmp_path, monkeypatch, capsys):
+    sys.path.insert(0, str(ROOT / 'scripts'))
+    try:
+        spec = importlib.util.spec_from_file_location('poppys_create_readonly_user', ROOT / 'scripts' / 'create_readonly_user.py')
+        cru = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cru)
+    finally:
+        sys.path.remove(str(ROOT / 'scripts'))
+    from dotenv import dotenv_values
+    main_line = 'ORACLE_USER=POPPYS_APP\n' + 'ORACLE_PASSWORD' + '=' + secrets.token_hex(8) + '\n'
+    install = tmp_path / 'PoppysAI'
+    (install / 'config').mkdir(parents=True)
+    master, checkout = install / 'config' / '.env.poppys', tmp_path / 'checkout.env.poppys'
+    master.write_text(main_line, encoding='utf-8')
+    checkout.write_text(main_line, encoding='utf-8')
+    monkeypatch.setenv('POPPYS_INSTALL_ROOT', str(install))
+    monkeypatch.setattr(cru, 'CONFIG', checkout)
+    state = {'ro_exists': '0', 'created': []}
+
+    def fake_sqlplus(sql):
+        if sql.startswith('create user'):
+            assert 'ORACLE_RO_PASSWORD' in master.read_text(encoding='utf-8'), 'saved before the account is created'
+            state['created'].append(sql)
+            return ''
+        if "username='POPPYS_RO'" in sql:
+            return state['ro_exists']
+        if "username='POPPYS_APP'" in sql or "table_name='PP_IMPORT_LOG'" in sql:
+            return '1'
+        return 'TABLES=5\nREADONLY=yes' if 'dbms_output' in sql else ''
+    monkeypatch.setattr(cru, 'sqlplus', fake_sqlplus)
+    cru.main()
+    out = capsys.readouterr().out
+    m, c = dotenv_values(master), dotenv_values(checkout)
+    assert m['ORACLE_RO_USER'] == 'POPPYS_RO' and m['ORACLE_RO_PASSWORD'] and m['ORACLE_RO_PASSWORD'] == c['ORACLE_RO_PASSWORD']
+    assert str(master) in out and 'install-service.ps1' in out and m['ORACLE_RO_PASSWORD'] not in out
+    assert len(state['created']) == 1
+    # The account exists and only this folder's copy has its lines (made before the service install): the master gets them.
+    master.write_text(main_line, encoding='utf-8')
+    state['ro_exists'] = '1'
+    cru.main()
+    assert dotenv_values(master)['ORACLE_RO_PASSWORD'] == c['ORACLE_RO_PASSWORD'] and len(state['created']) == 1
+    assert str(master) in capsys.readouterr().out

@@ -186,8 +186,8 @@ def test_validator_rejects_with_reasons_and_keeps_the_rest():
     ok, rejected = matcher.check(sheet, {'fields': {}, 'table': {'type': 'flat', 'header_row': 99, 'columns': {}}})
     assert ok['table'] is None and 'outside the sheet' in rejected[0]['reason']
     zen = sheet_of(zen_kids_po()); bad = deepcopy(ZEN); bad['table']['last_size_col'] = 7     # includes the Total column
-    ok, rejected = matcher.check(zen, bad)
-    assert ok['table'] is not None and not rejected                                            # 4 of 5 headings are sizes (≥ 60 %)
+    ok, rejected = matcher.check(zen, bad)                                                     # 4 of 5 headings are sizes, but
+    assert ok['table'] is None and rejected[0]['cell'] == 'G11' and 'a total or quantity column' in rejected[0]['reason']   # never a total
     bad['table'].update(first_size_col=1, last_size_col=2)
     ok, rejected = matcher.check(zen, bad)
     assert ok['table'] is None and rejected[0]['field'] == 'size' and 'do not look like sizes' in rejected[0]['reason']

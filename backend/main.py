@@ -614,10 +614,15 @@ def master_labels():
 
 
 def _suggestion(parsed, fields):
-    """Matcher proposal for an unknown layout (or a sheet whose saved template was refused). No AI here:
-    uploads stay fast and work offline; the person can ask the local AI from the mapping screen."""
+    """Matcher proposal for an unknown layout: a sheet whose saved template was refused first, then the other sheets
+    no order was read from (a flat sheet 1 read automatically leaves sheet 2's size matrix to map), or None when
+    every sheet with data gave orders. No AI here: uploads stay fast and work offline; the person can ask the local
+    AI from the mapping screen."""
     refused = [r['sheet'] for r in parsed.get('templates_refused') or []]
-    sheets = sorted((s for s in parsed['sheets'] if not s['hidden']), key=lambda s: s['name'] not in refused)
+    read = {workbooks.sheet_of(o) for o in parsed['orders']}
+    sheets = sorted((s for s in parsed['sheets'] if not s['hidden'] and s['name'] not in read), key=lambda s: s['name'] not in refused)
+    if parsed['orders'] and not refused and not any(workbooks.has_data(s) for s in sheets):
+        return None
     masters = master_labels(); first = None
     for sheet in sheets:
         try:
@@ -644,7 +649,7 @@ def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
     for tid in used:
         store.template_used(tid)
     id = uuid.uuid4().hex
-    suggestion = _suggestion(parsed, fields) if not parsed['orders'] or parsed.get('templates_refused') else None
+    suggestion = _suggestion(parsed, fields)
     template = next((dict(id=t['id'], name=t['name'], version=t['version']) for t in store.templates() if t['id'] in used), None)
     draft = dict(id=id, version=1, filename=name, kind=kind, filehash=hashlib.sha256(content).hexdigest(),
                  created_at=datetime.now().astimezone().isoformat(), uploaded_by=user['username'],
@@ -793,11 +798,19 @@ def mapping(id: str, data: Mapping, user=Depends(require('edit'))):
             return _refused(rejected, fields)
         orders = workbooks.apply_template(d['sheets'], sheet, definition, fields)
         workbooks.attach_bom(workbooks.Grid(sheet, fields), orders)
+        found = workbooks.read_checks(sheet, orders, fields)    # hidden data, second dates, Excel errors, reader gaps
         for o in orders:
             _confirm_unit(o, data)
-        d['orders'] = store.identify(_new_order_defaults([workbooks.finish(o) for o in orders]))
+        # This sheet's orders are added or replaced; orders read from the other sheets of the file stay as they are.
+        others = [o for o in d['orders'] if workbooks.sheet_of(o) != sheet['name']]
+        merged, unread = workbooks.finish_orders(d['sheets'], others + _new_order_defaults(orders))
+        d['orders'] = store.identify(merged)
         d['format'] = 'Reviewed layout mapping'; d['version'] += 1; d['plan'] = None; d['template'] = None
-        d['notes'] = []; d['templates_refused'] = []        # the layout question they raised is now answered
+        # The notes about this sheet's layout question are answered now; what the checks found on it, and the other
+        # sheets' notes, stay.
+        kept = [n for n in d.get('notes') or [] if f'“{sheet["name"]}”' not in n and not n.startswith(workbooks.UNREAD)]
+        d['notes'] = list(dict.fromkeys(kept + found + unread))
+        d['templates_refused'] = [r for r in d.get('templates_refused') or [] if r.get('sheet') != sheet['name']]
         if data.save_template:
             name = (data.template_name or '').strip() or f'{d["filename"]} · {sheet["name"]}'
             unit, basis = _decided_unit(d['orders'])

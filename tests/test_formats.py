@@ -1203,9 +1203,10 @@ def test_decimal_comma_files_keep_dot_grouped_numbers_as_text():
     quoted = {c['cell']: c for c in read_one(b'Style,Qty,Price\r\nA,1.500,"12,50"\r\n', 'eu.csv')['cells']}
     assert (quoted['B2']['value'], quoted['B2']['flag']) == ('1.500', 'decimal_comma')    # the file uses decimal commas
     plain = cells_of(read_one(b'Style,Qty,Price\r\nA,1.500,"1,500"\r\n', 'us.csv'))
-    assert (plain['B2'], plain['C2']) == (1.5, 1500)                                       # no decimal commas anywhere
+    assert (plain['B2'], plain['C2']) == ('1.500', 1500)          # no decimal commas anywhere: still 1500 or 1.5? kept as text
     points = cells_of(read_one(b'Style;Qty;Price\r\nA;1.500;12.50\r\nB;3;2.25\r\n', 'pt.csv'))
-    assert points['B2'] == 1.5                                     # semicolons, but the prices use decimal points
+    assert (points['B2'], points['C2']) == ('1.500', 12.5)        # semicolons, decimal points: prices are numbers, 1.500 unclear
+    assert workbooks.number('1.500') == 1.5                       # a consumption or price column still reads it as 1.5
 
 
 def test_csv_rows_padded_with_empty_fields_are_read_quickly():
