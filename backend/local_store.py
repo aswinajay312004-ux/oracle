@@ -151,6 +151,22 @@ def template_used(tid):
         c.execute('UPDATE templates SET uses=uses+1 WHERE id=?', (tid,))
 
 
+def fill_template_unit(tid, unit=None, basis=None):
+    """Remember a unit / quantity basis the template does not know yet; a saved decision is never overwritten.
+    Returns what was learned ({unit?, quantity_basis?}) or {}."""
+    learned = {}
+    with db() as c:
+        row = c.execute('SELECT unit,quantity_basis FROM templates WHERE id=?', (tid,)).fetchone()
+        if not row:
+            return learned
+        known = json.loads(row['unit']) if row['unit'] else {}
+        if unit and not known.get('qty_unit'):
+            c.execute('UPDATE templates SET unit=? WHERE id=?', (json.dumps(unit), tid)); learned['unit'] = unit
+        if basis and not row['quantity_basis']:
+            c.execute('UPDATE templates SET quantity_basis=? WHERE id=?', (basis, tid)); learned['quantity_basis'] = basis
+    return learned
+
+
 def set_template_active(tid, active):
     """Activating one version deactivates the other versions of the same layout (one active version each)."""
     with db() as c:

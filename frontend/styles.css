@@ -591,4 +591,5 @@ details.ex-more > summary { cursor: pointer; font-weight: 600; font-size: 12.5px
 .gzoom { min-width: 42px; text-align: center; font-size: 11.5px; font-weight: 650; color: var(--ink-2); font-variant-numeric: tabular-nums; cursor: default; user-select: none; }
 .gsep { width: 1px; height: 18px; margin: 0 3px; background: var(--line); }
 @media (hover: hover) { .gtools { opacity: .88; transition: opacity .15s; } .gviewport:hover .gtools, .gtools:focus-within { opacity: 1; } }
+@media (pointer: coarse) { .gtools button { width: 36px; height: 36px; } .gzoom { min-width: 38px; } .gtools { right: 8px; bottom: 8px; } }
 @media print { .gtools { display: none; } }

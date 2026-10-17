@@ -302,8 +302,10 @@ export function renderGraph(el, model, opts = {}) {
     else if (k === '-' || k === '_') zoomBy(1 / ZOOM.step);
     else if (k === '0') fit();
     else if (k.startsWith('Arrow') && !tools.contains(e.target)) {
-      // nothing left to move that way: let the page scroll as usual
-      done = panBy(k === 'ArrowLeft' ? s : k === 'ArrowRight' ? -s : 0, k === 'ArrowUp' ? s : k === 'ArrowDown' ? -s : 0);
+      // only along a side the picture overflows, and only if it can still move; otherwise the page scrolls as usual
+      const across = k === 'ArrowLeft' || k === 'ArrowRight', v = live.view;
+      done = (across ? width * v.k > box.w + 0.5 : height * v.k > box.h + 0.5) &&
+        panBy(k === 'ArrowLeft' ? s : k === 'ArrowRight' ? -s : 0, k === 'ArrowUp' ? s : k === 'ArrowDown' ? -s : 0);
     } else done = false;
     if (done) e.preventDefault();
   });

@@ -73,7 +73,16 @@ class Fields:
 
     def __init__(self, items=None):
         items = effective() if items is None else items
-        self._items = {f['key']: dict(f, aliases=tuple(f['aliases'])) for f in items}
+        known = {d['key']: d for d in DEFAULTS}
+        self._items = {}
+        for f in items:
+            base = known.get(f['key'], {})
+            # Field lists may come back from GET /api/fields: fill structural keys from the defaults.
+            g = dict(base, **{k: v for k, v in f.items() if v is not None or k not in base})
+            g.setdefault('where', 'header'); g.setdefault('kind', 'text'); g.setdefault('label', f['key'])
+            g.setdefault('locked', False); g.setdefault('required', g['locked']); g.setdefault('column', g['where'] == 'table')
+            g['aliases'] = tuple(g.get('aliases') or ())
+            self._items[f['key']] = g
         self.keys = tuple(self._items)
         self.header_keys = tuple(k for k, f in self._items.items() if f['where'] == 'header' and f['kind'] != 'unit')
         self.column_keys = tuple(k for k, f in self._items.items() if f['column'])

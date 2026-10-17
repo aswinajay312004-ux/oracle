@@ -32,8 +32,8 @@ class FakeOracle:
     def catalog(self):
         return LiveSnapshot(masters=self.masters, existing_refs=self.refs, committed_hashes=self.hashes)
 
-    def plan(self, conn, orders, filehash, mapping=None):
-        return planner.plan(self.catalog(), orders, filehash, mapping or oracle_store.current_mapping())
+    def plan(self, conn, orders, filehash, mapping=None, required=()):
+        return planner.plan(self.catalog(), orders, filehash, mapping or oracle_store.current_mapping(), required=required)
 
     def read_result(self, cursor, jobid):
         r = self.receipts.get(jobid)

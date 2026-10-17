@@ -292,8 +292,11 @@ def unit_words(value):
 
 
 def strip_units(n):
-    """'qty in pcs' → 'qty': a quantity heading qualified by its unit is still a quantity heading."""
-    return ' '.join(t for t in n.split() if not _UNIT_TOKEN.fullmatch(t) and t not in ('in', 'of'))
+    """'qty in pcs' / 'qty 3 pc pack' → 'qty': a quantity heading qualified by its unit is still a quantity heading."""
+    words = n.split()
+    if not any(_UNIT_TOKEN.fullmatch(t) for t in words):
+        return n
+    return ' '.join(t for t in words if not _UNIT_TOKEN.fullmatch(t) and t not in ('in', 'of', 'per') and not t.isdigit())
 
 
 def unit_evidence(g, table, role=None):
@@ -353,20 +356,32 @@ def set_unit(o, unit):
     o.setdefault('provenance', {})['qty_unit'] = unit['provenance']
     if unit['qty_unit'] == 'PACK' and unit['pieces_per_unit']:
         o['provenance']['pieces_per_unit'] = dict(unit['provenance'], derivation=f'{unit["pieces_per_unit"]} pieces per pack: {unit["provenance"]["evidence"]}')
-    return o
+    return ask_unit(o)
 
 
 def unit_question(o):
-    """Plain question for an undecided unit, quoting what the file says (shown with the unit field)."""
+    """Plain question for an undecided unit, quoting what the file says (shown on the unit field)."""
     p = (o.get('provenance') or {}).get('qty_unit') or {}
+    ev = p.get('evidence') or ''
     if p.get('reason') == 'both':
         return 'The file mentions both pieces and packs — which are these quantities?'
-    if p.get('reason') == 'conflict':
-        ev = p.get('evidence') or 'the file and the saved layout disagree'
-        return ev[0].upper() + ev[1:] + ' — which is right?'
+    if p.get('reason') in ('conflict', 'mismatch') and ev:
+        return ev[0].upper() + ev[1:] + ' — are these quantities pieces or packs?'
     if p.get('said'):
         return f'The file says only “{p["said"]}” — are these pieces or packs?'
     return 'The file does not say whether these quantities are pieces or packs — which are they?'
+
+
+def ask_unit(o):
+    """Keep provenance.qty_unit.question in step with the unit (the planner and review screen show it)."""
+    p = o.setdefault('provenance', {}).get('qty_unit')
+    if o.get('qty_unit'):
+        if isinstance(p, dict):
+            p.pop('question', None)
+    else:
+        p = o['provenance']['qty_unit'] = dict(p or {})
+        p['question'] = unit_question(o)
+    return o
 
 
 def matrix_blocks(g):
@@ -436,10 +451,13 @@ def merch_unit(g, o):
             base, cell=cell, value=pk['pieces'], reason='file', evidence=f'the size table total {total:g} equals QTY(IN PIECES) {pk["pieces"]:g} in {cell}')))
     if pk.get('pieces'):
         ev = f'the size table totals {total:g} but QTY(IN PIECES) says {pk["pieces"]:g}'
-        o['warnings'].append(f'Quantity unit: {ev}. Confirm whether the size quantities are pieces or packs.')
+        set_unit(o, dict(qty_unit='', pieces_per_unit=None, provenance=dict(
+            base, cell=pk['source']['pieces']['cell'], value=pk['pieces'], reason='mismatch', evidence=ev, said=None)))
     else:
-        ev = 'the BOM does not say whether the size quantities are pieces or packs'
-    return set_unit(o, dict(qty_unit='', pieces_per_unit=None, provenance=dict(base, reason='silent', evidence=ev, said=None)))
+        set_unit(o, dict(qty_unit='', pieces_per_unit=None, provenance=dict(
+            base, reason='silent', evidence='the BOM does not say whether the size quantities are pieces or packs', said=None)))
+    o['warnings'].append(unit_question(o))
+    return o
 
 
 def packs(g, o, limit_row):
@@ -698,11 +716,12 @@ def flat_headers(g):
 
 
 AUTO_NOTES = ('Confirm whether these are sample quantities', 'Confirm whether the source quantities', 'The file says',
-              'The file mentions both', 'The file does not say whether', 'Read with the saved layout')
+              'The file mentions both', 'The file does not say whether', 'The size table totals', 'Read with the saved layout')
 
 
 def review_notes(o, lead=None):
     """Replace the automatic unit/basis notes of an order with ones that are true now."""
+    ask_unit(o)
     o['warnings'] = [w for w in o.get('warnings', []) if not w.startswith(AUTO_NOTES)]
     if lead:
         o['warnings'].insert(0, lead)

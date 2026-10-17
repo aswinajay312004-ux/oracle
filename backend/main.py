@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
-from . import local_store as store, oracle_store as oracle, workbooks, readers, ai
+from . import local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
 from .config import DATA, ROOT, OWNER
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
@@ -283,6 +283,39 @@ def _new_order_defaults(orders):
     return orders
 
 
+def current_fields():
+    """Effective business fields: defaults (backend/fields.py) + the administrator's saved changes."""
+    return F.Fields(F.effective(store.field_settings()))
+
+
+def master_labels():
+    """Known buyer / colour / size names from the Oracle masters, so the matcher can recognise values.
+    Empty when Oracle is not reachable: matching then relies on labels and value shapes only."""
+    try:
+        with oracle.connect() as conn:
+            found = oracle.masters(conn) or {}
+    except Exception:
+        return {}
+    return {role: [m.get('label') for m in found.get(role) or [] if not m.get('cancelled')] for role in ('buyer', 'color', 'size')}
+
+
+def _suggestion(parsed, fields):
+    """Matcher proposal for an unknown layout (or a sheet whose saved template was refused). No AI here:
+    uploads stay fast and work offline; the person can ask the local AI from the mapping screen."""
+    refused = [r['sheet'] for r in parsed.get('templates_refused') or []]
+    sheets = sorted((s for s in parsed['sheets'] if not s['hidden']), key=lambda s: s['name'] not in refused)
+    masters = master_labels(); first = None
+    for sheet in sheets:
+        try:
+            s = ai.suggest(sheet, fields, masters, use_ai=False)
+        except ValueError:
+            continue
+        if s['definition'].get('table'):
+            return s
+        first = first or s
+    return first
+
+
 @app.post('/api/uploads')
 def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
     name = str(file.filename or '').replace('\\', '/').split('/')[-1]
@@ -291,22 +324,17 @@ def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
         raise HTTPException(415, 'Upload the buyer Excel file (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv, Excel XML/HTML export) or JSON data.')
     content = file.file.read(readers.MAX_BYTES + 1)
     fmt = readers.sniff(content, name)
-    parsed = workbooks.parse(content, store.templates(), name); kind = 'excel'
-    for tid in parsed.pop('templates_used', []):
+    fields = current_fields()
+    parsed = workbooks.parse(content, store.templates(), name, fields); kind = 'excel'
+    used = parsed.pop('templates_used', [])
+    for tid in used:
         store.template_used(tid)
     id = uuid.uuid4().hex
-    suggestion = None
-    if not parsed['orders']:
-        for sheet in parsed['sheets']:
-            if not sheet['hidden']:
-                suggestion = ai.heuristic(sheet)
-                if suggestion:
-                    suggestion = dict(sheet=sheet['name'], definition=suggestion, source='layout analysis',
-                                      explanation='Proposed from the layout. Check each highlighted cell before applying.')
-                    break
+    suggestion = _suggestion(parsed, fields) if not parsed['orders'] or parsed.get('templates_refused') else None
+    template = next((dict(id=t['id'], name=t['name'], version=t['version']) for t in store.templates() if t['id'] in used), None)
     draft = dict(id=id, version=1, filename=name, kind=kind, filehash=hashlib.sha256(content).hexdigest(),
                  created_at=datetime.now().astimezone().isoformat(), uploaded_by=user['username'],
-                 **parsed, suggestion=suggestion, plan=None, result=None)
+                 **parsed, suggestion=suggestion, template=template, plan=None, result=None)
     _new_order_defaults(draft['orders'])
     store.identify(draft['orders'])
     (DATA / (id + '.upload')).write_bytes(content)
@@ -363,7 +391,33 @@ def edit(id: str, data: Edit, user=Depends(require('edit'))):
         store.save(d, user['username'], data.version)
         if diff:
             store.audit(user['username'], 'edit', id, changes=diff)
+        _learn_unit(d, user)
         return d
+
+
+def _decided_unit(orders):
+    """(unit, basis) when every order of the draft has the same complete unit decision, else (None, None)."""
+    units = {(o.get('qty_unit'), 1 if o.get('qty_unit') == 'PCS' else o.get('pieces_per_unit')) for o in orders}
+    bases = {o.get('quantity_basis') for o in orders}
+    unit = None
+    if len(units) == 1:
+        u, per = units.pop()
+        if u == 'PCS' or (u == 'PACK' and isinstance(per, int) and per >= 2):
+            unit = dict(qty_unit=u, pieces_per_unit=per)
+    basis = bases.pop() if len(bases) == 1 and bases <= {'sample', 'order_demo'} else None
+    return unit, basis
+
+
+def _learn_unit(d, user):
+    """A unit answered on the review screen of a draft read with a template is remembered by that template
+    when the template did not know it yet (a saved decision is never overwritten silently)."""
+    tid = (d.get('template') or {}).get('id')
+    if not tid or not d.get('orders'):
+        return
+    unit, basis = _decided_unit(d['orders'])
+    learned = store.fill_template_unit(tid, unit, basis)
+    if learned:
+        store.audit(user['username'], 'template_unit_learned', tid, draft=d['id'], **learned)
 
 
 class Mapping(BaseModel):
@@ -374,6 +428,16 @@ class Mapping(BaseModel):
     definition: dict | None = None
     save_template: bool = False
     template_name: str | None = Field(default=None, max_length=80)
+    qty_unit: str | None = Field(default=None, pattern='^(PCS|PACK|)$')
+    pieces_per_unit: int | None = Field(default=None, ge=1, le=10000)
+    quantity_basis: str | None = Field(default=None, pattern='^(sample|order_demo)$')
+
+
+def _refused(rejected, fields):
+    """409 body for a wrong mapping: one message naming each wrong field, plus the list for the screen."""
+    text = ' '.join(f'{fields.label(r["field"]) if r["field"] in fields else r["field"]}: {r["reason"]}.' for r in rejected)
+    return JSONResponse(status_code=409, content={'detail': f'This layout does not fit the file. {text}',
+                                                  'rejected': [dict(r, source='person') for r in rejected]})
 
 
 @app.post('/api/drafts/{id}/map')
@@ -383,19 +447,47 @@ def mapping(id: str, data: Mapping, user=Depends(require('edit'))):
         sheet = next((s for s in d['sheets'] if s['name'] == data.sheet), None)
         if not sheet:
             raise ValueError('Select a worksheet.')
+        fields = current_fields()
         definition = data.definition or dict(fields={}, table=dict(type='flat', header_row=data.header_row, columns=data.columns or {}))
-        orders = workbooks.apply_template(d['sheets'], sheet, definition)
-        workbooks.attach_bom(workbooks.Grid(sheet), orders)
+        if data.qty_unit == 'PACK' and data.pieces_per_unit is not None and data.pieces_per_unit < 2:
+            raise HTTPException(409, 'A pack holds at least 2 pieces. How many pieces are in one pack?')
+        _, rejected = matcher.check(sheet, definition, fields, master_labels())
+        if rejected:
+            return _refused(rejected, fields)
+        orders = workbooks.apply_template(d['sheets'], sheet, definition, fields)
+        workbooks.attach_bom(workbooks.Grid(sheet, fields), orders)
+        for o in orders:
+            _confirm_unit(o, data)
         d['orders'] = store.identify(_new_order_defaults([workbooks.finish(o) for o in orders]))
-        d['format'] = 'Reviewed layout mapping'; d['version'] += 1; d['plan'] = None
+        d['format'] = 'Reviewed layout mapping'; d['version'] += 1; d['plan'] = None; d['template'] = None
         if data.save_template:
             name = (data.template_name or '').strip() or f'{d["filename"]} · {sheet["name"]}'
-            tid = store.save_template(name, workbooks.signature(sheet), workbooks.labels(sheet), definition, user['username'])
-            d['format'] = f'Template: {name}'
-            store.audit(user['username'], 'template_saved', tid, name=name, definition=definition)
+            unit, basis = _decided_unit(d['orders'])
+            buyers = {o.get('buyer') for o in d['orders'] if o.get('buyer')}
+            saved = store.save_template(name, workbooks.layout_signature(sheet, definition), workbooks.layout_labels(sheet, definition),
+                                        definition, user['username'], buyer=buyers.pop() if len(buyers) == 1 else '',
+                                        anchors=matcher.anchors(sheet, definition, fields), unit=unit, quantity_basis=basis)
+            d['format'] = f'Template: {name}'; d['template'] = dict(id=saved['id'], name=name, version=saved['version'])
+            store.audit(user['username'], 'template_saved', saved['id'], name=name, version=saved['version'], family=saved['family'],
+                        definition=definition, unit=unit, quantity_basis=basis)
         store.save(d, user['username'], data.version)
         store.audit(user['username'], 'mapping_applied', id, sheet=data.sheet, definition=definition)
         return d
+
+
+def _confirm_unit(o, data):
+    """The unit / basis the person chose while confirming the layout (overrides what the file suggested)."""
+    prov = o.setdefault('provenance', {})
+    if data.qty_unit is not None:
+        o['qty_unit'] = data.qty_unit
+        o['pieces_per_unit'] = 1 if data.qty_unit == 'PCS' else data.pieces_per_unit if data.qty_unit == 'PACK' else None
+        prov['qty_unit'] = dict(derivation='Chosen when the layout was confirmed', reason='person')
+        if data.qty_unit == 'PACK' and data.pieces_per_unit:
+            prov['pieces_per_unit'] = dict(derivation='Chosen when the layout was confirmed', reason='person')
+    if data.quantity_basis:
+        o['quantity_basis'] = data.quantity_basis
+        prov['quantity_basis'] = dict(derivation='Chosen when the layout was confirmed', reason='person')
+    workbooks.review_notes(o)
 
 
 class Suggestion(BaseModel):
@@ -407,7 +499,7 @@ def suggest(id: str, data: Suggestion, user=Depends(require('edit'))):
     d = store.get(id); sheet = next((s for s in d['sheets'] if s['name'] == data.sheet), None)
     if not sheet:
         raise ValueError('Select a worksheet.')
-    return ai.suggest(sheet)
+    return ai.suggest(sheet, current_fields(), master_labels())
 
 
 class Version(BaseModel):
@@ -420,17 +512,19 @@ class Approval(Version):
 
 def _plan(d):
     m = oracle.current_mapping()
+    # Fields an administrator made required (Setup → Order fields); Axpert-locked ones are always checked.
+    extra = dict(required=list(current_fields().extra_required)) if current_fields().extra_required else {}
     try:
         conn = oracle.connect()
     except Exception:
         conn = None
     if conn is None:
-        plan = planner.plan(SnapshotCatalog(), d['orders'], d['filehash'], m)
+        plan = planner.plan(SnapshotCatalog(), d['orders'], d['filehash'], m, **extra)
         plan['warnings'].insert(0, 'Oracle is not connected: this preview uses the saved database structure only. '
                                    'Existing master records cannot be checked and saving is disabled until Oracle is reachable.')
         return plan
     with conn:
-        return oracle.plan(conn, d['orders'], d['filehash'], m)
+        return oracle.plan(conn, d['orders'], d['filehash'], m, **extra)
 
 
 @app.post('/api/drafts/{id}/preview')
@@ -590,7 +684,52 @@ def set_mapping_status(data: MappingStatus, user=Depends(require('mapping'))):
 
 
 @app.get('/api/templates')
-def get_templates(user=Depends(authenticated)): return store.templates(active_only=False)
+def get_templates(user=Depends(authenticated)):
+    """Every saved layout version (newest first per layout); one version per layout is active."""
+    return store.templates(active_only=False)
+
+
+FIELD_KEYS = ('key', 'label', 'kind', 'where', 'aliases', 'default_aliases', 'locked', 'required', 'column')
+
+
+def _field_view(f, saved=None):
+    out = {k: f.get(k) for k in FIELD_KEYS}
+    out['aliases'] = list(f['aliases']); out['default_aliases'] = list(f.get('default_aliases') or [])
+    s = (saved or {}).get(f['key']) or {}
+    out.update(changed_by=s.get('actor'), changed_at=s.get('at'))
+    return out
+
+
+@app.get('/api/fields')
+def get_fields(user=Depends(authenticated)):
+    """The effective order fields: defaults + saved alias / required changes."""
+    saved = store.field_settings()
+    return [_field_view(f, saved) for f in F.effective(saved)]
+
+
+class FieldChange(BaseModel):
+    required: bool | None = None
+    aliases: list[str] | None = Field(default=None, max_length=F.MAX_ALIASES)
+
+
+@app.put('/api/fields/{key}')
+def put_field(key: str, data: FieldChange, user=Depends(require('mapping'))):
+    with LOCK:
+        saved = store.field_settings(); current = F.Fields(F.effective(saved)); f = current.get(key)
+        if not f:
+            raise HTTPException(404, 'Unknown order field.')
+        if data.required is False and f['locked']:
+            raise HTTPException(409, f'{f["label"]} is needed by Axpert and is always required.')
+        aliases = F.clean_aliases(key, data.aliases, current) if data.aliases is not None else None
+        before = list(f['aliases'])
+        store.set_field_setting(key, user['username'], required=None if f['locked'] else data.required, aliases=aliases)
+        saved = store.field_settings()
+        after = next(x for x in F.effective(saved) if x['key'] == key)
+    norm = {F.norm(a) for a in before}
+    store.audit(user['username'], 'field_changed', key, required=after['required'],
+                added=[a for a in after['aliases'] if F.norm(a) not in norm],
+                removed=[a for a in before if F.norm(a) not in {F.norm(x) for x in after['aliases']}])
+    return _field_view(after, saved)
 
 
 class Active(BaseModel):

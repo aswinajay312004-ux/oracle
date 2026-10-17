@@ -264,7 +264,7 @@ def test_A_saving_the_layout_again_creates_a_new_version(env):
 BLUE_RENAMED = dict(buyer='BLUE BAY', style='BB-3300', description='GIRLS SUNDRESS', po='BB/PO/0042', ship=datetime(2027, 4, 2), season='HS-27',
                     lines=(('TEAL', '', (8, 12, 16, 20)), ('CORAL', '', (4, 6, 8, 10))), title='BLUE BAY LTD', ship_label='Order Date')
 TABLE_FIELDS = ('size', 'quantity', 'color', 'qty_unit')
-NOT_BLUE = FIRST_ZEN_VALUES +('ZEN KIDS', 'TESTBUYER', 'T1001', 'TEST BODYSUIT', 'TC100-1', 'TESTMERCH', 'WHITE AOP', 'PINK SOLID')
+NOT_BLUE = FIRST_ZEN_VALUES + ('ZEN KIDS', 'TESTBUYER', 'T1001', 'TEST BODYSUIT', 'TC100-1', 'TESTMERCH', 'WHITE AOP', 'PINK SOLID')
 B_VARIANTS = {
     # labels moved and renamed: position-aware layout similarity is low
     'moved-and-renamed': (blue_bay_po, 9, {'buyer': 'BLUE BAY', 'style': 'BB-3300', 'po_number': 'BB/PO/0042', 'ship_date': '2027-04-02'}),
@@ -304,7 +304,7 @@ def test_B_new_buyer_gets_no_template_and_no_data_from_another_buyer(env, varian
         if p['confidence'] == 'low':
             assert chosen.get(field) != p['cell'], f'{where}: low-confidence proposals are shown, never pre-selected (§3 rule 5)'
     found = {k: str((proposals.get(k) or {}).get('value')) for k in expected}
-    assert found == expected, f'B: fields whose labels are buyer aliases are proposed from the new file: {found}'
+    assert found == expected, f'B: fields whose labels are field aliases are proposed from the new file: {found}'
     assert {k: chosen.get(k) for k in expected} == {k: proposals[k]['cell'] for k in expected}, 'B: exact-alias matches with valid values are pre-selected in suggestion.definition'
     assert ((s.get('definition') or {}).get('table') or {}).get('header_row') == header_row, f'B: the size table of the new file starts at row {header_row}'
     if variant == 'one-anchor-renamed':

@@ -109,7 +109,44 @@ def _line_number(text):
     return int(m.group(1)) if m else None
 
 
-def plan(catalog, orders, filehash, mapping):
+def _unit_factor(o, prefix, base, issues):
+    """Pieces per source quantity (docs/EXCEL_UNDERSTANDING.md §5): PCS → 1, PACK → pieces per pack ≥ 2,
+    undecided → asked on orders.N.qty_unit. Drafts saved before qty_unit existed keep the old rule."""
+    if 'qty_unit' not in o:
+        return count(o.get('pieces_per_unit'), prefix + ' pieces per source unit', issues.sink(base + '.pieces_per_unit'), False)
+    unit = str(o.get('qty_unit') or '').strip().upper(); per = o.get('pieces_per_unit')
+    blank = per is None or str(per).strip() == ''
+    if unit == 'PCS':
+        if not blank and str(per).strip() not in ('1', '1.0'):
+            issues.error(f'{prefix}: quantities are pieces, so pieces per unit must be 1 (it says {per}). Clear it or choose Packs.',
+                         base + '.pieces_per_unit')
+        return 1
+    if unit == 'PACK':
+        if blank:
+            issues.error(f'{prefix}: how many pieces are in one pack?', base + '.pieces_per_unit')
+            return 0
+        n = count(per, prefix + ' pieces per pack', issues.sink(base + '.pieces_per_unit'), False)
+        if n == 1:
+            issues.error(f'{prefix}: a pack holds at least 2 pieces — how many pieces are in one pack?', base + '.pieces_per_unit')
+        return n
+    if unit:
+        issues.error(f'{prefix}: quantity unit must be Pieces or Packs.', base + '.qty_unit')
+    else:
+        issues.error(f'{prefix}: {_unit_question(o)}', base + '.qty_unit')
+    return 0
+
+
+def _unit_question(o):
+    """The question recorded when the file was read (it quotes what the file says), else a plain one."""
+    q = str(((o.get('provenance') or {}).get('qty_unit') or {}).get('question') or '').strip()
+    if not q:
+        return 'the file does not say whether these quantities are pieces or packs — which are they?'
+    return q[0].lower() + q[1:] if q[:1].isupper() and q[1:2].islower() else q
+
+
+def plan(catalog, orders, filehash, mapping, required=()):
+    """required: extra order fields an administrator made required (keys of backend/fields.py)."""
+    from .. import fields as business_fields
     tables = mapping['tables']
     registry = catalog.columns(referenced_tables(mapping))
     writable = {t for t, s in tables.items() if s['status'] == 'verified'}
@@ -216,7 +253,11 @@ def plan(catalog, orders, filehash, mapping):
             issues.error(f'{prefix}: confirm sample quantities or explicitly use order quantities for this demo.', base + '.quantity_basis')
         if o.get('quantity_basis') == 'order_demo':
             issues.warn(f'{prefix}: source order quantities will be imported as a DEMO SAMPLE order.', base + '.quantity_basis')
-        factor = count(o.get('pieces_per_unit'), prefix + ' pieces per source unit', issues.sink(base + '.pieces_per_unit'), False)
+        factor = _unit_factor(o, prefix, base, issues)
+        for key in required or ():
+            value = o.get(key)
+            if value is None or str(value).strip() == '':
+                issues.error(f'{prefix}: {business_fields.DEFAULT.label(key)} is required for every order — enter it.', f'{base}.{key}')
         dates = {}
         for key in ('ship_date', 'order_date'):
             try:

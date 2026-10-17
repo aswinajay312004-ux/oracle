@@ -36,8 +36,8 @@ def masters(conn, mapping=None):
     return {role: cat.masters(spec) for role, spec in mapping['masters'].items() if spec['table'] in visible}
 
 
-def plan(conn, orders, filehash, mapping=None):
-    return planner.plan(OracleCatalog(conn), orders, filehash, mapping or current_mapping())
+def plan(conn, orders, filehash, mapping=None, required=()):
+    return planner.plan(OracleCatalog(conn), orders, filehash, mapping or current_mapping(), required=required)
 
 
 def read_result(cursor, jobid):

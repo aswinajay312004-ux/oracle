@@ -32,6 +32,7 @@ def upload(c, content=None, name='bom.xlsx'):
 def ready(c, d, ref='TEST/ORD/1'):
     o = deepcopy(d['orders'][0])
     o.update(order_ref=ref, order_date='2026-10-17', quantity_basis='order_demo', lines=deepcopy(o['order_lines']))
+    o.update(qty_unit='PCS', pieces_per_unit=1)   # §5: the fixture BOM does not prove pieces, so the reviewer answers
     o['accessories'] = [a for a in o['accessories'] if len(a['description']) <= 50]
     r = c.put(f'/api/drafts/{d["id"]}', json={'version': d['version'], 'orders': [o]}); assert r.status_code == 200, r.text
     r = c.post(f'/api/drafts/{d["id"]}/preview', json={'version': r.json()['version']}); assert r.status_code == 200, r.text
