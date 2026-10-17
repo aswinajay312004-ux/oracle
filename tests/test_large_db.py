@@ -516,3 +516,29 @@ def test_oracle_harvest_lists_indexes_and_live_lookups_stay_within_budget():
         started = time.time()
         assert find('ZZ/NOPE/987654') == []
         assert time.time() - started < service.LOOKUP_BUDGET_MS / 1000 + 5
+
+
+def test_duplicate_order_check_uses_the_index_on_a_large_ordmas():
+    """order_ref_exists runs on every preview and save: on a large ORDMAS it must never scan the table."""
+    from backend.erp.catalog import OracleCatalog
+
+    class Cursor:
+        def __init__(self, stats):
+            self.sql = []; self.stats = stats; self.last = None
+        def execute(self, sql, binds=None, **kw):
+            self.sql.append(sql); self.last = sql
+        def fetchone(self):
+            return (self.stats,) if 'num_rows' in self.last else None
+
+    class Conn:
+        def __init__(self, stats):
+            self.c = Cursor(stats)
+        def cursor(self):
+            return self.c
+
+    big = Conn(5_000_000)
+    assert OracleCatalog(big).order_ref_exists('PK/26-27/S/1', 'pk/26-27/s/1') is False
+    assert 'DOCID IN' in big.c.sql[0] and not any('upper(trim(DOCID))' in s for s in big.c.sql)
+    small = Conn(1000)
+    assert OracleCatalog(small).order_ref_exists('PK/26-27/S/1') is False
+    assert any('upper(trim(DOCID))' in s for s in small.c.sql)          # small tables keep the case-insensitive check

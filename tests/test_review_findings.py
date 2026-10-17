@@ -70,3 +70,30 @@ def test_ask_on_review_keeps_what_the_file_said_about_the_unit():
     assert o['qty_unit'] == '' and p['reason'] == 'review' and p['cell'] == 'C3'
     assert p['question'] == 'The quantity heading C3 says “Qty (pcs)” — are these quantities pieces or packs?'
     assert 'does not say' not in ' '.join(o['warnings'])
+
+
+def test_big_flat_files_parse_in_linear_time():
+    """Header lookups once re-normalised every cell per field and per order: 2,000 lines took minutes in the
+    server process. With the per-sheet label index a 4,000-line buyer file parses in about a second."""
+    import time
+    rows = ['Style,Colour,Size,Qty'] + [f'ST-{i // 6},C{i % 3},{"SMLX"[i % 4]}{i % 7},{10 + i % 9}' for i in range(4000)]
+    started = time.time()
+    d = workbooks.parse('\n'.join(rows).encode(), filename='big.csv')
+    assert len(d['orders']) == 667 and time.time() - started < 8
+
+
+def test_european_thousands_are_never_guessed():
+    """In a semicolon CSV that writes decimals with a comma, “2.000” is two thousand: it is never read as 2 (or
+    silently as 2000). The cell stays as the file wrote it, is refused until the person types the number, and
+    the size table says why."""
+    d = workbooks.parse(b'sep=;\nStyle;Colour;Size;Qty\nA1;RED;S;2.000\nA1;RED;M;1.500\nA1;RED;L;12\n', filename='eu.csv')
+    o = d['orders'][0]
+    assert [(s['size'], s['quantity']) for s in o['lines'][0]['sizes']] == [('S', '2.000'), ('M', '1.500'), ('L', 12)]
+    assert any(r['field'] == 'lines' and 'dot between thousands' in r['message'] for r in o['review'])
+    p = plan(ready(o))
+    bad = {i['path']: i['message'] for i in p['issues'] if i['severity'] == 'error'}
+    assert '“2.000” could mean 2000' in bad['orders.0.lines.0.sizes.0.quantity']
+    assert '“1.500” could mean 1500' in bad['orders.0.lines.0.sizes.1.quantity']
+    fixed = ready(o); fixed['lines'][0]['sizes'][0]['quantity'] = 2000; fixed['lines'][0]['sizes'][1]['quantity'] = 1500
+    assert not [i for i in plan(fixed)['issues'] if i['severity'] == 'error']
+    assert plan(fixed)['totals']['pieces'] == 3512

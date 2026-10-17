@@ -35,6 +35,9 @@ function stage(name) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+// short label for the file type the upload really was (decided from its contents, not its name)
+const badge = kind => ({ json: 'JSON', csv: 'CSV', ods: 'ODS', xml2003: 'XML' })[kind] || 'XLS';
+
 export function resetWorkspace() {
   state.draft = null; state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false;
   $('#file-input').value = ''; stage('upload'); recent();
@@ -44,7 +47,7 @@ export async function recent() {
   try {
     const drafts = await api('/api/drafts');
     $('#recent').innerHTML = drafts.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order</th><th>Uploaded</th><th>Status</th><th></th></tr></thead><tbody>
-      ${drafts.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><span class="row"><span class="file-badge">XLS</span><span><b>${esc(d.filename)}</b><br><span class="muted small-text">${esc(d.format)}</span></span></span></td>
+      ${drafts.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><span class="row"><span class="file-badge">${badge(d.kind)}</span><span><b>${esc(d.filename)}</b><br><span class="muted small-text">${esc(d.format)}</span></span></span></td>
         <td>${esc((d.styles || []).filter(Boolean).join(', ') || '—')}<br><span class="muted small-text">${esc((d.buyers || []).filter(Boolean).join(', '))}</span></td>
         <td class="nowrap">${esc(d.uploaded_by || '')}<br><span class="muted small-text">${d.created_at ? esc(new Date(d.created_at).toLocaleString()) : ''}</span></td>
         <td><span class="pill ${({ 'Saved to Oracle': 'ok', 'Ready to approve': 'info', 'Needs attention': 'err', 'Checked offline': 'warn' })[d.status] || ''}">${esc(d.status)}</span></td><td><button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></td></tr>`).join('')}
@@ -54,7 +57,7 @@ export async function recent() {
 
 export async function upload(file) {
   if (!file) return;
-  if (!/\.(xlsx|xlsm|xltx|xltm|xls|xlsb|ods|xml|htm|html|csv|tsv|txt|json)$/i.test(file.name)) return notify('Choose the buyer Excel file (.xlsx, .xls, .xlsm, .xlsb, .ods, CSV, Excel XML/HTML export) or a JSON file.', 'error');
+  if (!/\.(xlsx|xlsm|xltx|xltm|xls|xlsb|ods|xml|htm|html|mht|mhtml|csv|tsv|txt|json)$/i.test(file.name)) return notify('Choose the buyer Excel file (.xlsx, .xls, .xlsm, .xlsb, .ods, CSV, Excel XML/HTML export) or a JSON file.', 'error');
   if (!can('upload')) return notify('Your role can view orders but not upload. Ask an administrator.', 'error');
   stage('read'); $('#read-title').textContent = `Reading ${file.name}…`; $('#read-steps').innerHTML = ''; $('#read-actions').hidden = true;
   await busy('Reading the file and finding the order…', async () => {
@@ -153,7 +156,7 @@ export function renderReview() {
   const files = fileIssues();
   const p = d.plan;
   root.innerHTML = `
-    <div class="card doc-bar"><span class="file-badge">XLS</span>
+    <div class="card doc-bar"><span class="file-badge">${badge(d.kind)}</span>
       <div><span class="name">${esc(d.filename)}</span><small>${d.template ? `Saved layout “${esc(d.template.name)}” (v${esc(d.template.version)})` : esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
       <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? 'Saved to Oracle' : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
       <button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>

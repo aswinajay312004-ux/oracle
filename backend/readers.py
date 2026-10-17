@@ -6,7 +6,8 @@ template and validator works the same whatever format the buyer sent:
     cell = {cell, row, col, value, formula, hidden, error}, plus these keys only when they say something:
         fmt    number-format code of a number or date cell when it is not General
         raw    the stored number when `value` is the text Excel shows for it (8 formatted 0000 -> '0008')
-        flag   'decimal_comma' text such as 1.234,56 left as text for a person to check
+        flag   'decimal_comma' text such as 1.234,56 left as text for a person to check (in a text file that
+                               writes decimal commas, 1.500 and 1,500 are left as text too: 1.500 is 1500 there)
                'scientific'    text such as 1.23457E+11: a long code that Excel already damaged
                'big_number'    a 16+ digit number kept as text so that no digit is lost
 
@@ -31,7 +32,10 @@ Protected files are refused with what to do: password-protected (encrypted) work
 sensitivity-label files, and other Office documents (Word, PowerPoint, Outlook e-mails).
 
 Safety: cell contents are data only - nothing is evaluated or executed. Sizes are capped before any
-parser runs (bytes, real decompressed zip sizes, cells, sheets, merged areas, nesting), and read()
+parser runs (bytes, real decompressed zip sizes, cells and rows per sheet part, sheets, merged areas,
+nesting); .xlsx merged ranges are normalised and bounded before openpyxl loads them (it builds an object
+per merged cell); and every format's cell model is bounded the same way afterwards (cells, the area they
+span, Excel's grid, total characters of text), so what the worker sends the server stays small. read()
 parses in a separate worker process with a time limit and a memory cap (backend/isolation.py).
 Environment: POPPYS_PARSE_TIMEOUT (seconds, default 60), POPPYS_PARSE_MEMORY_MB (default 1536),
 POPPYS_PARSE_WORKERS (parallel uploads, default 2), POPPYS_INLINE_PARSE=1 (no worker: tests only).
@@ -65,7 +69,7 @@ from . import isolation, numfmt
 MAX_BYTES = 12 * 1024 * 1024
 MAX_SHEETS = 30
 MAX_CELLS = 250_000            # per sheet
-MAX_TOTAL_CELLS = 1_000_000    # per file
+MAX_TOTAL_CELLS = 400_000      # per file: a near-1M-cell workbook took ~30 s and ~300 MB to read; buyer files are far smaller
 MAX_ZIP_ENTRIES = 10_000
 MAX_EXPANDED = 80 * 1024 * 1024        # all parts of a zip-based workbook, measured, not declared
 MAX_PART = 40 * 1024 * 1024            # one part: a sheet's XML, the shared strings, ODS content.xml
@@ -1567,9 +1571,9 @@ def read_xml2003(content):
         column_styles.sort(key=lambda s: s[0])             # looked up by bisection: one step per cell
         column_starts = [s[0] for s in column_styles]
 
-        def column_style(c):
-            i = bisect.bisect_right(column_starts, c) - 1
-            return column_styles[i][2] if i >= 0 and c <= column_styles[i][1] else None
+        def column_style(c, starts=column_starts, styles=column_styles):
+            i = bisect.bisect_right(starts, c) - 1
+            return styles[i][2] if i >= 0 and c <= styles[i][1] else None
         r = 0
         for row in table.findall(ss + 'Row'):
             r = _index(row.get(ss + 'Index'), r)
@@ -2180,7 +2184,42 @@ def _key_columns(records):
     return columns
 
 
+NESTED_COLUMNS = 60      # a nested object with more plain values than this stays one JSON cell
+NESTED_ROWS = 10_000     # rows one record may expand into
+
+
+def _flat(record):
+    """A nested object of plain values ("sizes": {"S": 10, "M": 20}) becomes columns named by its keys: the
+    size-across-columns layout the same order has in Excel. A key already used outside is prefixed."""
+    out = {}
+    for k, v in record.items():
+        if isinstance(v, dict) and 0 < len(v) <= NESTED_COLUMNS and not any(isinstance(x, (dict, list)) for x in v.values()):
+            for kk, vv in v.items():
+                name = str(kk)
+                out[name if name not in record and name not in out else f'{k} {kk}'] = vv
+        else:
+            out[k] = v
+    return out
+
+
+def _rows_of(records):
+    """Records as table rows. A record holding one list of records ("sizes": [{"size": "S", "qty": 10}, …])
+    becomes one row per inner record with the outer values repeated — the one-row-per-size layout."""
+    rows = []
+    for x in records:
+        x = _flat(x)
+        inner = [k for k, v in x.items() if isinstance(v, list) and v and all(isinstance(i, dict) for i in v)]
+        if len(inner) != 1:
+            rows.append(x); continue
+        outer = {k: v for k, v in x.items() if k != inner[0]}
+        for item in x[inner[0]][:NESTED_ROWS]:
+            item = _flat(item)
+            rows.append({**outer, **{(k if k not in outer else f'{inner[0]} {k}'): v for k, v in item.items()}})
+    return rows
+
+
 def _put_records(b, records, header_row):
+    records = _rows_of(records)
     columns = _key_columns(records)
     for k, c in columns.items():
         b.put(header_row, c, str(k))

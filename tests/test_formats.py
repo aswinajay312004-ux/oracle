@@ -975,6 +975,27 @@ def test_ooxml_merged_ranges_are_made_safe_before_openpyxl_loads(refs, merged, n
     assert po['merged'] == merged and (po['notes'] == [note] if note else po['notes'] == [])
 
 
+LAUGHS = ('<!DOCTYPE {root} [<!ENTITY a "aaaaaaaaaa">' + ''.join(f'<!ENTITY {n} "{("&" + p + ";") * 10}">' for p, n in zip('abcdefgh', 'bcdefghi')) + ']>')
+
+
+@pytest.mark.parametrize('part,root,reader', [('xl/sharedStrings.xml', 'sst', None), ('xl/worksheets/sheet1.xml', 'worksheet', 'calamine'),
+                                              ('xl/workbook.xml', 'workbook', 'calamine')])
+def test_billion_laughs_inside_a_real_xlsx_is_never_expanded(part, root, reader):
+    def patch(name, data):
+        if name == part:
+            data = data.replace(b'?>', b'?>' + LAUGHS.format(root=root).encode(), 1).replace(b'LAYOUT TEST', b'&i;')
+        return name, data
+    started = time.monotonic()
+    if reader is None:                       # the bomb is a value: both readers refuse the file
+        with pytest.raises(readers.Unreadable, match='could not be opened'):
+            readers.read(rezip(LAYOUT['xlsx'], patch), 'laughs.xlsx')
+    else:                                    # openpyxl (defusedxml) refuses; calamine ignores the DTD and reads the values
+        po = read_one(rezip(LAYOUT['xlsx'], patch), 'laughs.xlsx')
+        assert po['reader'] == reader and cells_of(po)['A2'] == 'Style' and 'backup reader' in po['notes'][0]
+        assert max(len(str(c['value'])) for c in po['cells']) < 100
+    assert time.monotonic() - started < 5
+
+
 def test_every_mergecells_block_is_made_safe_not_only_the_first():
     blocks = b'<mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells><x:mergeCells count="1"><x:mergeCell ref="A1:XFD1048576"/></x:mergeCells>'
     content = small_xlsx(lambda d: d.replace(b'</sheetData>', b'</sheetData>' + blocks, 1))
@@ -1062,7 +1083,7 @@ def test_sniff_reports_an_oversized_upload_as_too_large_not_damaged():
 def test_zip_with_more_records_than_its_declared_count_is_refused_while_sniffing():
     out, central = BytesIO(), BytesIO()
     for i in range(readers.MAX_ZIP_ENTRIES + 5):
-        name = (f'xl/workbook.bin' if i == 0 else f'x/{i}').encode(); offset = out.tell()
+        name = ('xl/workbook.bin' if i == 0 else f'x/{i}').encode(); offset = out.tell()
         out.write(struct.pack('<4sHHHHHIIIHH', b'PK\x03\x04', 20, 0, 0, 0, 0, 0, 0, 0, len(name), 0) + name)
         central.write(struct.pack('<4sHHHHHHIIIHHHHHII', b'PK\x01\x02', 20, 20, 0, 0, 0, 0, 0, 0, 0, len(name), 0, 0, 0, 0, 0, offset) + name)
     cd = central.getvalue(); at = out.tell(); out.write(cd)
@@ -1307,3 +1328,23 @@ def test_isolated_native_reader_running_out_of_memory_only_stops_the_worker():
         isolation.run(readers.read_calamine, (liar,), timeout=60, memory=384 << 20, passthrough=(readers.Unsupported, readers.Unreadable))
     assert getattr(err.value, 'reason', None) in ('crashed', 'memory')        # calamine buffers the whole part
     assert cells_of(read_one(b'Style,Qty\r\nZK-1,5\r\n', 'x.csv'))['B2'] == 5
+
+
+def test_json_sizes_nested_per_colour_are_laid_out_like_excel():
+    """Sizes as an object become size columns (a matrix the matcher proposes); sizes as a list of records become
+    one row per size (read automatically like a flat buyer sheet)."""
+    from backend import matcher
+    doc = {'buyer': 'NEXT', 'style': 'N1', 'po': 'P-7',
+           'lines': [{'colour': 'NAVY', 'sizes': {'S': 10, 'M': 20, 'L': 30}}, {'colour': 'RED', 'sizes': {'S': 5, 'M': 6, 'L': 7}}]}
+    sheet = readers.read(json.dumps(doc).encode(), 'po.json')[1][0]
+    s = matcher.suggest(sheet)
+    assert s['table']['confidence'] == 'high' and s['definition']['table']['type'] == 'matrix'
+    o = workbooks.apply_template([sheet], sheet, s['definition'])[0]
+    assert [(l['color'], [(x['size'], x['quantity']) for x in l['sizes']]) for l in o['lines']] == \
+        [('NAVY', [('S', 10), ('M', 20), ('L', 30)]), ('RED', [('S', 5), ('M', 6), ('L', 7)])]
+    doc = {'buyer': 'NEXT', 'style': 'N2', 'lines': [{'colour': 'NAVY', 'sizes': [{'size': 'S', 'qty': 10}, {'size': 'M', 'qty': 20}]},
+                                                     {'colour': 'RED', 'sizes': [{'size': 'S', 'qty': 5}]}]}
+    d = workbooks.parse(json.dumps(doc).encode(), filename='po2.json')
+    assert d['format'] == 'Tabular orders'
+    assert [(l['color'], [(x['size'], x['quantity']) for x in l['sizes']]) for l in d['orders'][0]['lines']] == \
+        [('NAVY', [('S', 10), ('M', 20)]), ('RED', [('S', 5)])]

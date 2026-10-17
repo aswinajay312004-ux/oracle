@@ -20,8 +20,10 @@ only the worker, never the web server or the Oracle session it holds.
       never leaves a "python.exe has stopped working" dialog holding the worker open. This is best
       effort: if Windows refuses (for example an old Windows 7 parent job that forbids nesting), the
       worker continues without the cap, the time limit still applies, and the refusal is logged.
-* The result comes back as JSON bytes over a one-way Pipe. The parent never unpickles anything the
-  worker produced, so even a worker taken over by a parser exploit cannot run code in the server.
+* The result comes back as UTF-8 JSON bytes over a one-way Pipe, at most MAX_RESULT bytes (a longer
+  answer is refused before it is read). The parent never unpickles anything the worker produced, so even
+  a worker taken over by a parser exploit cannot run code in the server. What the readers may return is
+  bounded (cells, text) so that decoding the answer cannot exhaust the server's memory either.
 """
 from __future__ import annotations
 import json

@@ -249,7 +249,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
         elif normalize(ref) in seen:
             issues.error(f'{prefix}: duplicate order reference in this workbook.', base + '.order_ref')
         seen.add(normalize(ref))
-        if ref and catalog.order_ref_exists(normalize(ref)):
+        if ref and catalog.order_ref_exists(normalize(ref), ref):
             issues.error(f'{prefix}: order reference {ref} already exists. Existing orders are not overwritten.', base + '.order_ref')
         if o.get('quantity_basis') not in ('sample', 'order_demo'):
             issues.error(f'{prefix}: confirm sample quantities or explicitly use order quantities for this demo.', base + '.quantity_basis')
@@ -288,7 +288,14 @@ def plan(catalog, orders, filehash, mapping, required=()):
                 if normalize(name) in names:
                     issues.error(f'{where}: duplicate size {name}; review before combining quantities.', f'{lpath}.sizes.{si}.size')
                 names.add(normalize(name))
-                qty = count(s.get('quantity'), f'{where}, size {name}', issues.sink(f'{lpath}.sizes.{si}.quantity'))
+                unclear = s.get('unclear')        # e.g. “2.000” from a decimal-comma file: 2 or 2000? never guessed
+                if unclear is not None and str(s.get('quantity', '')).strip() == unclear:
+                    whole = unclear.replace('.', '').replace(',', '')
+                    issues.error(f'{where}, size {name}: “{unclear}” could mean {whole} — type the quantity as a whole number.',
+                                 f'{lpath}.sizes.{si}.quantity')
+                    qty = 0
+                else:
+                    qty = count(s.get('quantity'), f'{where}, size {name}', issues.sink(f'{lpath}.sizes.{si}.quantity'))
                 total += qty; sizedata.append((si, s, qty * factor))
             if line.get('declared_total') is not None:
                 declared = count(line['declared_total'], where + ' source total', issues.sink(lpath))

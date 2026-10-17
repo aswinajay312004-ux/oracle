@@ -222,12 +222,18 @@ async function audit(body) {
 }
 
 async function settings(body) {
-  const s = await api('/api/settings');
+  const [s, h] = await Promise.all([api('/api/settings'), api('/api/health').catch(() => null)]);
+  const checks = h?.readers?.checks || [];
   body.innerHTML = `<form class="card pad form-card" id="settings-form"><h2>Workspace settings</h2>
     <label>Default exporter (pre-filled on every order)<input name="company_exporter" value="${esc(s.company_exporter)}" maxlength="100"></label>
     <label>Default sample type<input name="default_sample_type" value="${esc(s.default_sample_type)}" maxlength="30"></label>
     <label class="check"><input type="checkbox" name="allow_self_approval" ${s.allow_self_approval ? 'checked' : ''}> Allow the person who uploaded a file to approve it (turn off for a four-eyes rule)</label>
-    <button class="primary">Save settings</button></form>`;
+    <button class="primary">Save settings</button></form>
+    ${checks.length ? `<section class="card" style="margin-top:14px"><div class="card-head"><div><h2>System checks</h2><div class="sub">Versions that matter for reading buyer files safely on this computer</div></div>
+      ${h.readers.ok ? '<span class="pill ok">all good</span>' : '<span class="pill warn">needs attention</span>'}</div>
+      <div class="tbl-wrap flush"><table><thead><tr><th>Check</th><th>Version</th><th>Status</th></tr></thead><tbody>
+      ${checks.map(c => `<tr><td>${esc(c.name)}</td><td class="mono">${esc(c.version || '—')}</td><td>${c.ok ? '<span class="pill ok">OK</span>' : `<span class="pill warn">check</span> <span class="small-text">${esc(c.message || '')}</span>`}</td></tr>`).join('')}
+      </tbody></table></div></section>` : ''}`;
   $('#settings-form').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target);
     busy('Saving…', async () => { await api('/api/settings', { method: 'PUT', body: { company_exporter: f.get('company_exporter'), default_sample_type: f.get('default_sample_type'), allow_self_approval: f.get('allow_self_approval') === 'on' } }); notify('Settings saved.', 'success'); }); };
 }

@@ -149,7 +149,7 @@ function draw() {
   const filtered = !!(cur.column && cur.value);
   const more = !cur.moreError && (d.key ? d.next_after != null : d.rows.length < (d.total || 0));
   $('#table-view').innerHTML = `<div class="ex-head"><div style="flex:1;min-width:0"><div class="row wrap"><h2>${esc(d.business || d.table)}</h2><code class="muted">${esc(d.table)}</code>
-      ${d.total == null ? '' : `<span class="pill" title="${esc(d.approx ? APPROX : 'Exact row count')}">${d.approx ? '≈ ' : ''}${plural(d.total, filtered ? 'matching row' : 'row', filtered ? 'matching rows' : 'rows')}</span>`}${meta.links ? `<span class="pill brand">${plural(meta.links, 'link')}</span>` : ''}</div>
+      ${d.total == null ? (d.rows_known === false ? '<span class="pill" title="Counting every matching row took too long on this large table. The rows shown are correct.">count unavailable</span>' : '') : `<span class="pill" title="${esc(d.approx ? APPROX : 'Exact row count')}">${d.approx ? '≈ ' : ''}${plural(d.total, filtered ? 'matching row' : 'row', filtered ? 'matching rows' : 'rows')}</span>`}${meta.links ? `<span class="pill brand">${plural(meta.links, 'link')}</span>` : ''}</div>
       <p class="muted small-text" style="margin-top:2px">${esc(d.description || '')} · read-only${d.approx ? ` · <span class="ex-approx" title="${esc(APPROX)}">≈ approximate count (Oracle statistics)</span>` : ''}</p></div></div>
     <nav class="ex-tabs tabs">${[['records', 'Records'], ['columns', d.columns.length ? `Columns (${d.columns.length})` : 'Columns'], ['links', 'Relationships']].map(([k, n]) => `<button class="${tab === k ? 'active' : ''}" data-xtab="${k}">${n}</button>`).join('')}</nav>
     <div data-xbody></div>`;
@@ -163,7 +163,7 @@ function draw() {
       ${d.rows.length ? `<div class="grid-scroll"><table><thead><tr>${shown.map(c => `<th title="${esc([c.type, c.role, c.references && 'links to ' + c.references].filter(Boolean).join(' · '))}">${esc(c.label || c.name)}<span class="code">${esc(c.name)}</span></th>`).join('')}</tr></thead><tbody>
         ${d.rows.map((r, i) => `<tr class="clickable" data-row="${i}">${shown.map(c => `<td>${cellHtml(d, c.name, r[c.name])}</td>`).join('')}</tr>`).join('')}
       </tbody></table></div>
-      <div class="pager"><span>${plural(d.rows.length, 'row')} shown${d.total != null ? ` of ${count(d.total, d.approx)}` : ''} · ${d.key ? 'newest first' : 'Oracle order'} · click a row to see linked records</span>
+      <div class="pager"><span>${plural(d.rows.length, 'row')} shown${d.total != null ? ` of ${count(d.total, d.approx)}` : d.rows_known === false ? ' (total not counted: it took too long)' : ''} · ${d.key ? 'newest first' : 'Oracle order'} · click a row to see linked records</span>
         ${cur.moreError ? `<span class="ex-more-err" role="alert">More rows could not be read: ${esc(cur.moreError)}</span>` : more ? '<button class="secondary small" id="more">Load more</button>' : ''}</div>` : emptyHtml(cur, d)}`;
     $('#filter-form')?.addEventListener('submit', e => { e.preventDefault(); openTable(cur.table, { column: $('#f-col').value, value: $('#f-val').value.trim(), exact: $('#f-op').value === 'exact' }); });
     $('#f-clear')?.addEventListener('click', () => openTable(cur.table));

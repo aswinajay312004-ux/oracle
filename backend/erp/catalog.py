@@ -33,7 +33,8 @@ class Catalog:
     def file_committed(self, filehash):
         raise NotImplementedError
 
-    def order_ref_exists(self, ref):
+    def order_ref_exists(self, ref, typed=None):
+        """ref is the normalised reference (upper case, single spaces); typed is as the person wrote it."""
         raise NotImplementedError
 
 
@@ -81,9 +82,31 @@ class OracleCatalog(Catalog):
         c.execute('select JOBID from PP_IMPORT_LOG where FILEHASH=:h fetch first 1 rows only', h=filehash)
         return c.fetchone() is not None
 
-    def order_ref_exists(self, ref):
+    SCAN_LIMIT = 200_000   # above this (by statistics) the case-insensitive scan is skipped; see below
+
+    def order_ref_exists(self, ref, typed=None):
+        """Is this order reference already in Axpert? Index-friendly first (the reference as normalised and as
+        typed), then POPPYS's own key table. The case/space-insensitive scan, which cannot use an index, runs
+        only while ORDMAS is small enough by statistics: Axpert writes references in one consistent form, so on
+        a large table the indexed probe is the check, and PP_ORDER_KEYS's primary key still refuses a repeat of
+        any order POPPYS saved."""
         c = self.conn.cursor()
-        c.execute(f'SELECT ORDMASID FROM {OWNER}.ORDMAS WHERE upper(trim(DOCID))=:ref FETCH FIRST 1 ROWS ONLY', ref=ref)
+        forms = list(dict.fromkeys(x for x in (ref, str(typed or '').strip()) if x))
+        binds = {f'r{i}': v for i, v in enumerate(forms)}
+        c.execute(f'SELECT 1 FROM {OWNER}.ORDMAS WHERE DOCID IN ({",".join(":" + k for k in binds)}) FETCH FIRST 1 ROWS ONLY', binds)
+        if c.fetchone():
+            return True
+        try:
+            c.execute('SELECT 1 FROM PP_ORDER_KEYS WHERE ORDER_REF = :r', r=ref)
+            if c.fetchone():
+                return True
+        except Exception:      # the key table lives in the POPPYS_APP schema; absent in read-only setups
+            pass
+        c.execute("SELECT num_rows FROM all_tables WHERE owner = :o AND table_name = 'ORDMAS'", o=OWNER)
+        stats = (c.fetchone() or [None])[0]
+        if stats is not None and stats > self.SCAN_LIMIT:
+            return False
+        c.execute(f'SELECT 1 FROM {OWNER}.ORDMAS WHERE upper(trim(DOCID)) = :r FETCH FIRST 1 ROWS ONLY', r=ref)
         return c.fetchone() is not None
 
 
@@ -114,5 +137,5 @@ class SnapshotCatalog(Catalog):
     def file_committed(self, filehash):
         return filehash in self._hashes
 
-    def order_ref_exists(self, ref):
+    def order_ref_exists(self, ref, typed=None):
         return ref in self._refs

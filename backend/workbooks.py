@@ -231,6 +231,8 @@ class Grid:
         self.hidden_cols = {c['col'] for c in hidden} - cols
         self.hidden_rows = {c['row'] for c in hidden if c['col'] not in self.hidden_cols} - rows
         self.rows = sheet['rows']; self.cols = sheet['cols']
+        self._norms = {}; self._index = None      # normalised text per cell + label index, built once per sheet
+        self.unclear = set()                      # quantity cells kept as text because the number is ambiguous
         self.merge_top = {}
         for rng in sheet.get('merged') or ():
             try:
@@ -258,10 +260,46 @@ class Grid:
         cell = self.cells.get((r, c), {})
         return source(self.sheet['name'], cell.get('cell', ''), cell.get('value'), cell.get('formula'))
 
+    def unclear_at(self, r, c):
+        """A number the reader could not read safely: text such as “2.000” in a file that writes decimals with a
+        comma (there the dot groups thousands, so it is 2000, not 2). Kept as text for the person to type."""
+        return (self.cells.get((r, c)) or {}).get('flag') == 'decimal_comma'
+
+    def qty(self, r, c, value=None):
+        """The quantity in a cell as the order keeps it; an unclear number stays text (the planner then marks
+        that cell red and the size table says why) instead of being read as the wrong number."""
+        value = self.v(r, c) if value is None else value
+        if self.unclear_at(r, c):
+            self.unclear.add(address(c, r))
+            return value
+        return quantity_of(value)
+
+    def unclear_note(self):
+        if not self.unclear:
+            return None
+        cells = sorted(self.unclear, key=lambda a: cell_ref(a))
+        shown = ', '.join(cells[:6]) + ('…' if len(cells) > 6 else '')
+        return (f'Quantities in {shown} on “{self.sheet["name"]}” are written with a dot between thousands (for example '
+                f'“{text(self.v(*cell_ref(cells[0])))}”), the way files with decimal commas write them. They were not read as numbers — '
+                'type each quantity as a whole number.')
+
+    def nv(self, r, c):
+        """Normalised text of a visible cell. Cached: header lookups read the same sheet once per field and per
+        order, which made big files quadratic (2,000 lines took minutes) when each lookup re-normalised every cell."""
+        n = self._norms.get((r, c))
+        if n is None:
+            n = self._norms[(r, c)] = norm(self.v(r, c))
+        return n
+
     def find(self, aliases, rows=None, first=True):
+        if self._index is None:
+            self._index = {}
+            for (r, c) in self.cells:
+                n = self.nv(r, c)
+                if n:
+                    self._index.setdefault(n, []).append((r, c))
         names = {norm(a) for a in aliases}
-        hits = sorted((c['row'], c['col']) for c in self.cells.values()
-                      if norm(c['value']) in names and (rows is None or c['row'] in rows))
+        hits = sorted(p for name in names for p in self._index.get(name, ()) if rows is None or p[0] in rows)
         return (hits[0] if hits else None) if first else hits
 
     def hidden_note(self):
@@ -302,14 +340,15 @@ class Grid:
     def header_columns(self, row, spec):
         """Map semantic -> column for one header row, first match wins, prefix aliases allowed."""
         found = {}
+        names = {key: [x for x in (norm(a) for a in aliases) if x] for key, aliases in spec.items()}
         for col in range(1, self.cols + 1):
-            n = norm(self.v(row, col))
+            n = self.nv(row, col)
             if not n:
                 continue
-            for key, aliases in spec.items():
+            for key, alias_names in names.items():
                 if key in found:
                     continue
-                if any(n == norm(a) or (len(norm(a)) >= 3 and n.startswith(norm(a) + ' ')) for a in aliases):
+                if any(n == a or (len(a) >= 3 and n.startswith(a + ' ')) for a in alias_names):
                     found[key] = col; break
         return found
 
@@ -1216,9 +1255,10 @@ def parse_mapping(sheets, mapping, fields=None):
             line = dict(label=o['style'], color=color, declared_total=None, sizes=[], provenance={}); o['lines'].append(line)
             if 'color' in columns:
                 line['provenance']['color'] = g.p(*got['color'][1])
-        qn = qty_value(qty)[0]; read += qn or 0
-        line['sizes'].append(dict(size=text(size), quantity=quantity_of(qty), source=g.p(r, columns['quantity'])))
-    notes = [n for n in (_total_note(g, totals, read), _below_note(g, stop, [columns['quantity']])) if n]
+        qn = None if g.unclear_at(r, columns['quantity']) else qty_value(qty)[0]; read += qn or 0
+        line['sizes'].append(dict(size=text(size), quantity=g.qty(r, columns['quantity'], qty), source=g.p(r, columns['quantity']),
+                                  **({'unclear': text(qty)} if g.unclear_at(r, columns['quantity']) else {})))
+    notes = [n for n in (_total_note(g, totals, read), _below_note(g, stop, [columns['quantity']]), g.unclear_note()) if n]
     for o in groups.values():
         o['warnings'] = ['Confirm whether the source quantities represent pieces or packs, and whether they are sample quantities.']
         for n in notes:
@@ -1278,15 +1318,16 @@ def matrix_order(g, t):
             break
         if sum(1 for c in sizes if heads[c] and norm(g.v(r, c)) == heads[c]) >= 2:
             stop = r; break                            # the size headings again: a second table starts here
-        read += sum(qty_value(g.v(r, c))[0] or 0 for c in sizes if g.v(header, c) is not None)
+        read += sum(qty_value(g.v(r, c))[0] or 0 for c in sizes if g.v(header, c) is not None and not g.unclear_at(r, c))
         lines.append(dict(label=text(g.v(r, label_col)) if label_col else '', color=text(g.v(r, color_col)) if color_col else '',
                           declared_total=quantity_of(g.v(r, total_col)) if total_col else None,
                           provenance={'color': g.p(r, color_col)} if color_col else {},
-                          sizes=[dict(size=text(g.v(header, c)), quantity=quantity_of(g.v(r, c)), source=g.p(r, c), size_source=g.p(header, c))
+                          sizes=[dict(size=text(g.v(header, c)), quantity=g.qty(r, c), source=g.p(r, c), size_source=g.p(header, c),
+                                      **({'unclear': text(g.v(r, c))} if g.unclear_at(r, c) else {}))
                                  for c in sizes if g.v(header, c) is not None]))
     o['lines'] = lines; o['order_lines'] = deepcopy(lines)
     o['warnings'] = []
-    for n in (_total_note(g, totals, read), _below_note(g, stop, list(sizes))):
+    for n in (_total_note(g, totals, read), _below_note(g, stop, list(sizes)), g.unclear_note()):
         if n:
             review(o, 'lines', n)
     return o

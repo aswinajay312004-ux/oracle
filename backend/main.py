@@ -242,7 +242,20 @@ def health(user=Depends(authenticated)):
     except Exception as exc:
         status['error'] = ('Local Oracle is not reachable. Start Docker Desktop and the oracle26ai container, '
                            'then refresh. Uploads and previews still work; saving needs Oracle.') if not isinstance(exc, RuntimeError) else str(exc)
-    return dict(database=status, ollama=ai.status(), settings=settings())
+    return dict(database=status, ollama=ai.status(), settings=settings(), readers=_reader_checks())
+
+
+_reader_check = {}
+
+
+def _reader_checks():
+    """Versions that matter for reading uploads safely (Python, Expat, reader packages); computed once."""
+    if not _reader_check:
+        try:
+            _reader_check.update(readers.selfcheck())
+        except Exception as exc:          # never let a diagnostic break the health page
+            _reader_check.update(ok=False, checks=[dict(name='Readers', ok=False, message=str(exc)[:200])])
+    return _reader_check
 
 
 @app.get('/api/masters')
@@ -324,11 +337,11 @@ def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
     name = str(file.filename or '').replace('\\', '/').split('/')[-1]
     lower = name.lower()
     if not lower.endswith(readers.ACCEPT):
-        raise HTTPException(415, 'Upload the buyer Excel file (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv, Excel XML/HTML export) or JSON data.')
+        raise HTTPException(415, 'Upload the buyer Excel file (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv, Excel XML/HTML/web-page export) or JSON data.')
     content = file.file.read(readers.MAX_BYTES + 1)
-    readers.sniff(content, name)   # rejects an empty, oversized or non-spreadsheet file (415) before anything is parsed
+    kind = readers.sniff(content, name)   # rejects an empty, oversized or non-spreadsheet file (415) before parsing
     fields = current_fields()
-    parsed = workbooks.parse(content, store.templates(), name, fields); kind = 'excel'
+    parsed = workbooks.parse(content, store.templates(), name, fields)
     used = parsed.pop('templates_used', [])
     for tid in used:
         store.template_used(tid)

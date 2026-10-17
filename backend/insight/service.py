@@ -256,7 +256,7 @@ def uploads_db():
     conn.execute(f'CREATE TABLE {LOCAL_TABLE} ({", ".join(LOCAL_COLUMNS)})')
     rows = []
     for d in store.summaries():
-        rows.append((d.get('filename'), (d.get('kind') or 'excel').upper(), d.get('format'), d.get('uploaded_by'),
+        rows.append((d.get('filename'), {'ooxml': 'XLSX', 'excel': 'XLSX', 'html': 'XLS', 'xml2003': 'XML'}.get(d.get('kind') or 'excel', str(d.get('kind')).upper()), d.get('format'), d.get('uploaded_by'),
                      (d.get('created_at') or '')[:10], d.get('status'), ', '.join(x for x in d.get('buyers', []) if x) or None,
                      ', '.join(x for x in d.get('styles', []) if x) or None, ', '.join(x for x in d.get('order_refs', []) if x) or None,
                      d.get('pieces')))
