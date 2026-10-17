@@ -689,7 +689,7 @@ def test_typed_text_values_follow_indian_and_western_grouping():
     (b'[' * 100_000 + b']' * 100_000, 'nested too deeply'),
     (b'[{"Qty": ' + b'9' * 5000 + b'}]', 'more than 4,300 digits'),
     (b'{"Style": }', 'not valid JSON'),
-])
+], ids=['nan', 'infinity', 'repeated-key', 'deep-nesting', 'huge-number', 'invalid'])   # short IDs: Windows caps env variables
 def test_json_that_cannot_be_trusted_is_refused_plainly(content, message):
     with pytest.raises(readers.Unreadable, match=message):
         readers.read(content, 'x.json')

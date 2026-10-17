@@ -5,6 +5,7 @@ and formula / DDE injection flags in the planner."""
 import asyncio
 import hashlib
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -190,10 +191,11 @@ def test_api_docs_are_off_in_production(client):
         assert client.get(path).status_code == 404
 
 
-def test_api_docs_are_on_only_when_development_is_chosen():
+def test_api_docs_are_on_only_when_development_is_chosen(tmp_path):
     code = 'import backend.main as m; print(m.app.openapi_url, m.app.docs_url)'
-    out = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True, text=True, timeout=120,
-                         env={'PATH': '', 'POPPYS_ENV': 'development', 'POPPYS_DATA_DIR': str(ROOT / 'data')})
+    env = {'PATH': '', 'POPPYS_ENV': 'development', 'POPPYS_DATA_DIR': str(tmp_path)}
+    env.update({k: os.environ[k] for k in ('SYSTEMROOT', 'WINDIR') if k in os.environ})   # Windows sockets need these
+    out = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True, text=True, timeout=120, env=env)
     assert out.stdout.split() == ['/openapi.json', '/docs'], out.stderr[-2000:]
 
 

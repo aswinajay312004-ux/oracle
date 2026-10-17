@@ -8,3 +8,11 @@ import os
 
 os.environ.setdefault('POPPYS_INLINE_PARSE', '1')
 os.environ.setdefault('POPPYS_COOKIE_SECURE', 'false')
+
+
+def pytest_make_parametrize_id(config, val, argname):
+    """Long file contents make test IDs of thousands of characters; pytest puts the ID in the
+    PYTEST_CURRENT_TEST environment variable, which Windows caps at 32,767 characters."""
+    if isinstance(val, (bytes, str)) and len(val) > 60:
+        return f'{argname}-{len(val)}'
+    return None

@@ -131,15 +131,16 @@ def test_every_request_gets_one_json_access_line_with_its_request_id(admin, tmp_
 
 def test_security_events_are_logged_and_passwords_never_are(client, tmp_path):
     secret_pw = 'Correct-Horse-Battery-77'
+    wrong_pw = secret_pw.replace('Correct', 'Wrong').replace('77', '88')
     assert client.post('/api/setup', json={'username': 'admin', 'password': secret_pw}).status_code == 200
     token = client.cookies.get('poppys_session')
-    client.post('/api/login', json={'username': 'admin', 'password': 'Wrong-Horse-Battery-88'})
+    client.post('/api/login', json={'username': 'admin', 'password': wrong_pw})
     client.post('/api/login', json={'username': 'admin', 'password': secret_pw})
     client.post('/api/uploads', files={'file': ('bom.csv', b'Style,Colour,Size,Qty\nT1,NAVY,S,10\n')})
     client.post('/api/logout')
     logs.flush()
     text = (tmp_path / 'logs' / 'app.jsonl').read_text(encoding='utf-8')
-    assert secret_pw not in text and 'Wrong-Horse-Battery-88' not in text and token not in text
+    assert secret_pw not in text and wrong_pw not in text and token not in text
     events = [x.get('event') for x in log_lines(tmp_path)]
     for e in ('setup', 'login_failed', 'login_ok', 'logout'):
         assert e in events, e
