@@ -93,37 +93,43 @@ function bind() {
     if (b.dataset.m === 'apply') return submit();
     if (b.dataset.pick) return startPick(b.dataset.pick);
     if (b.dataset.use) { setField(b.dataset.use, b.dataset.cell); drawForm(); drawGrid(); return focusTarget(`field:${b.dataset.use}`); }
-    if (b.dataset.ttype) { if (ctx.def.table?.type !== b.dataset.ttype) { ctx.def.table = { type: b.dataset.ttype, header_row: ctx.def.table?.header_row ?? null, ...(b.dataset.ttype === 'flat' ? { columns: {} } : {}) }; clearBad(t => t.startsWith('col:')); } drawForm(); drawGrid(); return; }
+    if (b.dataset.ttype) { if (ctx.def.table?.type !== b.dataset.ttype) { touched(); ctx.def.table = { type: b.dataset.ttype, header_row: ctx.def.table?.header_row ?? null, ...(b.dataset.ttype === 'flat' ? { columns: {} } : {}) }; clearBad(t => t.startsWith('col:')); } drawForm(); drawGrid(); return; }
     if (b.dataset.unit != null) { setUnit(b.dataset.unit); return; }
     if (b.dataset.goto) return focusTarget(b.dataset.goto);
   };
   root.oninput = e => {
     const el = e.target;
     if (el.dataset.mf) { setField(el.dataset.mf, el.value); refreshRow(`field:${el.dataset.mf}`); drawGrid(); drawSave(); }
-    else if (el.dataset.mt) { ctx.def.table.header_row = Number(el.value) || null; clearBad(t => t === 'row'); refreshTableValues(); drawGrid(); }
+    else if (el.dataset.mt) { touched(); ctx.def.table.header_row = Number(el.value) || null; clearBad(t => t === 'row'); refreshTableValues(); drawGrid(); }
     else if (el.dataset.mc) { setCol(el.dataset.mc, colnum(el.value)); refreshRow(`col:${el.dataset.mc}`); drawGrid(); }
-    else if (el.id === 'map-ppu') { ctx.unit.pieces_per_unit = el.value === '' ? null : Number(el.value); ctx.unit.touched = true; clearBad(t => t === 'unit'); refreshUnitMsg(); }
-    else if (el.id === 'map-name') { ctx.name = el.value; ctx.nameTouched = true; drawVersion(); }
+    else if (el.id === 'map-ppu') { touched(); ctx.unit.pieces_per_unit = el.value === '' ? null : Number(el.value); ctx.unit.touched = true; clearBad(t => t === 'unit'); refreshUnitMsg(); }
+    else if (el.id === 'map-name') { touched(); ctx.name = el.value; ctx.nameTouched = true; drawVersion(); }
   };
   root.onchange = e => {
     if (e.target.id === 'map-sheet') switchSheet(e.target.value);
-    if (e.target.id === 'map-save') { ctx.save = e.target.checked; $('#map-name', root).disabled = !ctx.save; drawVersion(); }
+    if (e.target.id === 'map-save') { touched(); ctx.save = e.target.checked; $('#map-name', root).disabled = !ctx.save; drawVersion(); }
   };
   root.onkeydown = e => { if (e.key === 'Escape' && ctx.pick) { e.stopPropagation(); cancelPick(); } };
 }
 
 // ---------------------------------------------------------------- state changes
+// Every choice the person makes here marks the layout check unsaved (state.mappingDirty), so leaving the page
+// asks first (app.js beforeunload); applying the layout or closing the check clears it (workspace.js).
+const touched = () => { state.mappingDirty = true; };
 function setField(key, value) {
+  touched();
   const v = String(value || '').trim().toUpperCase();
   if (v) (ctx.def.fields ||= {})[key] = v; else delete ctx.def.fields?.[key];
   clearBad(t => t === `field:${key}`);
 }
 function setCol(key, n) {
+  touched();
   const t = ctx.def.table ||= { type: 'matrix' };
   if (t.type === 'flat') { t.columns ||= {}; if (n) t.columns[key] = n; else delete t.columns[key]; } else t[key] = n || null;
   clearBad(x => x === `col:${key}` || (['first_size_col', 'last_size_col'].includes(key) && /^col:(first|last)_size_col$/.test(x)));
 }
 function setUnit(u) {
+  touched();
   ctx.unit.qty_unit = u; ctx.unit.touched = true;
   if (u === 'PCS') ctx.unit.pieces_per_unit = 1;
   if (u === 'PACK' && !(ctx.unit.pieces_per_unit >= 2)) ctx.unit.pieces_per_unit = null;
@@ -183,7 +189,7 @@ function cancelPick() {
 function picked(r, c) {
   const target = ctx.pick; const [kind, key] = target.split(':');
   if (kind === 'field') setField(key, `${letter(c)}${r}`);
-  if (kind === 'row') { ctx.def.table.header_row = r; clearBad(t => t === 'row'); }
+  if (kind === 'row') { touched(); ctx.def.table.header_row = r; clearBad(t => t === 'row'); }
   if (kind === 'col') { setCol(key, c); if (!ctx.def.table.header_row) ctx.def.table.header_row = r; }
   ctx.pick = null; $('#pick-hint', ctx.container).textContent = 'Highlighted cells are what will be read.';
   drawForm(); drawGrid(); focusTarget(target);

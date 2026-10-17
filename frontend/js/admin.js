@@ -189,7 +189,7 @@ async function users(body) {
   body.innerHTML = `<section class="card"><div class="card-head"><div><h2>People</h2><div class="sub">Operators prepare entries · Approvers save to Oracle · Admins manage setup</div></div>
       <button class="secondary small" data-signout-all title="Ends every signed-in session except yours, for example after a shared password became known">Sign out everyone else</button></div>
     <div class="tbl-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
-    ${list.map(u => `<tr><td><strong>${esc(u.username)}</strong></td><td><select data-role="${esc(u.username)}">${roles.map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+    ${list.map(u => `<tr><td><strong>${esc(u.username)}</strong></td><td><select data-role="${esc(u.username)}" aria-label="Role of ${esc(u.username)}">${roles.map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
       <td>${u.active ? '<span class="pill ok">active</span>' : '<span class="pill">disabled</span>'}${u.locked_until ? ` <span class="pill err" title="Too many wrong passwords">locked until ${esc(new Date(u.locked_until).toLocaleTimeString())}</span>` : ''}</td>
       <td><button class="ghost small" data-active-user="${esc(u.username)}" data-active="${!u.active}">${u.active ? 'Disable' : 'Enable'}</button> <button class="ghost small" data-reset="${esc(u.username)}">Reset password</button>${u.locked_until ? ` <button class="secondary small" data-unlock="${esc(u.username)}">Unlock</button>` : ''}</td></tr>`).join('')}
     </tbody></table></div>
@@ -206,7 +206,7 @@ async function users(body) {
     if (un) busy('Unlocking…', async () => { await api(`/api/users/${id(un.dataset.unlock)}/unlock`, { method: 'POST' }); notify(`${un.dataset.unlock} can sign in again.`, 'success'); await users(body); });
     if (all) confirmDialog('Sign out everyone else?', '<p>Every other signed-in session ends now. People sign in again with their own password.</p>', 'Sign them out')
       .then(ok => ok && busy('Signing out…', async () => { const res = await api('/api/sessions/sign-out-everyone', { method: 'POST' }); notify(`${res.sessions_ended} session${res.sessions_ended === 1 ? '' : 's'} ended.`, 'success'); }));
-    if (r) { const pw = prompt(`New password for ${r.dataset.reset} (12+ characters, not a common password)`); if (pw) busy('Saving…', async () => { await api(`/api/users/${id(r.dataset.reset)}`, { method: 'PATCH', body: { password: pw } }); notify('Password reset. Their sessions were signed out.', 'success'); }); }
+    if (r) { const pw = prompt(`Temporary password for ${r.dataset.reset} (12+ characters, not a common password). They choose their own password when they next sign in.`); if (pw) busy('Saving…', async () => { await api(`/api/users/${id(r.dataset.reset)}`, { method: 'PATCH', body: { password: pw } }); notify('Password reset. Their sessions were signed out.', 'success'); }); }
   };
 }
 
@@ -229,7 +229,7 @@ async function audit(body) {
   body.onclick = e => {
     if (!e.target.closest('[data-verify-audit]')) return;
     busy('Checking every entry…', async () => {
-      const r = await api('/api/audit/verify');
+      const r = await api('/api/audit/verify', { method: 'POST' });
       if (r.ok) notify(`The audit history is untouched: ${r.rows} entries checked.`, 'success');
       else notify(`The audit history was changed near entry ${r.row ?? '?'}. Keep the database file and tell your administrator.`, 'error');
       await audit(body);
@@ -267,9 +267,9 @@ async function dictionary(body) {
       ${edit ? '<button class="secondary small ml-auto" id="kb-refresh">Refresh from Oracle</button>' : ''}</div>
     <div class="stat-row">${[['Tables', s.tables], ['Links confirmed', (st.verified || 0) + (st.declared || 0)], ['Links to review', (st.proposed || 0) + (st.inferred || 0)], ['Values indexed', fmt(k.values.reduce((n, v) => n + v.values, 0), 0)], ['Confirmed answers', examples.length]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
     <section class="card mb-14"><div class="card-head"><div><h2>Relationships</h2><div class="sub">How tables link. Confirmed links are used freely; unconfirmed ones lower an answer’s confidence until verified.</div></div>
-      <select id="rel-filter" class="w-220"><option value="review">Needs review</option><option value="all">All links</option></select></div>
+      <select id="rel-filter" class="w-220" aria-label="Which links to show"><option value="review">Needs review</option><option value="all">All links</option></select></div>
       <div class="tbl-wrap flush max-h-420" id="rels"></div></section>
-    <section class="card mb-14"><div class="card-head"><div><h2>Tables &amp; business names</h2><div class="sub">Click a table to edit its business name, synonyms and column meanings.</div></div><input id="dict-q" class="w-220" placeholder="Search"></div>
+    <section class="card mb-14"><div class="card-head"><div><h2>Tables &amp; business names</h2><div class="sub">Click a table to edit its business name, synonyms and column meanings.</div></div><input id="dict-q" class="w-220" placeholder="Search" aria-label="Search tables"></div>
       <div class="dict-grid"><div id="dict-list" class="dict-list"></div><div id="dict-edit" class="dict-edit"><p class="empty">Choose a table.</p></div></div></section>
     <section class="card"><div class="card-head"><div><h2>Confirmed answers</h2><div class="sub">Questions marked “correct” in Ask AI. Similar questions reuse the same plan with new values.</div></div></div>
       ${examples.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>Question</th><th>Pattern</th><th>By</th><th>Used</th><th></th></tr></thead><tbody>${examples.map(e => `<tr><td>${esc(e.question)}</td><td class="mono">${esc(e.masked)}</td><td>${esc(e.actor)}</td><td>${e.uses}</td><td>${edit ? `<button class="ghost small" data-del-example="${e.id}">Remove</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">None yet.</p>'}</section>`;
@@ -308,9 +308,9 @@ async function openDict(table, edit) {
       ${edit ? '<div><button class="primary small">Save table</button></div>' : ''}</form>
     <div class="tbl-wrap mt-12 max-h-420"><table class="grid-input"><thead><tr><th>Column</th><th>Business name</th><th>Synonyms</th><th>Role</th><th></th></tr></thead><tbody>
       ${t.columns.map(c => `<tr data-col="${esc(c.name)}"><td class="mono">${esc(c.name)}<div class="muted small-text">${esc(c.type)}${c.references ? ` → ${esc(c.references)}` : ''}</div></td>
-        <td><input data-k="business" value="${esc(c.business)}" maxlength="80" ${edit ? '' : 'disabled'}></td><td><input data-k="synonyms" value="${esc((c.synonyms || []).join(', '))}" ${edit ? '' : 'disabled'}></td>
-        <td><select data-k="role" ${edit ? '' : 'disabled'}>${['label', 'measure', 'date', 'reference', 'attribute', 'key', 'system'].map(r => `<option ${r === c.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
-        <td>${edit ? '<button class="tiny secondary" data-save-col>Save</button>' : ''}</td></tr>`).join('')}</tbody></table></div>`;
+        <td><input data-k="business" value="${esc(c.business)}" maxlength="80" aria-label="Business name of ${esc(c.name)}" ${edit ? '' : 'disabled'}></td><td><input data-k="synonyms" value="${esc((c.synonyms || []).join(', '))}" aria-label="Synonyms of ${esc(c.name)}" ${edit ? '' : 'disabled'}></td>
+        <td><select data-k="role" aria-label="Role of ${esc(c.name)}" ${edit ? '' : 'disabled'}>${['label', 'measure', 'date', 'reference', 'attribute', 'key', 'system'].map(r => `<option ${r === c.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+        <td>${edit ? `<button class="tiny secondary" data-save-col aria-label="Save ${esc(c.name)}">Save</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
   const list = v => v.split(',').map(x => x.trim()).filter(Boolean);
   $('#dict-form').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target);
     busy('Saving…', async () => { await api('/api/knowledge/objects', { method: 'PUT', body: { object: t.name, business: f.get('business'), description: f.get('description'), synonyms: list(f.get('synonyms')) } }); notify('Saved. Ask AI uses the new names right away.', 'success'); }); };

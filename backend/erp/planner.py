@@ -25,8 +25,30 @@ def normalize(s):
     return ' '.join(str(s or '').strip().upper().split())
 
 
+class Ref(dict):
+    """The generated ID of a row planned in this same plan, filled in at save time: {'ref': key}. A dict, so the plan
+    stays plain JSON (draft storage, the plan hash); a text value is never one, whatever it starts with, and order
+    fields that are not plain text or numbers are refused (evaluate), so no value from a file or the review
+    screen can become a reference."""
+    __slots__ = ()
+
+    def __init__(self, key):
+        super().__init__(ref=key)
+
+
+# Whole numbers grouped by dots or commas: in a file that writes decimal commas “2.000” is two thousand, elsewhere two,
+# and “1,500” may be one and a half. A quantity written like that is never guessed (docs/EXCEL_UNDERSTANDING.md).
+_GROUPED_WHOLE = re.compile(r'^[1-9]\d{0,2}([.,]\d{3})+$')
+# Commas that only group digits: 1,500.25 (thousands) and 1,20,000 (Indian lakh). Any other comma is refused.
+_GROUPED_NUMBER = re.compile(r'^(\d{1,3}(,\d{3})+|\d{1,2}(,\d{2})+,\d{3})(\.\d+)?$')
+
+
 def count(value, name, errors, allow_zero=True):
     """Whole, non-negative quantity. Appends a plain-language error and returns 0 when invalid."""
+    if isinstance(value, str) and _GROUPED_WHOLE.match(value.strip()):
+        v = value.strip()
+        errors.append(f'{name}: “{v}” could mean {v.replace(".", "").replace(",", "")} — type the quantity as a whole number.')
+        return 0
     try:
         if isinstance(value, bool) or value is None or str(value).strip() == '':
             raise ValueError()
@@ -47,7 +69,12 @@ def decimal(value, name, errors, positive=False, required=True):
             if not required:
                 return None
             raise ValueError()
-        d = Decimal(str(value).strip().replace(',', ''))
+        text = str(value).strip()
+        if ',' in text and not _GROUPED_NUMBER.match(text):
+            errors.append(f'{name}: “{text}” has a comma that does not separate thousands — type it with a decimal point '
+                          f'(for example 180.5).')
+            return None
+        d = Decimal(text.replace(',', ''))
         if not d.is_finite() or d < 0 or d > Decimal('999999999') or (positive and d == 0):
             raise ValueError()
         return d
@@ -167,13 +194,13 @@ def plan(catalog, orders, filehash, mapping, required=()):
     if not orders or len(orders) > LIMITS['orders']:
         issues.error('Import must contain 1–50 orders.')
     if catalog.file_committed(filehash):
-        issues.error('This exact workbook has already been committed. Open Import history to view it.')
+        issues.error('This exact workbook has already been saved to Oracle. Open Saved orders to view it.')
 
     def add(key, table, values, action='insert', provenance=None, where='', path=None):
         operations.append(dict(key=key, table=table, action=action, values=values, source=provenance or {}, path=path,
                                business=tables.get(table, {}).get('business') or master_names.get(table, ''),
                                where=where))
-        return '$' + key
+        return Ref(key)
 
 
     def master(role, label, where, provenance=None, path=None, required=True, field_path=None):
@@ -210,7 +237,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
         else:
             if table not in insertable:
                 issues.error(f'{where}: new {role} "{label}" needs INSERT permission on {table}.', path)
-            val = add(key, table, {pk: '$' + key, col: label}, provenance=provenance, where=where, path=field_path)
+            val = add(key, table, {pk: Ref(key), col: label}, provenance=provenance, where=where, path=field_path)
         known[code] = val
         return val
 
@@ -220,14 +247,17 @@ def plan(catalog, orders, filehash, mapping, required=()):
             if c['status'] != 'verified':
                 continue
             if c.get('key'):
-                value = '$' + ctx['self']
+                value = Ref(ctx['self'])
             elif 'parent' in c:
-                value = '$' + ctx['keys'][c['parent']]
+                value = Ref(ctx['keys'][c['parent']])
             elif 'copy' in c:
                 src, _, name = c['copy'].partition('.')
                 value = ctx['ops'][src].get(name)
             else:
                 value = c['value'] if 'value' in c else _template(ctx, c['template']) if 'template' in c else _field(ctx, c['field'])
+                if isinstance(value, (dict, list)):     # JSON sent to the review screen's API, never a file cell
+                    issues.error(f'{where}: {c.get("label") or col} must be plain text or a number.', path)
+                    continue
                 if c.get('master'):
                     if c.get('optional') and (value is None or str(value).strip() == ''):
                         continue
@@ -237,7 +267,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
                                    field_path=f'{path}.{name}' if path and name and scope != 'calc' else path)
                 elif c.get('optional') and (value is None or str(value).strip() == ''):
                     continue
-            values[col] = plain(value)
+            values[col] = None if value == '' else plain(value)     # Oracle stores '' as NULL; plan (and hash) what it keeps
         return values
 
     seen = set()
@@ -307,7 +337,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
                 issues.error(f'{where}: sample quantities total zero; enter sample quantities or select the order quantities explicitly for the demo.', lpath + '.sizes')
             prepared.append((li, line, where, lpath, total * factor, sizedata))
         order_pieces = sum(p[4] for p in prepared)
-        _check_packs(o, prepared, factor, prefix, base, issues)
+        _check_packs(o, factor, prefix, base, issues)
 
         orderkey = f'o{index + 1}'
         octx = dict(order=dict(o, order_ref=ref, **{k: dates.get(k) for k in ('ship_date', 'order_date')}),
@@ -332,11 +362,17 @@ def plan(catalog, orders, filehash, mapping, required=()):
 
         bom = dict(octx=octx, keys=keys, ops=ops, subnos=subnos, order_pieces=order_pieces, prefix=prefix, base=base,
                    orderkey=orderkey, ref=ref, tables=tables, writable=writable, issues=issues, evaluate=evaluate,
-                   add=add, totals=totals, reference_only=reference_only, derived=derived)
+                   add=add, totals=totals, reference_only=reference_only, derived=derived, factor=factor)
         _plan_fabrics(o, **bom)
         _plan_accessories(o, **bom)
 
-    _check_columns(operations, registry, issues, tables)
+    # Only verified tables are written: an order table an administrator set back to 'proposed' blocks the save.
+    for table in dict.fromkeys(op['table'] for op in operations if op['action'] == 'insert' and op['table'] in tables):
+        if table not in writable:
+            issues.error(f'{tables[table]["business"]} ({table}) is not verified for saving in the write mapping. '
+                         'An administrator must verify it in Setup → Write mapping before orders can be saved.')
+    meta = _column_meta(mapping)
+    _check_columns(operations, registry, issues, tables, meta)
     totals['fabric_kg'] = plain(q(totals['fabric_kg']))
     result = dict(operations=operations, errors=issues.messages('error'), warnings=issues.messages('warning'),
                   issues=_unique(issues.items), totals=totals,
@@ -345,7 +381,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
                                   for t, n in reference_only.items()],
                   skipped_columns={t: c for t, c in skipped.items() if c},
                   live=catalog.live, schema_fingerprint=digest(registry), derived=derived, mapping_fingerprint=fingerprint(mapping),
-                  columns=_column_meta(mapping))
+                  columns=meta)
     result['hash'] = digest(result)
     return result
 
@@ -368,7 +404,9 @@ def _unique(items):
     return out
 
 
-def _check_packs(o, prepared, factor, prefix, base, issues):
+def _check_packs(o, factor, prefix, base, issues):
+    """The workbook header's own packs → pieces figures (merch BOM: QTY(IN PACKS) / QTY(IN PIECES)) against the
+    pieces per pack chosen for the quantities. The pack make-up is the same for sample and order quantities."""
     packs = o.get('packs') or {}
     try:
         p, pcs = int(packs.get('packs') or 0), int(packs.get('pieces') or 0)
@@ -376,6 +414,9 @@ def _check_packs(o, prepared, factor, prefix, base, issues):
         return
     if not p or not pcs:
         return
+    if factor > 1 and factor * p != pcs:
+        issues.error(f'{prefix}: you chose {factor} pieces per pack, but the workbook header says {p} packs = {pcs} pieces '
+                     f'({plain(q(Decimal(pcs) / p, 2))} per pack). Correct the pieces per pack, or choose Pieces.', base + '.pieces_per_unit')
     if pcs % p:
         issues.warn(f'{prefix}: workbook pieces {pcs} is not a whole multiple of packs {p}. Check the pack composition.', base + '.packs')
         return
@@ -383,8 +424,9 @@ def _check_packs(o, prepared, factor, prefix, base, issues):
     workbook_lines = o.get('order_lines') or []
     workbook_total = sum(decimal(s.get('quantity'), '', [], required=False) or 0
                          for l in workbook_lines for s in l.get('sizes', []))
-    if workbook_lines and workbook_total != pcs:
-        issues.warn(f'{prefix}: order size breakdown totals {workbook_total} pieces but the header says {pcs} pieces ({p} packs × {per_pack}).', base + '.packs')
+    if workbook_lines and workbook_total * max(factor, 1) != pcs:
+        counted = f'{workbook_total} packs = {workbook_total * factor} pieces' if factor > 1 else f'{workbook_total} pieces'
+        issues.warn(f'{prefix}: order size breakdown totals {counted} but the header says {pcs} pieces ({p} packs × {per_pack}).', base + '.packs')
     if workbook_lines and len(workbook_lines) != per_pack:
         issues.warn(f'{prefix}: {p} packs → {pcs} pieces means {per_pack} pieces per pack, but {len(workbook_lines)} garment lines were found.', base + '.packs')
 
@@ -399,7 +441,7 @@ def _resolve_line(row, subnos, ref):
 
 
 def _plan_fabrics(o, octx, keys, ops, subnos, order_pieces, prefix, base, orderkey, ref,
-                  tables, writable, issues, evaluate, add, totals, reference_only, derived):
+                  tables, writable, issues, evaluate, add, totals, reference_only, derived, factor):
     fabrics = o.get('fabrics') or []
     if not fabrics or 'ORDFAB' not in tables:
         return
@@ -407,6 +449,7 @@ def _plan_fabrics(o, octx, keys, ops, subnos, order_pieces, prefix, base, orderk
     sev = 'error' if strict else 'warning'
     if len(fabrics) > LIMITS['fabrics']:
         issues.error(f'{prefix}: more than {LIMITS["fabrics"]} fabric rows.', base + '.fabrics')
+    per_piece = []      # packs: fabric kg for the pieces saved that differ from the workbook's own fabric total
     for fi, f in enumerate(fabrics):
         where = f'{prefix}, fabric {fi + 1} ({f.get("component") or f.get("portion") or "row"})'
         fpath = f'{base}.fabrics.{fi}'
@@ -430,6 +473,8 @@ def _plan_fabrics(o, octx, keys, ops, subnos, order_pieces, prefix, base, orderk
         if wr is not None and wt is not None and abs(wr * rej - wt) > Decimal('0.01'):
             issues.warn(f'{where}: workbook total {wt} kg differs from {wr} × {rej} = {q(wr * rej)} kg.', fpath + '.total')
         total_kg = q((pieces or 0) * (yy or 0) / 1000 * rej)
+        if factor > 1 and pieces and wq is not None and wt is not None and pieces == wq * factor:   # its table counted packs
+            per_piece.append(f'{plain(total_kg)} kg, not {plain(wt)} kg')
         yarns = f.get('yarns') or []
         if strict and 'ORDYARN' in tables and not yarns:
             issues.add('error' if 'ORDYARN' in writable else 'warning', f'{where}: add the yarn split (count, colour and %).', fpath + '.yarns')
@@ -472,6 +517,10 @@ def _plan_fabrics(o, octx, keys, ops, subnos, order_pieces, prefix, base, orderk
                     provenance=y.get('source'), where=f'{where}, yarn {yi + 1}', path=f'{fpath}.yarns.{yi}')
             else:
                 reference_only['ORDYARN'] = reference_only.get('ORDYARN', 0) + 1
+    if per_piece:
+        issues.warn(f'{prefix}: quantities are packs of {factor}, so fabric is worked out for the pieces being saved (packs × {factor}) '
+                    f'and differs from the workbook’s fabric table ({"; ".join(per_piece)}). Check that its consumption (grams) is '
+                    'per piece, not per pack.', base + '.fabrics')
 
 
 def _composition(f, yarns, where, path, issues):
@@ -492,21 +541,23 @@ def size_key(name):
 
 
 def _plan_accessories(o, octx, keys, ops, subnos, order_pieces, prefix, base, orderkey, ref,
-                      tables, writable, issues, evaluate, add, totals, reference_only, derived):
+                      tables, writable, issues, evaluate, add, totals, reference_only, derived, factor):
     rows = o.get('accessories') or []
     if not rows or 'ORDACC' not in tables:
         return
     strict = 'ORDACC' in writable; sev = 'error' if strict else 'warning'
     if len(rows) > LIMITS['accessories']:
         issues.error(f'{prefix}: more than {LIMITS["accessories"]} accessory rows.', base + '.accessories')
-    workbook = o.get('workbook_pieces')
+    workbook = o.get('workbook_pieces')     # the workbook's order size total, in its own unit (packs when qty_unit is PACK)
     order_sizes = {size_key(sz.get('size')): str(sz.get('size')).strip() for l in o.get('lines', []) for sz in l.get('sizes', [])}
     aligned = set()
     ratio = None
     if workbook:
-        ratio = Decimal(order_pieces) / Decimal(workbook)
+        per = max(factor, 1)
+        ratio = Decimal(order_pieces) / (Decimal(workbook) * per)
         if ratio != 1:
-            issues.warn(f'{prefix}: accessory quantities are scaled from the workbook’s {workbook} pieces to the {order_pieces} pieces being saved (× {q(ratio, 4)}).', base + '.accessories')
+            amount = f'{workbook} packs ({workbook * per} pieces)' if per > 1 else f'{workbook} pieces'
+            issues.warn(f'{prefix}: accessory quantities are scaled from the workbook’s {amount} to the {order_pieces} pieces being saved (× {q(ratio, 4)}).', base + '.accessories')
     for ai, a in enumerate(rows):
         where = f'{prefix}, accessory {ai + 1} ({a.get("name") or a.get("category") or "row"})'
         apath = f'{base}.accessories.{ai}'
@@ -570,8 +621,7 @@ def formula_risk(value):
 def _check_formulas(op, vals, tables, registry, issues):
     for col, value in vals.items():
         meta = registry.get(op['table'], {}).get(col)
-        if not meta or meta['type'] not in ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR', 'VARCHAR', 'CLOB') or not isinstance(value, str) \
-                or value.startswith('$'):
+        if not meta or meta['type'] not in ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR', 'VARCHAR', 'CLOB') or not isinstance(value, str):
             continue
         risk = formula_risk(value)
         if not risk:
@@ -590,7 +640,7 @@ def _check_formulas(op, vals, tables, registry, issues):
                         f'formula when {op["table"]}.{col} is exported later. It is saved as text, never calculated; check it is meant.', path)
 
 
-def _check_columns(operations, registry, issues, tables):
+def _check_columns(operations, registry, issues, tables, labels=None):
     # Fail closed against actual Oracle lengths/precision/scale/nullability rather than silently truncate.
     too_long = {}
     for op in operations:
@@ -602,14 +652,14 @@ def _check_columns(operations, registry, issues, tables):
             continue
         _check_formulas(op, vals, tables, registry, issues)
         for col, meta in registry[table].items():
-            if meta['nullable'] == 'N' and vals.get(col) is None:
+            if meta['nullable'] == 'N' and vals.get(col) in (None, ''):
                 issues.error(f'{table}.{col}: mandatory database value missing.')
         for col, value in vals.items():
             meta = registry[table].get(col)
             if meta is None:
                 issues.error(f'{table}.{col}: column absent in live database.')
                 continue
-            if value is None or (isinstance(value, str) and value.startswith('$')):
+            if value is None or isinstance(value, Ref):
                 continue
             if meta['type'] in ('VARCHAR2', 'CHAR') and len(str(value).encode('utf-8')) > meta['length']:
                 field = (tables.get(table, {}).get('columns', {}).get(col) or {}).get('field', '')
@@ -634,4 +684,7 @@ def _check_columns(operations, registry, issues, tables):
     for (table, col, value), where in too_long.items():
         size = len(value.encode('utf-8')); limit = registry[table][col]['length']
         rows = f'{where[0][0]}' if len(where) == 1 else f'{where[0][0]} and {len(where) - 1} more rows'
-        issues.error(f'{rows}: “{value}” is {size} characters but Oracle {table}.{col} allows {limit}. Shorten it.', where[0][1])
+        label = ((labels or {}).get(table, {}).get(col) or {}).get('label') or 'This value'
+        wide = '' if size == len(value) else ' (letters such as é or ₹ count as 2–3)'
+        issues.error(f'{rows}: {label} can hold at most {limit} characters in Axpert, but “{value}” has {size}{wide}. '
+                     f'Shorten it. (Oracle {table}.{col})', where[0][1])

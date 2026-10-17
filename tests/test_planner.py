@@ -27,13 +27,16 @@ def verified_bom(skip_masters=('fabric', 'count', 'accessory')):
 
 
 def normalized(p):
+    """Golden comparison: generated IDs by what they point at. The golden file predates planner.Ref ('$key' text) and
+    blank-to-NULL ('' is now planned as None, as Oracle stores it)."""
     keys = {'$' + op['key']: op for op in p['operations']}
     def lab(v):
+        v = '$' + v['ref'] if isinstance(v, dict) and 'ref' in v else None if v == '' else v
         if isinstance(v, str) and v in keys:
             op = keys[v]
             if op['table'].startswith('ORD'):
                 return f'{op["table"]}:{op["key"]}'
-            return op['table'] + ':' + [x for x in op['values'].values() if not str(x).startswith('$')][-1]
+            return op['table'] + ':' + [x for x in op['values'].values() if not isinstance(x, dict) and not str(x).startswith('$')][-1]
         return v
     return sorted(json.dumps([op['table'], op['action'], op['key'] if op['table'].startswith('ORD') else '',
                               {k: lab(v) for k, v in op['values'].items()}], sort_keys=True, default=str) for op in p['operations'])

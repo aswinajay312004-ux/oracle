@@ -227,6 +227,7 @@ _UNC_PATH = re.compile(r'\\\\[^\s"\'<>|,;)\\]+\\[^\s"\'<>|,;)]*')
 _POSIX_PATH = re.compile(r'(?<![\w.:/~\\-])/(?:[^\s/"\'<>|,;)]+/)+[^\s"\'<>|,;)]*')
 _FILE_URL = re.compile(r'(?i)\bfile:/+[^\s"\'<>]*')
 GENERIC = 'Something went wrong. Nothing was saved. Reference {rid}.'
+GENERIC_READ = 'Something went wrong while loading this. Reference {rid}.'   # a GET never saves anything
 
 
 def safe_text(text, limit=2000):
@@ -254,10 +255,11 @@ def raised_by_our_code(exc):
     return os.path.normcase(os.path.abspath(tb.tb_frame.f_code.co_filename)).startswith(BACKEND)
 
 
-def problem(status=500, request_id=None):
+def problem(status=500, request_id=None, method=None):
     rid = request_id or logs.request_id() or uuid.uuid4().hex
+    text = GENERIC_READ if method in SAFE_METHODS else GENERIC
     return JSONResponse({'type': 'about:blank', 'title': 'Internal Server Error', 'status': status,
-                         'detail': GENERIC.format(rid=rid), 'request_id': rid},
+                         'detail': text.format(rid=rid), 'request_id': rid},
                         status_code=status, media_type='application/problem+json')
 
 
@@ -374,13 +376,13 @@ class BodyLimitMiddleware:
 
 
 # --- request ID, access log, headers, last-resort error handler ---------------------------------------------------------
-_REQUEST_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:-]{7,63}$')
+_REQUEST_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{7,63}')   # fullmatch: '$' would accept a trailing newline
 
 
 def incoming_request_id(scope):
     """A well-formed X-Request-ID from the caller is kept (so a script can correlate), anything else replaced."""
     value = Headers(scope=scope).get('x-request-id', '')
-    return value if _REQUEST_ID.match(value) else uuid.uuid4().hex
+    return value if _REQUEST_ID.fullmatch(value) else uuid.uuid4().hex
 
 
 class RequestContextMiddleware:
@@ -414,7 +416,7 @@ class RequestContextMiddleware:
             log_unexpected(exc, f'{scope.get("method")} {path}')
             if sent['status'] is not None:
                 raise                                   # the answer has started: the server closes the connection
-            await problem(500, rid)(scope, receive, send_with_headers)
+            await problem(500, rid, scope.get('method'))(scope, receive, send_with_headers)
         finally:
             user = (scope.get('state') or {}).get('user') or logs.current_user()
             logs.access.info('request', extra={'fields': {

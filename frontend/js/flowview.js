@@ -47,10 +47,13 @@ function labelOf(node, col, columns) {
   return columns?.[node.table]?.[col]?.label || node.labels?.[col] || col;
 }
 
-function valueHtml(node, record, col) {
+// A planned row's generated ID is {ref: key} (backend/erp/planner.py Ref); text, even text starting with $, is a value.
+const isRef = v => v != null && typeof v === 'object' && typeof v.ref === 'string';
+
+export function valueHtml(node, record, col) {
   const v = record.live?.[col];
   const dec = record.decoded?.[col];
-  if (typeof v === 'string' && v.startsWith('$')) {
+  if (isRef(v)) {
     if (dec != null) return `${esc(dec)} <span class="chip new">new master</span>`;
     return col === node.key ? '<span class="chip new">new ID on save</span>' : '<span class="chip calc">linked to new record</span>';
   }
@@ -66,6 +69,15 @@ function srcOf(node, record, col, columns) {
   if (s) return source(s);
   if (meta?.field?.startsWith('calc.')) return '<span class="chip calc">calculated</span>';
   return '';
+}
+
+// One row shown as a form (e.g. the order header): after a save, each field Oracle no longer holds as written is
+// marked, as the table view's Check column names them.
+export function formFields(node, r, cols, { planned, columns, written }) {
+  const differs = new Set(planned ? [] : r.mismatched || []);
+  return cols.map(c => ({ label: labelOf(node, c, columns), code: `${node.table}.${c}`,
+    html: valueHtml(node, r, c) + (differs.has(c) ? ' <span class="pill err">differs from what was saved</span>' : ''),
+    src: srcOf(node, r, c, columns), written: !planned && written.has(c) }));
 }
 
 function renderTable(el, node, { planned, columns, onReferenceOnly }) {
@@ -88,8 +100,8 @@ function renderTable(el, node, { planned, columns, onReferenceOnly }) {
     const cols = showAll || !written.size ? allCols.filter(c => showAll || recs.some(r => r.live?.[c] != null && r.live?.[c] !== '')) : allCols.filter(c => written.has(c));
     if (recs.length === 1 && node.kind !== 'master') {
       const r = recs[0];
-      body.innerHTML = formView(cols.map(c => ({ label: labelOf(node, c, columns), code: `${node.table}.${c}`, html: valueHtml(node, r, c),
-        src: srcOf(node, r, c, columns), written: !planned && written.has(c) })));
+      body.innerHTML = (!planned && !r.found ? '<div class="banner warning"><span class="b-ic">!</span><div>This row was not found in Oracle when it was read back.</div></div>' : '') +
+        formView(formFields(node, r, cols, { planned, columns, written }));
     } else {
       body.innerHTML = `<div class="tbl-wrap max-h-440"><table><thead><tr><th>#</th>${cols.map(c => `<th>${esc(labelOf(node, c, columns))}<span class="code">${esc(c)}</span></th>`).join('')}
         <th>${planned ? 'Action' : 'Check'}</th></tr></thead><tbody>

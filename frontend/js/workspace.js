@@ -1,8 +1,8 @@
 // New-order workspace: Upload → Review (Axpert-style entry) → Check & approve → Saved.
 // Problems are shown on the field or table cell they belong to (red outline + one short reason),
 // never as a separate list at the bottom of the page.
-import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, confirmDialog, drawer } from './util.js';
-import { api, id, orderFields } from './api.js';
+import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, confirmDialog, drawer, lastingBox, focusKey, restoreFocus } from './util.js';
+import { api, id, orderFields, NOT_RESPONDING } from './api.js';
 import { renderMapping } from './mapping.js';
 import { flowCard, mountFlow } from './flowview.js';
 
@@ -28,20 +28,44 @@ async function loadFields() { try { state.fields = await orderFields(true); } ca
 function step(n) {
   $$('.stepper li[data-step]').forEach(li => { const s = Number(li.dataset.step); li.classList.toggle('active', s === n); li.classList.toggle('done', s < n); });
 }
-function stage(name) {
+let current = 'upload';
+let stageListener = null;
+export const onStage = fn => { stageListener = fn; };   // app.js keeps the browser history in step (Back / Forward)
+export const currentStage = () => current;
+// A step change moves keyboard focus to the step's heading (#ws-title, tabindex="-1"), so a keyboard or screen
+// reader user starts reading the new step at its top instead of on <body>.
+function stage(name, { focus = true } = {}) {
   ['upload', 'read', 'review', 'approve', 'saved'].forEach(s => { $(`#stage-${s}`).hidden = s !== name; });
   step({ upload: 1, read: 1, review: 2, approve: 3, saved: 4 }[name]);
   $('#ws-title').textContent = { upload: 'New sample order', read: 'Reading the file', review: 'Review the order entry', approve: 'Check before saving', saved: 'Saved in Oracle' }[name];
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  current = name;
+  stageListener?.(name);
+  if (focus && !$('#view-workspace').hidden) $('#ws-title').focus({ preventScroll: true });
 }
 
 // short label for the file type the upload really was (decided from its contents, not its name)
 const badge = kind => ({ json: 'JSON', csv: 'CSV', ods: 'ODS', xml2003: 'XML' })[kind] || 'XLS';
 
-export function resetWorkspace() {
-  state.draft = null; state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false;
-  $('#file-input').value = ''; stage('upload'); recent();
+// Forget the open order completely: on sign-out and when a different person signs in, nothing of the previous
+// person's draft may stay on screen (or in memory behind buttons that no longer work).
+export function clearWorkspace({ focus = false } = {}) {
+  Object.assign(state, { draft: null, dirty: false, saved: false, tab: {}, planIssues: [], showMapping: false, notice: null, shown: null,
+    mappingDirty: false, openFab: new Set(), openGroups: new Set(), onlyProblems: false });
+  ['review', 'approve', 'saved'].forEach(s => { $(`#stage-${s}`).innerHTML = ''; });
+  $('#read-steps').innerHTML = ''; $('#read-actions').hidden = true;
+  $('#recent').innerHTML = '<p class="empty">Your uploads will appear here.</p>';
+  hideUploadError(); $('#file-input').value = ''; stage('upload', { focus });
 }
+export function resetWorkspace() { clearWorkspace({ focus: true }); recent(); }
+
+// Upload errors stay on the drop zone until dismissed or the next upload starts (the toast is shown too).
+function showUploadError(text) {
+  const box = $('#upload-error'); $('[data-box-text]', box).textContent = text; box.hidden = false;
+  $('#file-input').value = '';   // choosing the same file again must start a new upload
+}
+function hideUploadError() { $('#upload-error').hidden = true; }
+function uploadRefused(text) { showUploadError(text); notify(text, 'error'); $('#dropzone').focus(); }
 
 export async function recent() {
   try {
@@ -56,15 +80,16 @@ export async function recent() {
 }
 
 export async function upload(file) {
-  if (!file) return;
-  if (!/\.(xlsx|xlsm|xltx|xltm|xls|xlsb|ods|xml|htm|html|mht|mhtml|csv|tsv|txt|json)$/i.test(file.name)) return notify('Choose the buyer Excel file (.xlsx, .xls, .xlsm, .xlsb, .ods, CSV, Excel XML/HTML export) or a JSON file.', 'error');
-  if (!can('upload')) return notify('Your role can view orders but not upload. Ask an administrator.', 'error');
+  if (!file || state.busy) return;
+  hideUploadError();
+  if (!/\.(xlsx|xlsm|xltx|xltm|xls|xlsb|ods|xml|htm|html|mht|mhtml|csv|tsv|txt|json)$/i.test(file.name)) return uploadRefused('Choose the buyer Excel file (.xlsx, .xls, .xlsm, .xlsb, .ods, CSV, Excel XML/HTML export) or a JSON file.');
+  if (!can('upload')) return uploadRefused('Your role can view orders but not upload. Ask an administrator.');
   stage('read'); $('#read-title').textContent = `Reading ${file.name}…`; $('#read-steps').innerHTML = ''; $('#read-actions').hidden = true;
   await busy('Reading the file and finding the order…', async () => {
     const form = new FormData(); form.append('file', file);
     try { [state.draft] = await Promise.all([api('/api/uploads', { method: 'POST', form }), loadFields()]); }
-    catch (e) { stage('upload'); throw e; }
-    state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false;
+    catch (e) { stage('upload', { focus: false }); showUploadError(e.message); $('#dropzone').focus(); throw e; }
+    Object.assign(state, { dirty: false, saved: false, tab: {}, planIssues: [], showMapping: false, notice: null, shown: null, mappingDirty: false });
     showReading();
   });
 }
@@ -72,6 +97,7 @@ export async function upload(file) {
 export async function openDraft(draftId) {
   await busy('Opening the saved draft…', async () => {
     [state.draft] = await Promise.all([api(`/api/drafts/${id(draftId)}`), loadFields()]); state.dirty = false; state.saved = !!state.draft.result; state.tab = {}; state.showMapping = false;
+    Object.assign(state, { notice: null, shown: null, mappingDirty: false });
     state.planIssues = state.draft.plan?.issues || [];
     if (state.draft.result) return showSaved(state.draft.result);
     renderReview(); stage('review');
@@ -152,14 +178,19 @@ function cellMsgs(list) { return list.map(i => `<div class="cell-msg ${cls(i)}">
 // ---------------------------------------------------------------- review
 export function renderReview() {
   const d = state.draft; const root = $('#stage-review');
+  const keep = focusKey(root, [focusFallback()]);
   const locked = !!d.result;
   const needMap = !d.orders.length || /Needs column mapping/.test(d.format);
   const files = fileIssues();
   const p = d.plan;
+  const pill = d.result ? ['ok', 'Saved to Oracle'] : state.dirty ? ['warn', 'Changes not checked yet'] : !p ? ['', 'Draft']
+    : p.stale ? ['warn', 'Check it again'] : p.errors.length ? ['err', 'Needs attention'] : ['ok', 'Checked · ready'];
+  const n = state.notice;
   root.innerHTML = `
+    ${n ? lastingBox(n.kind, n.title, n.text, { id: 'review-notice' }) : ''}
     <div class="card doc-bar"><span class="file-badge">${badge(d.kind)}</span>
       <div><span class="name">${esc(d.filename)}</span><small>${d.template ? `Saved layout “${esc(d.template.name)}” (v${esc(d.template.version)})` : esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
-      <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? 'Saved to Oracle' : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
+      <span class="pill ${pill[0]}">${pill[1]}</span>
       <button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
     ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}
     ${p && !p.live ? '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected, so existing masters and order numbers could not be checked. Start the database and press <b>Check &amp; continue</b> again.</div></div>' : ''}
@@ -170,6 +201,12 @@ export function renderReview() {
   if (needMap || state.showMapping) renderMapping($('#mapping-panel'), d, applyMapping);
   if (locked) $$('#orders input, #orders select, #orders button').forEach(e => { e.disabled = true; });
   renderSide();
+  restoreFocus(keep);
+}
+// where focus goes when the control that had it is gone after a redraw (a removed row): the order's open tab
+function focusFallback() {
+  const order = document.activeElement?.closest?.('#stage-review .screen');
+  return order ? `#${order.id} [data-act="tab"].active` : '#prepare';
 }
 
 function counts(oi) {
@@ -218,7 +255,7 @@ function unitSrc(o) {
 }
 
 function field(o, oi, [k, text, req, list, type]) {
-  if (k === '__orderno') return `<div class="f"><label class="f-label">${text}<span class="src"><span class="chip calc">automatic</span></span></label><input readonly value="Generated by Oracle on save"></div>`;
+  if (k === '__orderno') return `<div class="f"><label class="f-label" for="orderno-${oi}">${text}<span class="src"><span class="chip calc">automatic</span></span></label><input id="orderno-${oi}" readonly value="Generated by Oracle on save"></div>`;
   const path = `orders.${oi}.${k}`; const v = o[k] ?? ''; const issue = at(path); void req;
   return `<div class="f ${cls(issue)}" data-field="${esc(path)}"><label class="f-label" for="f-${esc(path)}"><span>${esc(text)}</span>${isRequired(k) ? '<span class="req" title="Required">*</span>' : ''}<span class="src">${issue ? '' : srcOf(o, k)}</span></label>
     <input id="f-${esc(path)}" data-path="${esc(path)}" ${type ? `type="${type}"` : ''} value="${esc(v)}" ${list ? `list="list-${list}"` : ''} ${k === 'order_ref' ? 'placeholder="e.g. PK/26-27/S/1320" maxlength="30"' : ''} ${issue ? 'aria-invalid="true"' : ''}>${msgHtml(issue)}</div>`;
@@ -328,6 +365,7 @@ function refBanner(tables) {
   return `<div class="banner info"><span class="b-ic">i</span><div>These rows are checked and shown for review. They are <b>not saved to Oracle yet</b> because the ${esc((unverified.length ? unverified : ref.map(x => x.table)).join(' / '))} mapping is not verified. An administrator can verify it in <b>Setup → Write mapping</b>.</div></div>`;
 }
 
+const FABRIC_COL = { line: 'Garment line', portion: 'Portion', color: 'Fabric colour', quality: 'Quality', gsm: 'GSM', dia: 'Dia', content: 'Content', yy: 'g / pc', rejection: 'Rejection' };
 function fabricTab(o, oi) {
   const fabrics = o.fabrics || []; const derived = fresh() ? state.draft.plan.derived || {} : {};
   state.openFab ||= new Set();
@@ -339,22 +377,24 @@ function fabricTab(o, oi) {
       const line = o.lines?.[num(f.line) - 1]; const pcs = line ? lineQty(line) * (num(o.pieces_per_unit) || 1) : 0;
       const kg = derived[p]?.total_kg ?? pcs * num(f.yy) / 1000 * (num(f.rejection) || 1);
       const ysum = (f.yarns || []).reduce((n, y) => n + num(y.percent), 0); const open = state.openFab.has(`${oi}.${fi}`);
-      const inp = (k, extra = '') => `<input data-path="${p}.${k}" value="${esc(f[k] ?? '')}" class="${cls(at(`${p}.${k}`))}" ${extra} title="${esc(f.source?.[k]?.cell ? 'From ' + f.source[k].cell : '')}">`;
+      const name = k => `${FABRIC_COL[k]} · fabric row ${fi + 1}`;
+      const inp = (k, extra = '') => `<input data-path="${p}.${k}" value="${esc(f[k] ?? '')}" class="${cls(at(`${p}.${k}`))}" ${extra} aria-label="${esc(name(k))}" title="${esc(f.source?.[k]?.cell ? 'From ' + f.source[k].cell : '')}">`;
       const rc = iss.some(i => i.severity === 'error') ? 'row-err' : iss.length ? 'row-warn' : '';
       return `<tr class="${rc} ${iss.length ? 'has-msg' : ''}"><td><span class="rowno">${fi + 1}</span></td>
-        <td class="w-line"><select data-path="${p}.line" data-type="int" class="${cls(at(`${p}.line`))}">${lineOptions(o, f.line)}</select></td>
+        <td class="w-line"><select data-path="${p}.line" data-type="int" class="${cls(at(`${p}.line`))}" aria-label="${esc(name('line'))}">${lineOptions(o, f.line)}</select></td>
         <td>${inp('portion')}</td><td class="w-wide">${inp('color', 'list="list-color"')}</td><td class="w-wide">${inp('quality')}</td><td>${inp('gsm')}</td><td>${inp('dia')}</td><td class="w-wide">${inp('content')}</td>
-        <td class="num"><input type="number" step="any" min="0" data-path="${p}.yy" value="${esc(f.yy ?? '')}" class="w-76 ${cls(at(`${p}.yy`))}"></td>
-        <td class="num"><input type="number" step="any" min="1" data-path="${p}.rejection" value="${esc(f.rejection ?? '')}" class="w-70 ${cls(at(`${p}.rejection`))}"></td>
+        <td class="num"><input type="number" step="any" min="0" data-path="${p}.yy" value="${esc(f.yy ?? '')}" class="w-76 ${cls(at(`${p}.yy`))}" aria-label="${esc(name('yy'))}"></td>
+        <td class="num"><input type="number" step="any" min="1" data-path="${p}.rejection" value="${esc(f.rejection ?? '')}" class="w-70 ${cls(at(`${p}.rejection`))}" aria-label="${esc(name('rejection'))}"></td>
         <td class="num">${fmt(pcs, 0)}</td><td class="num"><b>${fmt(Math.round(kg * 1000) / 1000)}</b></td><td class="num muted">${fmt(f.total)}</td>
-        <td><button class="link yarn-btn" data-act="toggle-yarn" data-key="${oi}.${fi}">${(f.yarns || []).map(y => `${esc(y.count || '?')} ${fmt(y.percent)}%`).join(' + ') || 'Add yarn'} <span class="${Math.abs(ysum - 100) > 1e-9 && f.yarns?.length ? 'cell-msg err' : 'muted'}">${open ? '▴' : '▾'}</span></button></td>
+        <td><button class="link yarn-btn" data-act="toggle-yarn" data-key="${oi}.${fi}" aria-expanded="${open}" aria-label="${esc(`Yarn split for fabric row ${fi + 1}: ${(f.yarns || []).map(y => `${y.count || '?'} ${y.percent ?? '?'}%`).join(' + ') || 'none yet'}`)}">${(f.yarns || []).map(y => `${esc(y.count || '?')} ${fmt(y.percent)}%`).join(' + ') || 'Add yarn'} <span class="${Math.abs(ysum - 100) > 1e-9 && f.yarns?.length ? 'cell-msg err' : 'muted'}">${open ? '▴' : '▾'}</span></button></td>
         <td><button class="icon-btn" data-act="remove-fabric" data-oi="${oi}" data-fi="${fi}" title="Remove fabric row" aria-label="Remove fabric row ${fi + 1}">✕</button></td></tr>
         ${msgRow(iss, 15, rc)}
         ${open ? `<tr class="sub-row"><td colspan="15"><div class="block-head"><h3>Yarn split for fabric ${fi + 1}</h3><span class="sub">${f.yarns?.some(y => y.source?.derivation) ? 'Suggested from the fabric content — please confirm' : ''}</span></div>
           <table class="grid-input yarn-table"><thead><tr><th>Yarn count</th><th>Yarn colour</th><th class="num">%</th><th class="num">kg</th><th></th></tr></thead><tbody>
-          ${(f.yarns || []).map((y, yi) => `<tr><td><input data-path="${p}.yarns.${yi}.count" value="${esc(y.count)}" class="${cls(at(`${p}.yarns.${yi}.count`))}"></td><td><input data-path="${p}.yarns.${yi}.color" list="list-color" value="${esc(y.color)}"></td>
-            <td class="num"><input type="number" step="any" min="0" max="100" data-path="${p}.yarns.${yi}.percent" value="${esc(y.percent ?? '')}" class="w-80"></td>
-            <td class="num">${fmt(derived[`${p}.yarns.${yi}`]?.kg ?? kg * num(y.percent) / 100)}</td><td><button class="icon-btn" data-act="remove-yarn" data-path="${p}" data-yi="${yi}" aria-label="Remove yarn">✕</button></td></tr>`).join('')}
+          ${(f.yarns || []).map((y, yi) => { const yn = `fabric ${fi + 1}, yarn ${yi + 1}`;
+            return `<tr><td><input data-path="${p}.yarns.${yi}.count" value="${esc(y.count)}" class="${cls(at(`${p}.yarns.${yi}.count`))}" aria-label="Yarn count · ${yn}"></td><td><input data-path="${p}.yarns.${yi}.color" list="list-color" value="${esc(y.color)}" aria-label="Yarn colour · ${yn}"></td>
+            <td class="num"><input type="number" step="any" min="0" max="100" data-path="${p}.yarns.${yi}.percent" value="${esc(y.percent ?? '')}" class="w-80" aria-label="Percent · ${yn}"></td>
+            <td class="num">${fmt(derived[`${p}.yarns.${yi}`]?.kg ?? kg * num(y.percent) / 100)}</td><td><button class="icon-btn" data-act="remove-yarn" data-path="${p}" data-yi="${yi}" aria-label="Remove yarn ${yi + 1} of fabric ${fi + 1}">✕</button></td></tr>`; }).join('')}
           </tbody><tfoot><tr><td colspan="2"><button class="link" data-act="add-yarn" data-path="${p}">＋ Add yarn</button></td><td class="num ${Math.abs(ysum - 100) > 1e-9 && f.yarns?.length ? 'cell-msg err' : ''}">${fmt(ysum)}%</td><td></td><td></td></tr></tfoot></table></td></tr>` : ''}`;
     }).join('') || '<tr><td colspan="15" class="empty">No fabric table was found in this file.</td></tr>'}
     </tbody></table></div><div class="tbl-actions"><button class="secondary small" data-act="add-fabric" data-oi="${oi}">＋ Add fabric row</button></div>`;
@@ -376,28 +416,32 @@ function trimsTab(o, oi) {
       const open = state.openGroups.has(key) || (issues.some(i => i.severity === 'error'));
       const descs = new Set(list.map(([a]) => a.description));
       const descIss = list.map(([, ai]) => at(`orders.${oi}.accessories.${ai}.description`)).find(Boolean);
-      return `<tr class="group-row ${open ? 'open' : ''}" data-act="toggle-group" data-key="${esc(key)}"><td colspan="4"><span class="caret">▸</span> ${esc(first.category || first.name || 'Accessory')} <span class="muted group-meta">${esc(first.supplier || '')} · ${plural(list.length, 'row')}</span>
+      const gname = first.category || first.name || 'Accessory';
+      // the row itself is the toggle: Tab reaches it, Enter or Space opens or closes it (bindWorkspace)
+      return `<tr class="group-row ${open ? 'open' : ''}" data-act="toggle-group" data-key="${esc(key)}" tabindex="0" aria-expanded="${open}"><td colspan="4"><span class="caret" aria-hidden="true">▸</span> ${esc(gname)} <span class="muted group-meta">${esc(first.supplier || '')} · ${plural(list.length, 'row')}</span>
           ${issues.length ? ` <span class="count-badge ${issues.some(i => i.severity === 'error') ? 'err' : 'warn'}" title="${issues.length} to check">${issues.length}</span>` : ''}</td>
-        <td>${descs.size === 1 ? `<input data-group-desc="${list.map(([, ai]) => ai).join(',')}" data-oi="${oi}" value="${esc(first.description)}" maxlength="120" class="${cls(descIss)}" title="Description saved for all ${list.length} rows">` : '<span class="muted">varies</span>'}</td>
+        <td>${descs.size === 1 ? `<input data-group-desc="${list.map(([, ai]) => ai).join(',')}" data-oi="${oi}" value="${esc(first.description)}" maxlength="120" class="${cls(descIss)}" title="Description saved for all ${list.length} rows" aria-label="${esc(`Description for all ${list.length} ${gname} rows`)}">` : '<span class="muted">varies</span>'}</td>
         <td>${esc(first.uom || '')}</td><td class="num">${fmt(total)}</td><td></td><td></td></tr>
         ${descIss ? msgRow([descIss], 9, descIss.severity === 'error' ? 'row-err' : 'row-warn') : ''}
         ${open ? list.map(([a, ai]) => { const p = `orders.${oi}.accessories.${ai}`; const iss = under(p).filter(i => !i.path.endsWith('.description') || descs.size > 1);
           if (only && !iss.length) return '';
           const rc = iss.some(i => i.severity === 'error') ? 'row-err' : iss.length ? 'row-warn' : '';
+          const tn = col => `${col} · ${gname} row ${ai + 1}`;
           return `<tr class="${rc} ${iss.length ? 'has-msg' : ''}">
-          <td><select data-path="${p}.line" data-type="int">${lineOptions(o, a.line, true)}</select></td>
-          <td><input data-path="${p}.size" list="list-size" value="${esc(a.size)}" class="w-80"></td><td><input data-path="${p}.color" list="list-color" value="${esc(a.color)}"></td>
-          <td><input data-path="${p}.code" value="${esc(a.code)}" class="w-100"></td>
-          <td>${descs.size > 1 ? `<input data-path="${p}.description" value="${esc(a.description)}" class="${cls(at(`${p}.description`))}">` : ''}</td>
-          <td><input data-path="${p}.uom" value="${esc(a.uom)}" class="w-64 ${cls(at(`${p}.uom`))}"></td>
-          <td class="num"><input type="number" step="any" min="0" data-path="${p}.total" value="${esc(a.total ?? '')}" class="w-96 ${cls(at(`${p}.total`))}"></td>
+          <td><select data-path="${p}.line" data-type="int" aria-label="${esc(tn('Garment'))}">${lineOptions(o, a.line, true)}</select></td>
+          <td><input data-path="${p}.size" list="list-size" value="${esc(a.size)}" class="w-80" aria-label="${esc(tn('Size'))}"></td><td><input data-path="${p}.color" list="list-color" value="${esc(a.color)}" aria-label="${esc(tn('Colour'))}"></td>
+          <td><input data-path="${p}.code" value="${esc(a.code)}" class="w-100" aria-label="${esc(tn('Code'))}"></td>
+          <td>${descs.size > 1 ? `<input data-path="${p}.description" value="${esc(a.description)}" class="${cls(at(`${p}.description`))}" aria-label="${esc(tn('Description'))}">` : ''}</td>
+          <td><input data-path="${p}.uom" value="${esc(a.uom)}" class="w-64 ${cls(at(`${p}.uom`))}" aria-label="${esc(tn('Unit'))}"></td>
+          <td class="num"><input type="number" step="any" min="0" data-path="${p}.total" value="${esc(a.total ?? '')}" class="w-96 ${cls(at(`${p}.total`))}" aria-label="${esc(tn('File qty'))}"></td>
           <td class="num">${derived[p] ? fmt(derived[p].quantity) : '—'}</td>
-          <td><button class="icon-btn" data-act="remove-acc" data-oi="${oi}" data-ai="${ai}" aria-label="Remove row">✕</button></td></tr>${msgRow(iss, 9, rc)}`; }).join('') : ''}`;
+          <td><button class="icon-btn" data-act="remove-acc" data-oi="${oi}" data-ai="${ai}" aria-label="${esc(`Remove ${gname} row ${ai + 1}`)}">✕</button></td></tr>${msgRow(iss, 9, rc)}`; }).join('') : ''}`;
     }).join('') || '<tr><td colspan="9" class="empty">No accessory tables were found in this file.</td></tr>'}
     </tbody></table></div>`;
 }
 
 function renderSide() {
+  const keep = focusKey($('#review-side'));
   const d = state.draft; const p = !state.dirty && d.plan && !d.plan.stale;
   $('#review-side').hidden = !d.orders.length;   // nothing to check until the layout is read
   const errs = allIssues().filter(i => i.severity === 'error').length + fileIssues().length;
@@ -412,6 +456,7 @@ function renderSide() {
     <div class="bar-stats"><span><b>${fmt(pcs, 0)}</b> pcs</span><span><b>${d.orders.reduce((n, o) => n + (o.lines || []).length, 0)}</b> colour lines</span>
       <span><b>${new Set(d.orders.flatMap(o => sizeNames(o))).size}</b> sizes</span><span><b>${fmt(kg)}</b> kg fabric</span><span><b>${d.orders.reduce((n, o) => n + (o.accessories || []).length, 0)}</b> trim rows</span></div>
     <button class="primary big" id="prepare" ${d.result || !can('preview') ? 'disabled' : ''}>${p && !errs ? 'Open the approval view →' : 'Check & continue →'}</button>`;
+  restoreFocus(keep);
 }
 
 function askFile() {
@@ -527,7 +572,7 @@ export async function onAction(btn) {
     case 'ask-file': askFile(); return true;
     case 'new-upload': if (state.dirty && !await confirmDialog('Discard your corrections?', '<p>Corrections not yet checked will be lost.</p>', 'Discard')) return true; resetWorkspace(); return true;
     case 'show-mapping': state.showMapping = true; renderReview(); $('#mapping-panel').scrollIntoView({ behavior: 'smooth' }); return true;
-    case 'hide-mapping': state.showMapping = false; renderReview(); return true;
+    case 'hide-mapping': state.showMapping = false; state.mappingDirty = false; renderReview(); return true;   // closed: leaving the page no longer asks about the layout choices
     case 'unit': {
       const u = btn.dataset.unit; o.qty_unit = u;
       if (u === 'PCS') o.pieces_per_unit = 1;
@@ -591,23 +636,39 @@ async function applyMapping(body) {
       if (e.status === 409 && /pack/i.test(e.message)) return { rejected: [{ field: 'qty_unit', reason: e.message }] };
       throw e;
     }
-    state.showMapping = false; state.tab = {}; state.planIssues = [];
+    state.showMapping = false; state.tab = {}; state.planIssues = []; state.mappingDirty = false;
     const t = state.draft.template;
-    notify(body.save_template && t ? `Layout saved as “${t.name}” (version ${t.version}). The next file with this layout is read automatically.` : 'Layout applied. Check the order details.', 'success');
+    // a new version saved by someone who may not switch it on stays off: the server says so in a note on the draft
+    const off = (state.draft.notes || []).find(n => /saved as version|switch it on/i.test(String(n)));
+    notify(!body.save_template || !t ? 'Layout applied. Check the order details.'
+      : off ? `Layout applied. ${off}`
+        : t.active === false ? `Layout applied and saved as “${t.name}” (version ${t.version}), but this version is not switched on yet. An administrator can switch it on in Setup → Layout templates.`
+          : `Layout saved as “${t.name}” (version ${t.version}). The next file with this layout is read automatically.`, off || t?.active === false ? 'warning' : 'success');
     renderReview();
     return { ok: true };
   });
 }
 
+// "Check & continue" / "Open the approval view": always a fresh check (/preview). A check shown earlier may be
+// out of date (a colleague changed the draft, an order with the same reference was saved, Oracle changed), and
+// only the server can tell. A preview is cheap next to saving the wrong entry.
 export async function prepare() {
-  const d = state.draft;
-  if (d.plan && !d.plan.stale && !state.dirty && !d.plan.errors.length) return showApprove();
+  const d = state.draft; if (!d || d.result) return;
   await busy('Checking every value against Oracle masters and rules…', async () => {
-    await saveEdits();
     const manual = state.draft.orders.map(o => o._manual);
-    state.draft = await api(`/api/drafts/${id(d.id)}/preview`, { method: 'POST', body: { version: state.draft.version } });
+    try {
+      await saveEdits();
+      state.draft = await api(`/api/drafts/${id(d.id)}/preview`, { method: 'POST', body: { version: state.draft.version } });
+    } catch (e) {
+      // "already saved": the order went into Oracle meanwhile (another approver, or an answer lost on the way)
+      if (e.status === 409) {
+        const fresh = await api(`/api/drafts/${id(d.id)}`).catch(() => null);
+        if (fresh?.result) { adopt(fresh); state.saved = true; notify('This order is already saved in Oracle.', 'success'); return showSaved(fresh.result); }
+      }
+      throw e;
+    }
     state.draft.orders.forEach((o, i) => { if (manual[i]) o._manual = true; });
-    const p = state.draft.plan; state.planIssues = p.issues || [];
+    const p = state.draft.plan; state.planIssues = p.issues || []; state.notice = null;
     if (p.errors.length) {
       renderReview(); nav = 0;
       notify(`${plural(p.errors.length, 'thing')} to fix — each one is outlined in red where it belongs.`, 'warning');
@@ -624,24 +685,45 @@ export async function ask(question) {
 }
 
 // ---------------------------------------------------------------- approve
-export function showApprove() {
-  const d = state.draft; const plan = d.plan;
+const piecesOf = draft => (draft?.orders || []).reduce((n, o) => n + (o.lines || []).reduce((m, l) => m + lineQty(l), 0) * (num(o.pieces_per_unit) || 1), 0);
+const notSavedText = list => list.map(r => `${esc(r.business)} (${plural(r.rows, 'row')})`).join(', ');
+function adopt(fresh) {   // a draft read again from the server replaces the one in memory (unsaved edits: none at this point)
+  state.draft = fresh; state.dirty = false; state.planIssues = fresh.plan?.issues || [];
+}
+
+// error: {title, text, history} — a failed Accept, shown in the action bar until dismissed. A stale plan (after any
+// failed Accept) cannot be accepted: the bar offers "Check the order again" (a fresh /preview) instead.
+export function showApprove({ error = null } = {}) {
+  const d = state.draft; const plan = d?.plan;
+  if (!plan?.operations) return backToReview();
   const inserts = plan.operations.filter(o => o.action === 'insert'); const reuse = plan.operations.filter(o => o.action === 'reuse');
   const tables = new Set(inserts.map(o => o.table));
-  const canApprove = plan.live && !plan.errors.length && can('approve');
+  const stale = !!plan.stale || state.dirty;
+  const warned = (plan.warnings || []).length > 0;
+  const canApprove = plan.live && !plan.errors.length && can('approve') && !stale;
+  const notSaved = plan.reference_only || [];
+  state.shown = { hash: plan.hash, version: d.version };   // the plan on screen is the only one Accept may approve
+  const note = stale ? 'This check is out of date, so saving is off. <b>Check the order again</b>: it reads Oracle again and shows the entry that would really be saved.'
+    : canApprove ? `Accepting writes these ${plural(inserts.length, 'record')} in <b>one Oracle transaction</b>, reads every row back to confirm it, and records who approved it. If anything fails, nothing is saved.${warned ? ' First read the notes under <b>Please read before approving</b> and tick <b>I have read these notes</b>.' : ''}`
+      : !plan.live ? 'Saving is disabled until Oracle is connected.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Your role cannot approve. An approver or administrator must accept this entry.';
   const root = $('#stage-approve');
   root.innerHTML = `
     <div class="row mb-12"><button class="ghost" data-act2="back-review">← Back to the order entry</button><span class="spacer"></span>
       <span class="muted small-text">${esc(d.filename)} · ${esc(d.orders.map(o => `${o.order_ref} · ${o.style}`).join(', '))}</span></div>
     ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected. This view used the saved database structure, so existing masters were not checked. Start the database and check again to approve.</div></div>'}
     <div class="kpis">${[['New records', inserts.length], ['Oracle tables', tables.size], ['Existing masters reused', reuse.length], ['Pieces', fmt(plan.totals.pieces, 0)], ['Fabric (kg)', fmt(plan.totals.fabric_kg)]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
-    ${plan.warnings.length ? `<div class="banner warning"><span class="b-ic">!</span><div><b>Please read before approving</b><ul>${plan.warnings.map(w => `<li>${esc(d.orders.length === 1 ? strip(w) : w)}</li>`).join('')}</ul></div></div>` : ''}
+    ${notSaved.length ? `<div class="banner info"><span class="b-ic">i</span><div><b>Checked but not saved:</b> ${notSavedText(notSaved)}. Their mapping is not verified yet, so these rows are not written to Oracle. An administrator can verify it in <b>Setup → Write mapping</b>.</div></div>` : ''}
+    ${warned ? `<div class="banner warning"><span class="b-ic">!</span><div><b>Please read before approving</b><ul>${plan.warnings.map(w => `<li>${esc(d.orders.length === 1 ? strip(w) : w)}</li>`).join('')}</ul>
+      ${canApprove ? '<label class="check ack-check"><input type="checkbox" id="ack-warnings"> I have read these notes</label>' : ''}</div></div>` : ''}
     ${flowCard('Where this order will be saved', 'Nothing is in Oracle yet. Click a table to see the exact rows and values that will be written.')}
-    <div class="action-bar"><p>${canApprove ? `Accepting writes these ${plural(inserts.length, 'record')} in <b>one Oracle transaction</b>, reads every row back to confirm it, and records who approved it. If anything fails, nothing is saved.` :
-      !plan.live ? 'Saving is disabled until Oracle is connected.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Your role cannot approve. An approver or administrator must accept this entry.'}</p>
-      <button class="primary big" data-act2="approve" ${canApprove ? '' : 'disabled'}>Accept and save to Oracle →</button></div>`;
+    <div class="action-bar approve-bar">${error ? lastingBox('error', error.title, error.text, { id: 'accept-error', extraHtml: error.history ? ' <button type="button" class="link" data-goto-view="history">Open Saved orders</button>' : '' }) : ''}
+      <p id="approve-note">${note}</p>
+      ${stale ? '<button class="primary big" data-act2="recheck">Check the order again →</button>'
+        : `<button class="primary big" data-act2="approve" aria-describedby="approve-note" ${canApprove && !warned ? '' : 'disabled'}>Accept and save to Oracle →</button>`}</div>`;
   mountFlow(root, plan.graph || { nodes: [], edges: [] }, { planned: true, columns: plan.columns, onReferenceOnly: t => backToReview(t === 'ORDACC' ? 'trims' : 'fabric') });
+  $('#ack-warnings', root)?.addEventListener('change', e => { $('[data-act2="approve"]', root).disabled = !e.target.checked; });
   stage('approve');
+  if (error) $('[data-act2="recheck"]', root)?.focus({ preventScroll: true });   // the message itself is read out (role=alert)
 }
 
 export function backToReview(tab) {
@@ -650,45 +732,133 @@ export function backToReview(tab) {
 }
 
 export async function approve() {
-  const d = state.draft; const plan = d.plan;
+  const d = state.draft; const plan = d?.plan;
+  if (!d || approve.running) return;
+  if (d.result) return showSaved(d.result);
+  // Accept approves exactly the plan on screen. Anything else (no plan, a stale one, edits since) goes back to review.
+  const onScreen = plan?.operations && !plan.stale && !state.dirty && current === 'approve' && state.shown?.hash === plan.hash && state.shown?.version === d.version;
+  if (!onScreen) {
+    if (plan) d.plan = { ...plan, stale: true };
+    state.notice = { kind: 'warning', title: 'Check the order again before saving.', text: 'The check on the approval screen is not the current one any more, so nothing was saved.' };
+    notify('Check the order again before saving. Nothing was saved.', 'warning');
+    return backToReview();
+  }
+  const warned = plan.warnings.length > 0;
+  if (warned && !$('#ack-warnings')?.checked) { $('#ack-warnings')?.focus(); return notify('Read the notes under “Please read before approving” and tick “I have read these notes” first.', 'warning'); }
   const inserts = plan.operations.filter(o => o.action === 'insert');
   const counts = {}; inserts.forEach(o => { counts[o.table] = (counts[o.table] || 0) + 1; });
-  const ok = await confirmDialog('Save this order to Oracle?', `<p><b>${esc(d.orders.map(o => `${o.order_ref} · ${o.style} · ${o.buyer}`).join(' / '))}</b></p>
-    <ul>${Object.entries(counts).map(([t, n]) => `<li><b>${esc(t)}</b>: ${n} new record${n === 1 ? '' : 's'}</li>`).join('')}</ul>
-    <p class="muted">This cannot be undone from POPPYS AI. Existing orders are never overwritten.</p>`, 'Yes, save to Oracle');
-  if (!ok) return;
-  await busy('Saving in one transaction and reading every row back…', async () => {
-    let result;
-    try { result = await api(`/api/drafts/${id(d.id)}/accept`, { method: 'POST', body: { version: d.version, plan_hash: plan.hash } }); }
-    catch (e) {
-      try { state.draft = await api(`/api/drafts/${id(d.id)}`); } catch (_) { /* keep current */ }
-      throw new Error(`${e.message}\nNothing was partially saved. Check again and retry.`);
-    }
-    state.draft.result = result; state.saved = true;
-    await showSaved(result);
-  });
+  const fabricSaved = inserts.some(o => o.table === 'ORDFAB');
+  const notSaved = plan.reference_only || [];
+  approve.running = true;
+  try {
+    const ok = await confirmDialog('Save this order to Oracle?', `<p><b>${esc(d.orders.map(o => `${o.order_ref} · ${o.style} · ${o.buyer}`).join(' / '))}</b></p>
+      <p class="confirm-total">Total: <b>${fmt(plan.totals.pieces, 0)} pieces</b>${fabricSaved ? ` · <b>${fmt(plan.totals.fabric_kg)} kg</b> fabric` : ''}</p>
+      <ul>${Object.entries(counts).map(([t, n]) => `<li><b>${esc(t)}</b>: ${n} new record${n === 1 ? '' : 's'}</li>`).join('')}</ul>
+      ${notSaved.length ? `<p class="confirm-not"><b>Not saved</b> (mapping not verified yet): ${notSavedText(notSaved)}.</p>` : ''}
+      <p class="muted">This cannot be undone from POPPYS AI. Existing orders are never overwritten.</p>`, 'Yes, save to Oracle');
+    if (!ok || state.draft !== d || d.plan !== plan) return;
+    await busy('Saving in one transaction and reading every row back…', async () => {
+      let result;
+      try { result = await api(`/api/drafts/${id(d.id)}/accept`, { method: 'POST', body: { version: d.version, plan_hash: plan.hash, ...(warned ? { acknowledged_warnings: true } : {}) } }); }
+      catch (e) { return acceptFailed(e, d, plan); }
+      d.result = result; state.saved = true; state.dirty = false;
+      await showSaved(result);
+    });
+  } finally { approve.running = false; }
+}
+
+// After any failed Accept the check on screen is never accepted again as it is: the draft is read again, and
+//  - it was saved after all → the saved screen;
+//  - someone changed it meanwhile → back to the order entry showing the latest version, saying so;
+//  - otherwise → the approval view again with the reason in the action bar and "Check the order again".
+// "Nothing was saved" is only said when the server answered; a dropped connection may have saved it.
+async function acceptFailed(e, d, plan) {
+  const answered = !e.network;
+  const fresh = await api(`/api/drafts/${id(d.id)}`).catch(() => null);
+  if (fresh?.result) {
+    adopt(fresh); state.saved = true;
+    notify(answered ? 'This order is already saved in Oracle.' : 'The connection dropped, but the order was saved in Oracle.', 'success');
+    return showSaved(fresh.result);
+  }
+  const unsure = 'We could not confirm whether it was saved — open Saved orders to check.';
+  if (fresh && (fresh.version !== d.version || fresh.plan?.hash !== plan.hash)) {
+    const before = piecesOf(d), now = piecesOf(fresh);
+    adopt(fresh); if (fresh.plan) state.draft.plan = { ...fresh.plan, stale: true };
+    state.notice = { kind: 'warning', title: 'Someone changed this draft — check it again.',
+      text: `It was changed after you checked it, so ${answered ? 'nothing was saved' : 'it was not saved'}.${before !== now ? ` You checked ${fmt(before, 0)} pieces; the latest version has ${fmt(now, 0)} pieces.` : ''} The order entry below is the latest version: check it again before saving.` };
+    notify('Someone changed this draft — check it again. Nothing was saved.', 'error');
+    renderReview(); stage('review');
+    return;
+  }
+  if (fresh) adopt(fresh);
+  if (state.draft.plan) state.draft.plan = { ...state.draft.plan, stale: true };
+  const text = !answered ? `${unsure}${fresh ? '' : ` ${NOT_RESPONDING}`}`
+    : /nothing was (partially )?saved/i.test(e.message) ? e.message : `${e.message} Nothing was saved.`;
+  notify(text, 'error');
+  showApprove({ error: { title: answered ? 'Not saved.' : 'Not confirmed.', text, history: !answered } });
 }
 
 // ---------------------------------------------------------------- saved
+// The hero says only what is known: "Saved in Oracle" while the rows are read back, then "Saved and verified"
+// when every row matched, "Saved — differences found: …" or "Saved — the check after saving could not run: …".
+// What was not saved (tables whose mapping is not verified) is said at the top, not at the bottom.
 export async function showSaved(result, target = $('#stage-saved'), standalone = false) {
-  target.innerHTML = `<section class="card saved-hero"><span class="tick">✓</span><div><span class="eyebrow">${result.already_committed ? 'Already saved' : 'Saved and verified'}</span>
+  const notSaved = result.reference_only || [];
+  target.innerHTML = `<section class="card saved-hero" data-hero="checking"><span class="tick checking" data-tick aria-hidden="true">✓</span><div><span class="eyebrow" data-eyebrow>Saved in Oracle</span>
       <h1>${result.already_committed ? 'This order is in Oracle.' : 'The order is saved in Oracle.'}</h1>
+      ${notSaved.length ? `<p class="saved-partial"><b>Not saved:</b> ${notSavedText(notSaved)}. Their mapping is not verified yet, so these rows are not in Oracle. An administrator can verify it in Setup → Write mapping.</p>` : ''}
       <p class="muted">Approved by ${esc(result.approver || '—')} · ${esc(new Date(result.committed_at).toLocaleString())} · ${plural((result.rows || []).length, 'new record')}${(result.reused || []).length ? `, ${plural(result.reused.length, 'existing master')} linked` : ''}</p>
+      <p class="saved-check" data-check role="status">Checking: reading every saved row back from Oracle…</p>
       <div class="ids">${(result.orders || []).map(o => `<span><b>${esc(o.order_ref)}</b> · ORDMASID <code>${esc(o.ordmasid)}</code></span>`).join('')}</div></div>
       <div class="stack">${(result.orders || []).map(o => `<button class="secondary" data-explore-order="${esc(o.ordmasid)}">Open in Database</button>`).join('')}${standalone ? '' : '<button class="primary" data-act2="another">Start another order</button>'}</div></section>
-    ${flowCard('Where your data was saved', 'Reading the rows back from Oracle…', '<span class="pill" data-flow-pill>checking</span>')}
-    ${(result.reference_only || []).length ? `<div class="banner info mt-12"><span class="b-ic">i</span><div>Not saved (mapping not verified yet): ${result.reference_only.map(r => `${esc(r.business)} (${r.rows} rows)`).join(', ')}.</div></div>` : ''}`;
+    ${flowCard('Where your data was saved', 'Reading the rows back from Oracle…', '<span class="pill" data-flow-pill>checking</span>')}`;
   if (!standalone) stage('saved');
+  const hero = (kind, eyebrow, text) => {
+    const h = target.querySelector('[data-hero]'); if (!h) return;
+    h.dataset.hero = kind; target.querySelector('[data-eyebrow]').textContent = eyebrow; target.querySelector('[data-check]').textContent = text;
+    const tick = target.querySelector('[data-tick]'); tick.className = `tick ${kind}`; tick.textContent = kind === 'verified' ? '✓' : '!';
+  };
   try {
     const graph = await api(`/api/history/${id(result.job_id)}/graph`);
     target.querySelector('[data-flow-sub]').textContent = `${plural(graph.nodes.length, 'table')} · the values below come from a fresh SELECT, not from the save receipt`;
     const pill = target.querySelector('[data-flow-pill]');
     pill.textContent = graph.verified ? '✓ Verified in Oracle' : '⚠ Differences found'; pill.className = `pill ${graph.verified ? 'ok' : 'err'}`;
+    if (graph.verified) hero('verified', 'Saved and verified', 'Every saved row was read back from Oracle and matches what you approved.');
+    else {
+      const diffs = graph.nodes.filter(n => !n.verified && !n.reference_only).map(n => {
+        const missing = (n.records || []).filter(r => !r.found).length;
+        const cols = [...new Set((n.records || []).flatMap(r => r.mismatched || []))];
+        return `${n.business || n.table} (${n.table}): ${[cols.length ? `${cols.join(', ')} differ` : '', missing ? `${plural(missing, 'row')} not found` : ''].filter(Boolean).join('; ') || 'differs'}`;
+      });
+      hero('differs', 'Saved — differences found', `Saved — differences found: ${diffs.join(' · ') || 'see the tables below'}. Tell your administrator before this order is used.`);
+    }
     mountFlow(target, graph, { planned: false });
   } catch (e) {
-    target.querySelector('[data-flow-sub]').textContent = `Could not read back from Oracle: ${e.message}`;
+    // the save itself succeeded: a failed read-back must not say "Nothing was saved"
+    const why = String(e.message || '').replace(/\s*Nothing was (partially )?saved\.?/gi, '').trim() || 'Oracle did not answer.';
+    target.querySelector('[data-flow-sub]').textContent = `Could not read back from Oracle: ${why}`;
     const pill = target.querySelector('[data-flow-pill]'); pill.textContent = 'not verified'; pill.className = 'pill warn';
+    hero('unchecked', 'Saved — not checked', `Saved — the check after saving could not run: ${why} The order itself is saved. Open it from Saved orders later to check it.`);
   }
+}
+
+// Browser Back / Forward inside the workspace (app.js). Returns false when the person chose to stay.
+export async function toStep(step) {
+  const d = state.draft;
+  if (step === 'saved') { if (d?.result && current !== 'saved') await showSaved(d.result); return true; }
+  if (step === 'review' || step === 'approve') {
+    if (!d) return true;                                   // nothing to go back to: the URL is put right
+    if (d.result) { if (current === 'saved') resetWorkspace(); return true; }   // back from Saved: start another order
+    if (step === current) return true;
+    if (step === 'approve' && current !== 'approve' && d.plan?.operations && !d.plan.stale && !state.dirty && !d.plan.errors.length) { showApprove(); return true; }
+    if (current !== 'review') { renderReview(); stage('review'); }
+    return true;
+  }
+  // back to the upload screen
+  if (current === 'upload' || current === 'read') return true;
+  if (d && !d.result && (state.dirty || state.mappingDirty) && !await confirmDialog('Leave this order?', '<p>Corrections not yet checked will be lost. The file stays in Recent files.</p>', 'Leave it')) return false;
+  resetWorkspace();
+  return true;
 }
 
 export function bindWorkspace() {

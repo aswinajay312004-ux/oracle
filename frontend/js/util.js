@@ -4,7 +4,7 @@ export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 export const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const clone = v => structuredClone(v);
 export const num = v => (v === '' || v == null || !Number.isFinite(Number(v))) ? 0 : Number(v);
-export const fmt = (v, d = 3) => v == null || v === '' ? '—' : Number.isFinite(Number(v)) && typeof v !== 'boolean' && String(v).trim() !== '' ? Number(v).toLocaleString('en-IN', { maximumFractionDigits: d }) : String(v);
+export const fmt = (v, d = 3) => v == null || v === '' ? '—' : Number.isFinite(Number(v)) && typeof v !== 'boolean' && String(v).trim() !== '' ? Number(v).toLocaleString('en-IN', { maximumFractionDigits: d }) : esc(String(v));   // text from a file is escaped: callers put the result into markup
 export const show = v => v == null || v === '' ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v);
 export const plural = (n, word, many = word + 's') => `${fmt(n, 0)} ${Number(n) === 1 ? word : many}`;
 
@@ -14,13 +14,39 @@ export const state = {
 };
 export const can = p => state.permissions.includes(p);
 
+// A short message in the corner (#toasts is a polite live region, so screen readers read it out). An error stays
+// until the person dismisses it: someone who looked away for a moment must still be able to read what went wrong.
 export function notify(message, type = '') {
   if (!message) return;
   const box = $('#toasts'); const t = document.createElement('div');
-  t.className = `toast ${type}`; t.innerHTML = `<span>${esc(message)}</span><button aria-label="Dismiss">✕</button>`;
-  t.querySelector('button').onclick = () => t.remove();
+  t.className = `toast ${type}`; t.innerHTML = `<span>${esc(message)}</span><button type="button" aria-label="Dismiss this message">✕</button>`;
+  t.querySelector('button').addEventListener('click', () => t.remove());
   box.prepend(t); while (box.children.length > 4) box.lastChild.remove();
-  setTimeout(() => t.remove(), type === 'error' ? 12000 : 6000);
+  if (type !== 'error') setTimeout(() => t.remove(), 6000);
+}
+
+// A message that stays where it belongs (on the drop zone, in the approval bar…) until it is dismissed.
+// app.js handles [data-dismiss] for every one of them.
+export function lastingBox(kind, title, text, { id = '', extraHtml = '' } = {}) {
+  return `<div class="banner ${kind} lasting" ${id ? `id="${esc(id)}"` : ''} role="alert" data-dismissible><span class="b-ic" aria-hidden="true">!</span>
+    <div class="flex-fill">${title ? `<b>${esc(title)}</b> ` : ''}<span data-box-text>${esc(text)}</span>${extraHtml}</div>
+    <button type="button" class="icon-btn b-close" data-dismiss aria-label="Dismiss this message">✕</button></div>`;
+}
+
+// Re-rendering a screen with innerHTML drops keyboard focus on <body>. These keep it: remember which control had
+// focus (by id, or by the data-* attributes that say what it is), draw, then focus the same control again.
+const FOCUS_KEYS = ['path', 'act', 'act2', 'oi', 'tab', 'basis', 'unit', 'key', 'li', 'fi', 'ai', 'yi', 'size', 'sizecol', 'old', 'addsize', 'newsize', 'groupDesc', 'row', 'xtab'];
+const attrName = k => 'data-' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
+export function focusKey(root, fallback = []) {
+  const el = document.activeElement;
+  if (!el || el === document.body || !root?.contains(el)) return null;
+  const parts = FOCUS_KEYS.filter(k => el.dataset[k] != null).map(k => `[${attrName(k)}="${CSS.escape(el.dataset[k])}"]`);
+  return [el.id ? `#${CSS.escape(el.id)}` : null, parts.length ? el.tagName.toLowerCase() + parts.join('') : null, ...fallback].filter(Boolean);
+}
+export const focusable = el => !!el && !el.disabled && !el.closest('[hidden], [inert]') && el.getClientRects().length > 0;
+export function restoreFocus(keys) {
+  for (const s of keys || []) { const el = $(s); if (focusable(el)) { el.focus({ preventScroll: true }); return true; } }
+  return false;
 }
 
 export async function busy(message, action) {
@@ -46,17 +72,37 @@ export function confirmDialog(title, html, ok = 'Confirm') {
   return new Promise(resolve => { d.onclose = () => resolve(d.returnValue === 'ok'); d.returnValue = ''; d.showModal(); });
 }
 
+// The side drawer is a modal dialog: the page behind it is inert while it is open, Tab and Shift+Tab stay inside
+// it, and closing it puts focus back on the control that opened it.
+let opener = null;
+const setInert = on => { const shell = $('.shell'); if (shell) shell.inert = on; };
 export function drawer(title, html) {
+  const d = $('#drawer');
+  if (d.hidden) opener = document.activeElement;
   $('#drawer-title').textContent = title; $('#drawer-body').innerHTML = html;
-  $('#drawer').hidden = false; $('#scrim').hidden = false; $('#drawer-close').focus();
+  d.hidden = false; $('#scrim').hidden = false; setInert(true); $('#drawer-close').focus();
   return $('#drawer-body');
 }
-export function closeDrawer() { $('#drawer').hidden = true; $('#scrim').hidden = true; }
+export function closeDrawer() {
+  const d = $('#drawer'); const wasOpen = !d.hidden;
+  d.hidden = true; $('#scrim').hidden = true; setInert(false);
+  const back = opener; opener = null;
+  if (wasOpen && focusable(back)) back.focus();
+}
+const TABBABLE = 'a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+export function keepTabInside(e, root) {
+  if (e.key !== 'Tab') return;
+  const items = $$(TABBABLE, root).filter(focusable);
+  if (!items.length) { e.preventDefault(); return; }
+  const first = items[0], last = items.at(-1), at = document.activeElement;
+  if (e.shiftKey && (at === first || !root.contains(at))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (at === last || !root.contains(at))) { e.preventDefault(); first.focus(); }
+}
 
-export function modal(titleHtml, bodyHtml, footHtml = '') {
+export function modal(titleHtml, bodyHtml, footHtml = '', { narrow = false } = {}) {
   $('#modal-title-wrap').innerHTML = titleHtml; $('#modal-body').innerHTML = bodyHtml; $('#modal-foot').innerHTML = footHtml;
   $('#modal-foot').hidden = !footHtml;
-  const d = $('#modal'); if (!d.open) d.showModal();
+  const d = $('#modal'); d.classList.toggle('narrow', narrow); if (!d.open) d.showModal();
   return { body: $('#modal-body'), foot: $('#modal-foot'), head: $('#modal-title-wrap'), close: () => d.close() };
 }
 
@@ -67,7 +113,13 @@ export function formView(fields) {
 }
 
 export function csv(columns, rows) {
-  const q = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  // Text that starts with = + - @ (or a tab / carriage return) would run as a formula when the file is opened in
+  // Excel (CSV injection): a leading ' makes Excel show it as text. Numbers stay numbers.
+  const q = v => {
+    let s = v == null ? '' : String(v);
+    if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
   const text = [columns.map(c => q(c.label)).join(','), ...rows.map(r => columns.map(c => q(r[c.index])).join(','))].join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/csv' }));
   a.download = 'poppys-answer.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);

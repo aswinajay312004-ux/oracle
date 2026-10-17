@@ -8,6 +8,7 @@ import os
 
 os.environ.setdefault('POPPYS_INLINE_PARSE', '1')
 os.environ.setdefault('POPPYS_COOKIE_SECURE', 'false')
+os.environ.setdefault('POPPYS_EXTRA_HOSTS', 'testserver')    # TestClient's Host; the app answers only to loopback names otherwise
 
 
 def pytest_make_parametrize_id(config, val, argname):

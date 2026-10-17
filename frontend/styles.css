@@ -787,3 +787,35 @@ th.sortable { cursor: pointer; }
 .dict-list { border-right: 1px solid var(--line); max-height: 560px; overflow: auto; padding: 6px; }
 .dict-edit { padding: 14px 16px; }
 .form-card.form-wide { max-width: none; }
+/* ---------- review findings: lasting messages, focus, saved screen states, own password ---------- */
+/* headings that receive focus on a step change (tabindex="-1"): focus is for screen readers, no ring */
+#ws-title:focus, #pw-title:focus { outline: none; }
+/* rows that open something: reachable with Tab, so they show where focus is */
+tr.group-row:focus-visible td, #table-view tr[data-row]:focus-visible td, .rel-section tr[data-open]:focus-visible td { background: var(--brand-soft); }
+tr.group-row:focus-visible, #table-view tr[data-row]:focus-visible, .rel-section tr[data-open]:focus-visible { outline: 2px solid var(--brand-2); outline-offset: -2px; }
+/* the drop zone and the message about the last upload, one under the other */
+.drop-col { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 12px; min-width: 0; }
+/* a message that stays until it is dismissed */
+.banner.lasting { align-items: center; }
+.banner .b-close { flex: none; margin-left: auto; color: inherit; }
+.action-bar.approve-bar { flex-wrap: wrap; }
+.action-bar.approve-bar > .banner { flex: 1 0 100%; margin: 0; }
+.ack-check { margin-top: 8px; font-weight: 650; color: #78350f; }
+/* confirm box before saving */
+.confirm-total { margin: 8px 0 4px; font-size: 14px; }
+.confirm-not { margin-top: 8px; padding: 8px 10px; border-radius: var(--r-sm); background: var(--info-soft); color: #1e3a8a; }
+/* saved screen: what is known while the rows are read back, then the result of that check */
+.tick.checking { background: var(--faint); box-shadow: 0 0 0 7px var(--line-2); }
+.tick.differs { background: var(--err); box-shadow: 0 0 0 7px var(--err-soft); }
+.tick.unchecked { background: #e0890b; box-shadow: 0 0 0 7px var(--warn-soft); }
+.saved-hero[data-hero="checking"], .saved-hero[data-hero="unchecked"] { background: linear-gradient(120deg, #f7faf9, #fff 60%); border-color: var(--line); }
+.saved-hero[data-hero="differs"] { background: linear-gradient(120deg, var(--err-soft), #fff 60%); border-color: var(--err-line); }
+.saved-hero[data-hero="differs"] .eyebrow { color: var(--err); }
+.saved-hero[data-hero="unchecked"] .eyebrow { color: var(--warn); }
+.saved-partial { margin: 6px 0; padding: 7px 10px; border-radius: var(--r-sm); background: var(--warn-soft); border: 1px solid var(--warn-line); color: #78350f; }
+.saved-check { margin-top: 4px; font-weight: 600; color: var(--ink-2); }
+.saved-hero[data-hero="differs"] .saved-check { color: #7f1d1d; }
+/* own password: in the sign-in panel and in a narrow dialog */
+dialog.modal.narrow { width: min(460px, 94vw); }
+.pw-form label { display: grid; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.account .icon-btn + .icon-btn { margin-left: 0; }

@@ -37,6 +37,8 @@ All test names are in `tests/` and run in CI (`.github/workflows/ci.yml`). The "
 | Request bodies are limited while streaming, not only by Content-Length: 14 MiB for uploads and draft saves, 1 MiB elsewhere | `backend/security.py::BodyLimitMiddleware` | `test_security.py::test_chunked_30_mib_upload_without_content_length_is_refused_and_the_temp_file_stays_under_the_limit`, `::test_declared_content_length_over_the_limit_is_refused_before_reading`, `::test_other_routes_have_a_1_mib_limit_streamed_or_declared` |
 | CSRF: state-changing requests need a same-origin Origin/Referer or `Sec-Fetch-Site: same-origin` | `backend/security.py::CSRFMiddleware` | `test_security.py::test_csrf_rules_for_state_changing_requests`, `::test_csrf_blocks_a_cross_site_login_and_upload`, `::test_csrf_does_not_block_reads` |
 | API docs are off in production | `backend/main.py`, `security.production()` | `test_security.py::test_api_docs_are_off_in_production` |
+| Only the loopback host names are answered (protects against DNS rebinding) | `backend/main.py` (`TrustedHostMiddleware`) | `test_security.py::test_only_loopback_host_names_are_answered` |
+| Validation errors are one plain sentence per field and never echo the value sent. Draft edits accept only single plain values of bounded length | `backend/main.py::invalid_request`, `local_store._value` | `test_security.py::test_validation_errors_do_not_echo_the_input_or_context`, `::test_validation_errors_are_plain_sentences_for_staff`, `::test_typed_text_in_a_draft_must_be_one_value` |
 
 ## V5 File handling
 
@@ -53,9 +55,10 @@ All test names are in `tests/` and run in CI (`.github/workflows/ci.yml`). The "
 |---|---|---|
 | PBKDF2-SHA256 with 600,000 iterations and a per-password salt. Older 300k hashes still sign in and are upgraded on sign-in | `backend/security.py` | `test_security.py::test_new_hashes_are_pbkdf2_600k_with_the_count_stored`, `::test_legacy_300k_hash_still_signs_in_and_is_upgraded` |
 | New passwords have at least 12 characters, are not on the common-password list, and do not contain the username | `security.password_problem` | `test_security.py::test_new_passwords_follow_the_policy_everywhere`, `::test_setup_refuses_a_weak_first_password` |
-| Throttling per username and per address survives a restart. 20 failures in 15 minutes lock the username, and an admin can unlock it | `backend/security.py`, `backend/local_store.py` | `test_security.py::test_after_five_failures_the_next_try_waits_and_is_refused_without_checking`, `::test_the_wait_grows_and_survives_a_restart`, `::test_failures_from_one_address_across_many_usernames_are_throttled`, `::test_twenty_failures_in_fifteen_minutes_lock_the_username_and_an_admin_can_unlock` |
+| Throttling per username and per address survives a restart. 20 failures in 15 minutes lock the username, and an admin can unlock it. The address is the real socket peer: every launcher runs uvicorn with `--no-proxy-headers`, so `X-Forwarded-For` cannot fake it | `backend/security.py`, `backend/local_store.py`, `start.ps1`, `deploy/windows/PoppysAI.xml` | `test_security.py::test_after_five_failures_the_next_try_waits_and_is_refused_without_checking`, `::test_the_wait_grows_and_survives_a_restart`, `::test_failures_from_one_address_across_many_usernames_are_throttled`, `::test_twenty_failures_in_fifteen_minutes_lock_the_username_and_an_admin_can_unlock` |
 | An unknown user gets the same answer and costs the same time as a wrong password | `security.DUMMY_HASH`, `BAD_LOGIN` | `test_security.py::test_unknown_user_and_wrong_password_look_the_same`, `::test_a_lock_on_an_unknown_username_looks_the_same` |
 | First-run setup works only while no user exists | `backend/main.py` `/api/setup` | `test_api.py::test_authentication_required_and_setup_once` |
+| Everyone can change their own password, after giving the current one. A password set by an administrator (new user, reset) is temporary: nothing else works until the person chooses their own. A change ends that person's other sessions | `backend/main.py` (`/api/me/password`, `OWN_PASSWORD_FIRST`), `users.must_change` | `test_security.py::test_an_administrator_set_password_is_temporary` |
 
 ## V7 Session management
 
@@ -70,7 +73,9 @@ All test names are in `tests/` and run in CI (`.github/workflows/ci.yml`). The "
 | Control | Code | Test |
 |---|---|---|
 | Server-side permission on every route (`require(permission)`). The roles are admin, approver, operator and viewer | `backend/main.py` (`PERMISSIONS`, `require`) | `test_workflow.py::test_roles_and_four_eyes`, `test_api.py` |
-| Optional four-eyes rule: the person who uploaded a file cannot approve it | `backend/main.py::accept` | `test_workflow.py::test_roles_and_four_eyes` |
+| Optional four-eyes rule: no one who uploaded, edited or mapped a draft can approve it (a preview is not a change) | `backend/main.py::accept`, `local_store.draft_editors` | `test_workflow.py::test_roles_and_four_eyes`, `::test_four_eyes_also_refuses_an_approver_who_changed_the_draft` |
+| An approver must tick "I have read these notes" when the preview has warnings. How many were acknowledged is kept in the audit log | `backend/main.py::accept` | `test_workflow.py::test_warnings_must_be_acknowledged_before_approval` |
+| People can rate only their own Ask AI answers (administrators any) | `backend/main.py::chat_feedback` | `test_security.py::test_rating_someone_elses_answer_is_refused` |
 | Least privilege in Oracle: the app account can INSERT into named tables only; the read-only account has READ only | `scripts/bootstrap_local.py`, `scripts/grant_bom_tables.py`, `scripts/create_readonly_user.py`, `scripts/check_oracle.py` | `test_oracle_pool.py::test_real_readonly_account_can_read_but_never_write` (Oracle), `::test_preflight_fails_a_read_only_account_that_can_insert` |
 
 ## V11 Cryptography
@@ -78,7 +83,7 @@ All test names are in `tests/` and run in CI (`.github/workflows/ci.yml`). The "
 | Control | Code | Test |
 |---|---|---|
 | Only standard-library primitives: `secrets`, `hashlib.pbkdf2_hmac`, SHA-256, `hmac.compare_digest` | `backend/security.py`, `backend/local_store.py` | `test_security.py` |
-| The audit chain is SHA-256 over each row and the previous hash. A database trigger forbids UPDATE and DELETE on audit rows | `backend/local_store.py` | `test_ops.py::test_audit_rows_cannot_be_updated_or_deleted`, `::test_verify_finds_changes_made_behind_the_apps_back`, `::test_verify_finds_removed_protection`, `::test_concurrent_audit_writes_keep_one_chain` |
+| The audit chain is SHA-256 over each row and the previous hash, plus an HMAC-SHA256 chain keyed with `audit.key`, a file outside the database. The newest entry is anchored in `audit.anchor`, also outside the database. Database triggers forbid UPDATE and DELETE, and verify checks their exact text | `backend/local_store.py` | `test_ops.py::test_audit_rows_cannot_be_updated_or_deleted`, `::test_verify_finds_changes_made_behind_the_apps_back`, `::test_a_chain_rebuilt_without_the_key_is_found`, `::test_removing_the_newest_entries_is_found`, `::test_a_harmless_trigger_with_the_same_name_is_found`, `::test_a_missing_key_file_is_reported_not_ignored`, `::test_concurrent_audit_writes_keep_one_chain` |
 
 ## V13 Configuration
 

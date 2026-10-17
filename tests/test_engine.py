@@ -92,6 +92,7 @@ def test_fields_api_lists_changes_and_audits(env):
     assert r.status_code == 200 and r.json()['required'] is True
     c.post('/api/users', json={'username': 'op', 'password': PW, 'role': 'operator'})
     c.post('/api/logout'); c.post('/api/login', json={'username': 'op', 'password': PW})
+    assert c.post('/api/me/password', json={'current': PW, 'new': 'quiet tractor nine field'}).status_code == 200
     assert c.put('/api/fields/season', json={'required': True}).status_code == 403
     assert c.get('/api/fields').status_code == 200
 
@@ -286,6 +287,28 @@ def zen_saved(c, **unit):
                                                          template_name='ZEN KIDS PO', **unit))
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def test_an_operator_cannot_replace_the_template_version_in_use(env):
+    """Saving a layout under an existing name is a new version; only someone with the templates permission switches
+    it on. An operator's version is kept switched off (with a note) and the administrator's version stays in use."""
+    c = env
+    first = zen_saved(c, qty_unit='PCS')['template']
+    c.post('/api/users', json={'username': 'op', 'password': PW, 'role': 'operator'})
+    c.post('/api/logout'); c.post('/api/login', json={'username': 'op', 'password': PW})
+    assert c.post('/api/me/password', json={'current': PW, 'new': 'quiet tractor nine field'}).status_code == 200
+    d = zen_saved(c, qty_unit='PCS')
+    assert d['template']['version'] == 2 and any(
+        n == 'Saved as version 2 of “ZEN KIDS PO”. An administrator must switch it on in Setup → Layout templates before it is '
+             'used for new files.' for n in d['notes'])
+    rows = {t['version']: t for t in local_store.templates(active_only=False) if t['name'] == 'ZEN KIDS PO'}
+    assert rows[1]['id'] == first['id'] and rows[1]['active'] and not rows[2]['active']
+    assert upload(c, zen_kids_po(style='ZK-2'))['template']['id'] == first['id']     # new files still use the admin's version
+    c.post('/api/logout'); assert c.post('/api/login', json={'username': 'admin', 'password': PW}).status_code == 200
+    d = zen_saved(c, qty_unit='PCS')                                                  # an administrator's save is used at once
+    rows = {t['version']: t for t in local_store.templates(active_only=False) if t['name'] == 'ZEN KIDS PO'}
+    assert d['template']['version'] == 3 and rows[3]['active'] and not rows[1]['active'] and not rows[2]['active']
+    assert not any('must switch it on' in n for n in d['notes'])
 
 
 def test_changed_anchor_label_refuses_the_template_and_records_why(env):

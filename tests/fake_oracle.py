@@ -1,7 +1,7 @@
 """In-memory stand-in for the Oracle boundary, for API/UI tests that cannot reach the local database.
 
 It reuses the real planner (with the committed dictionary snapshot as catalog) and mirrors the
-writer's contract: re-plan, hash check, generated keys, $reference resolution, receipt. It is a
+writer's contract: re-plan, hash check, generated keys, planner.Ref resolution, receipt. It is a
 test double only; it never claims to be Oracle in the running application.
 """
 from __future__ import annotations
@@ -56,7 +56,7 @@ class FakeOracle:
                 self.rows.setdefault(op['table'], {})[op['values'][pk]] = dict(op['values'])
                 continue
             self.seq += 1; refs[op['key']] = self.seq
-            vals = {c: refs[v[1:]] if isinstance(v, str) and v.startswith('$') else v for c, v in op['values'].items()}
+            vals = {c: refs[v['ref']] if isinstance(v, planner.Ref) else v for c, v in op['values'].items()}
             self.rows.setdefault(op['table'], {})[self.seq] = dict(vals)
             inserted.append(dict(table=op['table'], key=op['key'], pk=self.seq, business=op['business'], where=op['where'], values=vals))
             if op['table'] == 'ORDMAS':

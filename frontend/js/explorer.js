@@ -161,7 +161,7 @@ function draw() {
         <span class="spacer"></span><div class="ex-toggles">${empty.length ? `<label class="check" title="Columns with no value in any of the ${d.rows.length} rows shown"><input type="checkbox" id="show-empty" ${view.showEmpty ? 'checked' : ''}> Show empty columns (${empty.length})</label>` : ''}
         ${sys.length && d.rows.length ? `<label class="check"><input type="checkbox" id="show-sys" ${view.showSys ? 'checked' : ''}> Show Axpert system columns (${sys.length})</label>` : ''}</div></form>` : ''}
       ${d.rows.length ? `<div class="grid-scroll"><table><thead><tr>${shown.map(c => `<th title="${esc([c.type, c.role, c.references && 'links to ' + c.references].filter(Boolean).join(' · '))}">${esc(c.label || c.name)}<span class="code">${esc(c.name)}</span></th>`).join('')}</tr></thead><tbody>
-        ${d.rows.map((r, i) => `<tr class="clickable" data-row="${i}">${shown.map(c => `<td>${cellHtml(d, c.name, r[c.name])}</td>`).join('')}</tr>`).join('')}
+        ${d.rows.map((r, i) => `<tr class="clickable" data-row="${i}" tabindex="0">${shown.map(c => `<td>${cellHtml(d, c.name, r[c.name])}</td>`).join('')}</tr>`).join('')}
       </tbody></table></div>
       <div class="pager"><span>${plural(d.rows.length, 'row')} shown${d.total != null ? ` of ${count(d.total, d.approx)}` : d.rows_known === false ? ' (total not counted: it took too long)' : ''} · ${d.key ? 'newest first' : 'Oracle order'} · click a row to see linked records</span>
         ${cur.moreError ? `<span class="ex-more-err" role="alert">More rows could not be read: ${esc(cur.moreError)}</span>` : more ? '<button class="secondary small" id="more">Load more</button>' : ''}</div>` : emptyHtml(cur, d)}`;
@@ -174,7 +174,11 @@ function draw() {
       clear: () => openTable(cur.table), retry: () => openTable(cur.table),
       exact: () => openTable(cur.table, { column: cur.column, value: cur.value, exact: true }),
     })[b.dataset.x]()));
-    $$('#table-view tr[data-row]').forEach(tr => tr.onclick = () => { const r = d.rows[Number(tr.dataset.row)]; openRecord(cur.table, r[d.key || meta.key], { row: r, data: d }); });
+    // a row opens its record: by click, or with Enter / Space when Tab has reached it
+    $$('#table-view tr[data-row]').forEach(tr => {
+      const open = () => { const r = d.rows[Number(tr.dataset.row)]; openRecord(cur.table, r[d.key || meta.key], { row: r, data: d }); };
+      tr.onclick = open; tr.onkeydown = e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === tr) { e.preventDefault(); open(); } };
+    });
   } else if (tab === 'columns') {
     body.innerHTML = `<p class="muted small-text ex-cols-note">In business order: the columns shown first in Records, then names, master links, quantities and dates, then the rest.</p>
       <div class="grid-scroll"><table><thead><tr><th>Business name</th><th>Column</th><th>Type</th><th>Role</th></tr></thead><tbody>
@@ -290,16 +294,19 @@ function childHtml(rel, g, byTable) {
       <span class="pill ${confirmed(g.status) ? 'ok' : 'warn'}">${confirmed(g.status) ? 'confirmed link' : 'unconfirmed link'}</span></h4>
     <p class="muted small-text ex-on">${esc(g.on)}${parent ? ` · grouped by ${esc(parent.business.toLowerCase())}${confirmed(g.under.status) ? '' : ' (unconfirmed link)'}` : ''}</p>
     <div class="tbl-wrap ex-rel-table"><table><thead><tr>${lead.join('')}${cols.map(c => `<th>${esc(c.label)}<span class="code">${esc(c.name)}</span></th>`).join('')}</tr></thead><tbody>
-    ${rows.map(({ r, i, line }, k) => `<tr class="clickable" data-open="${rel.related.indexOf(g)}:${i}">${leadCells(i, line, k > 0 && line && rows[k - 1].line === line)}${cols.map(c => `<td>${cellHtml(g, c.name, r[c.name], true)}</td>`).join('')}</tr>`).join('')}</tbody>${foot}</table></div>
+    ${rows.map(({ r, i, line }, k) => `<tr class="clickable" data-open="${rel.related.indexOf(g)}:${i}" tabindex="0">${leadCells(i, line, k > 0 && line && rows[k - 1].line === line)}${cols.map(c => `<td>${cellHtml(g, c.name, r[c.name], true)}</td>`).join('')}</tr>`).join('')}</tbody>${foot}</table></div>
     ${g.more ? `<p class="muted small-text">${showing}${measures.length ? ', so no total is shown here' : ''}.${g.filter ? ` <button class="link" data-all="${esc(g.table)}">Show all${counted ? ` ${fmt(g.total, 0)}` : ''} in the table</button>` : ''}</p>` : ''}</section>`;
 }
 
 function bindRecord(body, rel) {
   body.querySelector('[data-back]')?.addEventListener('click', () => { trail.pop(); const prev = trail.pop(); openRecord(prev.table, prev.pk, {}, true); });
   if (!rel) return;
-  $$('[data-open]', body).forEach(el => el.onclick = () => {
-    const [gi, ri] = el.dataset.open.split(':').map(Number); const g = rel.related[gi]; const r = g.rows[ri];
-    openRecord(g.table, g.key ? r[g.key] : null, { row: r, data: g }, true);
+  $$('[data-open]', body).forEach(el => {
+    el.onclick = () => {
+      const [gi, ri] = el.dataset.open.split(':').map(Number); const g = rel.related[gi]; const r = g.rows[ri];
+      openRecord(g.table, g.key ? r[g.key] : null, { row: r, data: g }, true);
+    };
+    if (el.tagName === 'TR') el.onkeydown = e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); el.onclick(); } };
   });
   $$('[data-jump]', body).forEach(b => b.onclick = () => body.querySelector(`#rel-${CSS.escape(b.dataset.jump)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   $$('[data-all]', body).forEach(b => b.onclick = () => {

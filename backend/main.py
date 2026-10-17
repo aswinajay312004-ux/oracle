@@ -79,7 +79,10 @@ app = FastAPI(title='POPPYS AI — Order entry automation', lifespan=lifespan, *
 # then the Host check, then the CSRF check, then the body limit right in front of the routes.
 app.add_middleware(security.BodyLimitMiddleware)
 app.add_middleware(security.CSRFMiddleware)
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
+# The app answers only to its own loopback names (DNS rebinding). POPPYS_EXTRA_HOSTS adds names: the test client's
+# 'testserver' (tests/conftest.py), never needed on the laptop.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', '[::1]'] +
+                   [h.strip() for h in os.environ.get('POPPYS_EXTRA_HOSTS', '').split(',') if h.strip()])
 app.add_middleware(security.RequestContextMiddleware)
 
 
@@ -97,7 +100,7 @@ def _error(status, detail, **extra):
 def _user_facing(exc, status, request):
     if isinstance(exc, (RecursionError, NotImplementedError)) or not security.raised_by_our_code(exc):
         security.log_unexpected(exc, f'{request.method} {request.url.path}')
-        return security.problem(500)
+        return security.problem(500, method=request.method)
     return _error(status, str(exc) or 'The request could not be completed.')
 
 
@@ -121,7 +124,12 @@ async def missing(request, exc): return _error(404, 'Not found. Reload and try a
 async def db_error(request, exc):
     code = getattr(exc.args[0], 'full_code', 'Oracle error') if exc.args else 'Oracle error'
     logs.event('oracle_error', 30, code=str(code), path=request.url.path)
-    return _error(503, f'Oracle could not complete the request ({code}). Nothing was partially saved. Check the database connection, then refresh the preview.')
+    if request.method in security.SAFE_METHODS:
+        return _error(503, f'Oracle could not answer ({code}). Check that Docker Desktop and the Oracle container are running, then try again.')
+    if str(code) == 'ORA-00001':
+        return _error(409, 'Oracle refused a record that already exists (ORA-00001). Nothing was saved. Check Saved orders: '
+                           'this order may already be in Axpert.')
+    return _error(503, f'Oracle could not complete the request ({code}). Nothing was saved. Check that Oracle is running, then check again.')
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -143,7 +151,41 @@ async def http_error(request, exc):
 async def invalid_request(request, exc):
     """422 without 'input' and 'ctx' (they echo what was sent, a password included) or documentation links."""
     errors = [{k: v for k, v in e.items() if k not in ('input', 'ctx', 'url')} for e in exc.errors()]
-    return _error(422, jsonable_encoder(errors))
+    return _error(422, '; '.join(dict.fromkeys(_plain_error(e) for e in exc.errors())) or 'Some values are not valid.',
+                  errors=jsonable_encoder(errors))
+
+
+PLAIN_NAMES = {'pieces_per_unit': 'Pieces per pack', 'qty_unit': 'Quantity unit', 'quantity_basis': 'Quantities to save',
+               'username': 'Username', 'password': 'Password', 'new': 'New password', 'current': 'Current password',
+               'role': 'Role', 'header_row': 'Header row', 'template_name': 'Layout name', 'sheet': 'Worksheet',
+               'plan_hash': 'The checked preview', 'version': 'The draft version', 'orders': 'Orders'}
+
+
+def _plain_error(e):
+    """One sentence per field for staff, from pydantic's error type and limits (never the value that was sent)."""
+    loc = [x for x in e.get('loc', ()) if x not in ('body', 'query', 'path')]
+    name = next((PLAIN_NAMES.get(x, str(x).replace('_', ' ').capitalize()) for x in reversed(loc) if isinstance(x, str)), 'A value')
+    kind, ctx = e.get('type', ''), e.get('ctx') or {}
+    if kind == 'missing':
+        return f'{name} is required'
+    if kind in ('less_than_equal', 'less_than'):
+        return f'{name} must be at most {ctx.get("le", ctx.get("lt"))}'
+    if kind in ('greater_than_equal', 'greater_than'):
+        return f'{name} must be at least {ctx.get("ge", ctx.get("gt"))}'
+    if kind == 'string_too_long':
+        return f'{name} can have at most {ctx.get("max_length")} characters'
+    if kind == 'string_too_short':
+        return f'{name} is required' if ctx.get('min_length') == 1 else f'{name} needs at least {ctx.get("min_length")} characters'
+    if kind == 'too_long':
+        return f'{name}: at most {ctx.get("max_length")} items'
+    if kind in ('int_parsing', 'int_from_float', 'float_parsing', 'decimal_parsing'):
+        return f'{name} must be a whole number' if kind.startswith('int') else f'{name} must be a number'
+    if kind == 'string_pattern_mismatch':
+        return f'{name} has characters that are not allowed' if 'username' in loc else f'{name} is not one of the allowed choices'
+    if kind == 'bool_parsing':
+        return f'{name} must be yes or no'
+    return f'{name} is not valid'
+
 
 
 # --- authentication & roles ------------------------------------------------------
@@ -161,14 +203,21 @@ def _user(request, touch=True):
     if not found:
         return None
     request.state.user = found[0]
+    request.state.must_change = bool(found[2]) if len(found) > 2 else False
     logs.set_user(found[0])
     return dict(username=found[0], role=found[1])
+
+
+# While an administrator-set password has not been replaced, only these answer (the rest: 403).
+OWN_PASSWORD_FIRST = {('GET', '/api/session'), ('POST', '/api/logout'), ('POST', '/api/me/password'), ('GET', '/api/health')}
 
 
 def authenticated(request: Request):
     user = _user(request)
     if not user:
         raise HTTPException(401, 'Sign in to continue.')
+    if getattr(request.state, 'must_change', False) and (request.method, request.url.path) not in OWN_PASSWORD_FIRST:
+        raise HTTPException(403, 'Choose your own password first.')
     return user
 
 
@@ -206,7 +255,7 @@ class Login(BaseModel):
     password: str = Field(min_length=1, max_length=security.MAX_LENGTH)
 
 
-def _check_new_password(password, username):
+def _check_new(password, username):
     problem = security.password_problem(password, username)
     if problem:
         raise HTTPException(422, problem)
@@ -222,12 +271,13 @@ def who(request: Request):
         needs = not c.execute('SELECT 1 FROM users LIMIT 1').fetchone()
     user = _user(request)
     return dict(authenticated=bool(user), needs_setup=needs, username=user and user['username'], role=user and user['role'],
-                permissions=PERMISSIONS[user['role']] if user else [])
+                permissions=PERMISSIONS[user['role']] if user else [],
+                password_change_required=bool(user and getattr(request.state, 'must_change', False)))
 
 
 @app.post('/api/setup')
 def setup(data: Credentials, request: Request, response: Response):
-    _check_new_password(data.password, data.username)
+    _check_new(data.password, data.username)
     with LOCK, store.db() as c:
         if c.execute('SELECT 1 FROM users').fetchone():
             raise HTTPException(409, 'Setup is already complete. Sign in.')
@@ -304,12 +354,12 @@ def users(user=Depends(require('users'))):
 
 @app.post('/api/users')
 def add_user(data: NewUser, user=Depends(require('users'))):
-    _check_new_password(data.password, data.username)
+    _check_new(data.password, data.username)
     with LOCK, store.db() as c:
         if c.execute('SELECT 1 FROM users WHERE lower(username)=lower(?)', (data.username,)).fetchone():
             raise HTTPException(409, 'That username already exists.')
         salt, hashed = security.hash_password(data.password)
-        c.execute('INSERT INTO users(username,salt,password_hash,role,active,created_at) VALUES (?,?,?,?,1,?)',
+        c.execute('INSERT INTO users(username,salt,password_hash,role,active,created_at,must_change) VALUES (?,?,?,?,1,?,1)',
                   (data.username, salt, hashed, data.role, store.now()))
     store.audit(user['username'], 'user_created', data.username, role=data.role)
     logs.security_event('user_created', user=user['username'], target=data.username, role=data.role)
@@ -320,7 +370,7 @@ def add_user(data: NewUser, user=Depends(require('users'))):
 def change_user(username: str, data: UserChange, user=Depends(require('users'))):
     """A change of password, role or active state ends every session of that person (they sign in again)."""
     if data.password:
-        _check_new_password(data.password, username)
+        _check_new(data.password, username)
     with LOCK, store.db() as c:
         row = c.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
         if not row:
@@ -336,12 +386,45 @@ def change_user(username: str, data: UserChange, user=Depends(require('users')))
             c.execute('UPDATE users SET active=? WHERE username=?', (1 if data.active else 0, username)); changed = True
         if data.password:
             salt, hashed = security.hash_password(data.password)
-            c.execute('UPDATE users SET salt=?,password_hash=? WHERE username=?', (salt, hashed, username)); changed = True
+            # someone else's password set by an administrator is temporary: that person chooses their own at sign-in
+            c.execute('UPDATE users SET salt=?,password_hash=?,must_change=? WHERE username=?',
+                      (salt, hashed, 0 if username == user['username'] else 1, username)); changed = True
         ended = c.execute('DELETE FROM sessions WHERE username=?', (username,)).rowcount if changed else 0
     store.audit(user['username'], 'user_changed', username, role=data.role, active=data.active, password_reset=bool(data.password),
                 sessions_ended=ended)
     logs.security_event('user_changed', user=user['username'], target=username, role=data.role, active=data.active,
                         reset=bool(data.password), sessions_ended=ended)
+    return {'ok': True, 'sessions_ended': ended}
+
+
+class OwnPassword(BaseModel):
+    current: str = Field(min_length=1, max_length=security.MAX_LENGTH)
+    new: str = Field(min_length=1, max_length=security.MAX_LENGTH)
+
+
+@app.post('/api/me/password')
+def own_password(data: OwnPassword, request: Request, user=Depends(authenticated)):
+    """Change your own password (also how a temporary, administrator-set password is replaced). Ends your other
+    sessions; this one stays signed in."""
+    with store.db() as c:
+        row = c.execute('SELECT * FROM users WHERE username=?', (user['username'],)).fetchone()
+    ok, _ = security.verify_password(data.current, row['password_hash'], row['salt'])
+    if not ok:
+        store.audit(user['username'], 'password_change_failed', user['username'])
+        logs.security_event('password_change_failed', 30, user=user['username'])
+        raise HTTPException(400, 'The current password is not correct.')
+    if data.new == data.current:
+        raise HTTPException(400, 'Choose a password that is different from the current one.')
+    problem = security.password_problem(data.new, user['username'])
+    if problem:
+        raise HTTPException(400, problem)
+    salt, hashed = security.hash_password(data.new)
+    keep = security.token_hash(request.cookies.get(security.COOKIE, ''))
+    with LOCK, store.db() as c:
+        c.execute('UPDATE users SET salt=?,password_hash=?,must_change=0 WHERE username=?', (salt, hashed, user['username']))
+        ended = c.execute('DELETE FROM sessions WHERE username=? AND token_hash<>?', (user['username'], keep)).rowcount
+    store.audit(user['username'], 'password_changed', user['username'], sessions_ended=ended)
+    logs.security_event('password_changed', user=user['username'], sessions_ended=ended)
     return {'ok': True, 'sessions_ended': ended}
 
 
@@ -363,7 +446,7 @@ def sign_out_everyone(request: Request, user=Depends(require('users'))):
     return {'ok': True, 'sessions_ended': ended}
 
 
-@app.get('/api/audit/verify')
+@app.post('/api/audit/verify')
 def audit_verify(user=Depends(require('users'))):
     """Recomputes the audit history's hash chain: any changed, removed or inserted entry is found."""
     result = store.verify_audit_chain()
@@ -451,8 +534,9 @@ def health(user=Depends(authenticated)):
         with oracle.connect() as conn:
             m = oracle.current_mapping(); cat = OracleCatalog(conn)
             visible = cat.columns(registry.referenced_tables(m))
-            status.update(connected=True, tables=len(cat.visible_tables()), mapped_tables=len(visible), insertable=sorted(cat.insertable(registry.referenced_tables(m))),
-                          version=conn.version, dsn=conn.dsn)
+            status.update(connected=True, tables=len(cat.visible_tables()), mapped_tables=len(visible), insertable=sorted(cat.insertable(registry.referenced_tables(m))))
+            if user['role'] == 'admin':          # where the database is and which version: administrators only
+                status.update(version=conn.version, dsn=conn.dsn)
     except Exception as exc:
         status['error'] = ('Local Oracle is not reachable. Start Docker Desktop and the oracle26ai container, '
                            'then refresh. Uploads and previews still work; saving needs Oracle.') if not isinstance(exc, RuntimeError) else str(exc)
@@ -720,10 +804,14 @@ def mapping(id: str, data: Mapping, user=Depends(require('edit'))):
             buyers = {o.get('buyer') for o in d['orders'] if o.get('buyer')}
             saved = store.save_template(name, workbooks.layout_signature(sheet, definition), workbooks.layout_labels(sheet, definition),
                                         definition, user['username'], buyer=buyers.pop() if len(buyers) == 1 else '',
-                                        anchors=matcher.anchors(sheet, definition, fields), unit=unit, quantity_basis=basis)
+                                        anchors=matcher.anchors(sheet, definition, fields), unit=unit, quantity_basis=basis,
+                                        replace='templates' in PERMISSIONS[user['role']])
             d['format'] = f'Template: {name}'; d['template'] = dict(id=saved['id'], name=name, version=saved['version'])
+            if not saved['active']:      # the version in use stays in use until an administrator switches this one on
+                d['notes'].append(f'Saved as version {saved["version"]} of “{name}”. An administrator must switch it on in '
+                                  'Setup → Layout templates before it is used for new files.')
             store.audit(user['username'], 'template_saved', saved['id'], name=name, version=saved['version'], family=saved['family'],
-                        definition=definition, unit=unit, quantity_basis=basis)
+                        definition=definition, unit=unit, quantity_basis=basis, active=saved['active'])
         store.save(d, user['username'], data.version)
         store.audit(user['username'], 'mapping_applied', id, sheet=data.sheet, definition=definition)
         return d
@@ -768,6 +856,7 @@ class Version(BaseModel):
 
 class Approval(Version):
     plan_hash: str = Field(min_length=64, max_length=64)
+    acknowledged_warnings: bool = False       # ticked "I have read these notes" (needed when the preview has warnings)
 
 
 def _plan(d):
@@ -808,13 +897,18 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
         if previous:
             return previous
         if d['version'] != data.version or not d.get('plan') or d['plan']['hash'] != data.plan_hash:
-            raise HTTPException(409, 'Approval requires the exact current preview. Prepare the preview again.')
+            raise HTTPException(409, 'The draft changed after it was checked. Go back to the order entry and click “Check & continue” again.')
         if not d['plan'].get('live'):
             raise HTTPException(409, 'This preview was made without Oracle. Connect Oracle and prepare the preview again before approving.')
         if d['plan']['errors']:
             raise HTTPException(409, 'Resolve all questions before approving.')
-        if d.get('uploaded_by') == user['username'] and not settings()['allow_self_approval']:
-            raise HTTPException(403, 'A different approver must approve this upload (four-eyes rule is on).')
+        if d['plan'].get('warnings') and not data.acknowledged_warnings:
+            raise HTTPException(409, 'Read the notes under “Please read before approving” and tick “I have read these notes” first.')
+        if not settings()['allow_self_approval']:
+            makers = ({d.get('uploaded_by')} | store.draft_editors(id)) - {None}
+            if user['username'] in makers:
+                raise HTTPException(403, 'A different approver must approve this order: you uploaded or changed it, and the '
+                                         'four-eyes rule is on.')
         try:
             result = oracle.commit(d, data.plan_hash, user['username'], required=list(current_fields().extra_required))
         except Exception as exc:
@@ -825,7 +919,7 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
         clear_counts()
         store.save(d, user['username'], data.version)
         store.audit(user['username'], 'approved_saved', id, orders=result.get('orders'), rows=len(result.get('rows', [])),
-                    plan_hash=data.plan_hash)
+                    plan_hash=data.plan_hash, warnings_acknowledged=len(d['plan'].get('warnings') or []))
         logs.event('approved_saved', user=user['username'], draft=id, orders=result.get('orders'), rows=len(result.get('rows', [])),
                    plan_hash=data.plan_hash)
         return result
@@ -1011,7 +1105,7 @@ def audit(target: str | None = None, user=Depends(require('audit'))): return sto
 
 
 # --- data intelligence: knowledge catalog, explorer, AI chat ---------------------------------------
-IDENT = re.compile(r'^[A-Z][A-Z0-9_$#]{0,127}$')
+IDENT = re.compile(r'[A-Z][A-Z0-9_$#]{0,127}\Z')   # use .fullmatch / .match with \Z: '$' alone accepts a trailing newline
 _LEX = {}
 
 
@@ -1349,6 +1443,8 @@ class Feedback(BaseModel):
 @app.post('/api/chat/{cid}/feedback')
 def chat_feedback(cid: str, data: Feedback, user=Depends(require('view'))):
     entry = store.chat_entry(cid)
+    if entry['username'] != user['username'] and user['role'] != 'admin':
+        raise HTTPException(404, 'Not found.')
     store.chat_feedback(cid, 'correct' if data.correct else 'wrong')
     saved = None
     p = entry['payload']

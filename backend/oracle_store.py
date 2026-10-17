@@ -6,9 +6,10 @@ one for the main account (POPPYS_APP) and, when .env.poppys names one, one for t
 (scripts/create_readonly_user.py). connect() keeps its contract, `with connect() as conn:`, and closing the
 connection hands its session back to the pool."""
 from __future__ import annotations
-from datetime import datetime, date
-from decimal import Decimal, InvalidOperation
+from datetime import datetime
+from decimal import Decimal
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -16,7 +17,7 @@ import sys
 import threading
 import oracledb
 from .config import OWNER, setting
-from .erp import planner, mapping as registry
+from .erp import planner, mapping as registry, readback
 from .erp.catalog import OracleCatalog
 
 digest = planner.digest
@@ -345,15 +346,58 @@ def pk_of(table, mapping):
     raise ValueError(f'{table}: not an allowlisted table.')
 
 
-def same(a, b):
-    if isinstance(a, (datetime, date)) or isinstance(b, (datetime, date)):
-        return a == b
-    if a is None or b is None:
-        return a is b
+same = readback.same     # same(read_back, written, DATA_TYPE): by the column's type, never text as a number
+
+
+# --- where saves may go -------------------------------------------------------------------------------
+# POPPYS AI saves only to the local demo database (Docker on this computer, CI's throwaway Oracle). Previews and reads
+# may connect anywhere ORACLE_DSN points; commit() refuses to write unless the DSN names only allowed hosts (loopback,
+# or exactly the hosts in ORACLE_ALLOWED_HOSTS) and, when ORACLE_DB_IDENTITY is set, the session is in that database.
+def dsn_hosts(dsn):
+    """Host names or addresses an Oracle DSN connects to: Easy Connect (host:port/service, //host, tcps://host,
+    [::1]:1521/x, host1,host2:1521/x) or a connect descriptor (HOST=...). [] when it names none (a tnsnames alias)."""
+    text = str(dsn or '').strip()
+    if '(' in text:
+        return re.findall(r'(?i)\(\s*HOST\s*=\s*([^)\s]+)\s*\)', text)
+    text = re.sub(r'^[a-z]+:(?=//)', '', text, flags=re.I).lstrip('/')
+    if not re.search(r'[/:]', text):
+        return []
+    hosts = []
+    for part in re.split(r'[,;]', re.split(r'[/?]', text, maxsplit=1)[0]):
+        part = part.strip()
+        bracketed = re.match(r'^\[([^\]]+)\]', part)
+        hosts.append(bracketed.group(1) if bracketed else part.split(':')[0])
+    return hosts if hosts and all(hosts) else []
+
+
+def _loopback(host):
     try:
-        return Decimal(str(a)) == Decimal(str(b))
-    except InvalidOperation:
-        return str(a) == str(b)
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host.lower() == 'localhost'
+
+
+def write_problem(conn=None):
+    """None when commit() may write through this configuration (and connection), else the plain reason."""
+    dsn = setting('ORACLE_DSN', DEFAULT_DSN)
+    hosts = dsn_hosts(dsn)
+    allowed = [h.strip().lower() for h in setting('ORACLE_ALLOWED_HOSTS').split(',') if h.strip()]
+    if not hosts:
+        return (f'Nothing was saved: POPPYS AI cannot tell which computer ORACLE_DSN “{dsn}” points at. Write it as '
+                'host:port/service in .env.poppys (for the local database 127.0.0.1:1521/FREEPDB1).')
+    other = [h for h in hosts if (h.lower() not in allowed if allowed else not _loopback(h))]
+    if other:
+        return (f'Nothing was saved: POPPYS AI saves orders only to the database on this computer, and ORACLE_DSN points at '
+                f'{", ".join(other)}. If that is a test database, an administrator can list it in ORACLE_ALLOWED_HOSTS in .env.poppys.')
+    want = setting('ORACLE_DB_IDENTITY').strip().upper()
+    if conn is not None and want:
+        c = conn.cursor()
+        c.execute("SELECT SYS_CONTEXT('USERENV','CON_NAME'), SYS_CONTEXT('USERENV','DB_UNIQUE_NAME') FROM dual")
+        con, unique = (str(x or '').upper() for x in (c.fetchone() or ('', '')))
+        if want not in (con, unique):
+            return (f'Nothing was saved: .env.poppys allows saving only to the database {want} (ORACLE_DB_IDENTITY), but this '
+                    f'connection is to {con or "?"} (DB_UNIQUE_NAME {unique or "?"}). Check ORACLE_DSN.')
+    return None
 
 
 def jsonable(v):
@@ -372,8 +416,17 @@ def commit(draft, expected_hash, approver, mapping=None, required=()):
     """Re-plans inside the write lock with the same rules as the preview (including fields an administrator
     made required), so nothing the preview would refuse can be saved."""
     mapping = mapping or current_mapping()
+    problem = write_problem()            # before connecting: a save never reaches a database it may not write
+    if problem:
+        raise RuntimeError(problem)
     with connect(purpose='save order', user=approver) as conn:
+        problem = write_problem(conn)
+        if problem:
+            raise RuntimeError(problem)
         c = conn.cursor(); c.execute('SELECT ID FROM PP_WRITE_LOCK WHERE ID=1 FOR UPDATE WAIT 10')
+        if c.fetchone() is None:
+            raise RuntimeError('Nothing was saved: the save lock (row 1 of POPPYS_APP.PP_WRITE_LOCK) is missing, so two saves could '
+                               'overlap. Ask the database administrator to run: INSERT INTO POPPYS_APP.PP_WRITE_LOCK VALUES (1); COMMIT;')
         previous = read_result(c, draft['id'])
         if previous:
             return previous
@@ -396,8 +449,11 @@ def commit(draft, expected_hash, approver, mapping=None, required=()):
                 refs[op['key']] = ident
                 vals = {}
                 for col, v in op['values'].items():
-                    if isinstance(v, str) and v.startswith('$'):
-                        v = refs[v[1:]]
+                    if isinstance(v, planner.Ref):          # the generated ID of a row saved earlier in this transaction
+                        if v['ref'] not in refs:
+                            raise RuntimeError(f'{table}.{col} links to a record that is not saved yet. Nothing was saved; '
+                                               'prepare the preview again.')
+                        v = refs[v['ref']]
                     if v is not None and registry_cols[table][col]['type'] == 'DATE':
                         v = datetime.strptime(v, '%Y-%m-%d')
                     elif isinstance(v, float):
@@ -407,14 +463,17 @@ def commit(draft, expected_hash, approver, mapping=None, required=()):
                 c.execute(f'INSERT INTO {OWNER}.{table} ({",".join(cols)}) VALUES ({",".join(":" + k for k in binds)})', binds)
                 c.execute(f'SELECT {",".join(cols)} FROM {OWNER}.{table} WHERE {pk}=:id', id=ident)
                 rows = c.fetchall()
-                if len(rows) != 1 or not all(same(a, b) for a, b in zip(rows[0], vals.values())):
+                if len(rows) != 1 or not all(same(a, b, registry_cols[table][col]['type']) for col, a, b in zip(cols, rows[0], vals.values())):
                     raise ValueError(f'{table}: inserted values did not match read-back.')
                 inserted.append(dict(table=table, key=op['key'], pk=ident, business=op.get('business'), where=op.get('where'),
                                      values={col: jsonable(v) for col, v in zip(cols, rows[0])}))
                 if table == 'ORDMAS':
                     outorders.append(dict(order_ref=vals['DOCID'], ordmasid=ident))
+            types = {}          # {table: {column: DATA_TYPE}}: the history read-back compares by type (readback.same)
+            for r in inserted + reused:
+                types.setdefault(r['table'], {}).update({col: registry_cols[r['table']][col]['type'] for col in r['values']})
             result = dict(job_id=draft['id'], orders=outorders, rows=inserted, reused=reused, totals=checked['totals'],
-                          reference_only=checked.get('reference_only', []),
+                          reference_only=checked.get('reference_only', []), column_types=types,
                           committed_at=datetime.now().astimezone().isoformat(), approver=approver, already_committed=False)
             c.setinputsizes(payload=oracledb.DB_TYPE_CLOB)
             c.execute('INSERT INTO PP_IMPORT_LOG(JOBID,FILEHASH,PLANHASH,APPROVER,RESULT_JSON) VALUES (:job,:filehash,:hash,:who,:payload)',

@@ -4,7 +4,9 @@
 
 Checks, in plain English, and exits with status 1 when one fails:
 * the Oracle version: 12.1 or later (POPPYS AI's queries use FETCH FIRST), and which database this is;
-* the main account (POPPYS_APP): what it can see and insert, and that it can NOT update or delete GARMENT_DEMO data;
+* whether approved orders may be saved to it (ORACLE_DSN on this computer or in ORACLE_ALLOWED_HOSTS, ORACLE_DB_IDENTITY);
+* the main account (POPPYS_APP): what it can see and insert, that it can NOT update or delete GARMENT_DEMO data, and
+  that it reads with READ (SELECT would also let it lock Axpert rows);
 * the optional read-only account (POPPYS_RO, scripts/create_readonly_user.py): that it can only read;
 * the connection pool settings, by taking a connection from each of the app's own pools.
 Read-only: nothing is written.
@@ -77,6 +79,7 @@ def visible(conn, owner):
 
 def check_server(conn, report):
     from backend import oracle_store as oracle
+    from backend.config import setting
     c = conn.cursor()
     c.execute("select sys_context('USERENV','DB_UNIQUE_NAME'), sys_context('USERENV','CON_NAME') from dual")
     unique, container = c.fetchone()
@@ -86,6 +89,14 @@ def check_server(conn, report):
         report.fail(problem)
     else:
         report.ok(f'Oracle {conn.version} is supported (POPPYS AI needs 12.1 or later for FETCH FIRST).')
+    problem = oracle.write_problem(conn)      # the guard commit() applies before it writes anything
+    pinned = setting('ORACLE_DB_IDENTITY').strip().upper()
+    if problem:
+        report.warn('Approved orders will not be saved here: ' + problem.removeprefix('Nothing was saved: '))
+    else:
+        report.ok(f'Approved orders may be saved here: ORACLE_DSN names {", ".join(oracle.dsn_hosts(setting("ORACLE_DSN", oracle.DEFAULT_DSN)))}'
+                  + (f' and the database is {pinned} (ORACLE_DB_IDENTITY).' if pinned else
+                     f'. Set ORACLE_DB_IDENTITY={container} in .env.poppys to also pin the database.'))
 
 
 def check_main(conn, report, owner):
@@ -109,6 +120,11 @@ def check_main(conn, report, owner):
                     f'{", ".join(changes + risky)}. Ask the DBA to revoke these.')
     else:
         report.ok(f'{conn.username} cannot UPDATE or DELETE {owner} data (it may only read and insert).')
+    selects = sorted(t for (_, t), ps in grants.items() if 'SELECT' in ps)
+    if selects:
+        report.warn(f'{conn.username} has SELECT rather than READ on {len(selects)} {owner} tables ({", ".join(selects[:5])}'
+                    f'{" …" if len(selects) > 5 else ""}): SELECT also allows SELECT ... FOR UPDATE and LOCK TABLE on Axpert data. '
+                    'Run python scripts/grant_bom_tables.py, which grants READ instead.')
     if not insertable:
         report.warn(f'{conn.username} has no INSERT permission yet, so approved orders cannot be saved. '
                     'Run python scripts/grant_bom_tables.py.')

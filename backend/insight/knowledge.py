@@ -19,7 +19,7 @@ import re
 from ..config import ROOT
 
 CURATED = ROOT / 'config' / 'semantic_catalog.json'
-IDENT = re.compile(r'^[A-Z][A-Z0-9_$#]{0,127}$')
+IDENT = re.compile(r'^[A-Z][A-Z0-9_$#]{0,127}\Z')   # \Z, not $: '$' would also accept a trailing newline
 STATUS_RANK = {'verified': 0, 'declared': 1, 'proposed': 2, 'inferred': 3}
 
 

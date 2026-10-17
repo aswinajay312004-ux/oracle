@@ -10,6 +10,12 @@ const STARTERS = ['How many orders for NEXT?', 'Size wise quantity for order PK/
   'Top 5 buyers by quantity', 'Orders this month', 'Colour wise quantity for NEXT', 'Fabric kg by colour', 'How many uploaded files?'];
 let loaded = false;
 
+// Signing out (or another person signing in) clears the previous person's questions and answers.
+export function resetChat() {
+  loaded = false; $('#thread').innerHTML = ''; $('#chat-input').value = '';
+  $('#chat-history').innerHTML = '<p class="muted small-text">None yet.</p>';
+}
+
 export async function loadChat() {
   if (!loaded) { loaded = true; if (!$('#thread').children.length) welcome(); }
   const db = state.health?.database;

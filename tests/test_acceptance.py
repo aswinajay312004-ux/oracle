@@ -124,7 +124,7 @@ def preview(c, d):
 
 
 def accept(c, d):
-    return c.post(f'/api/drafts/{d["id"]}/accept', json={'version': d['version'], 'plan_hash': d['plan']['hash']})
+    return c.post(f'/api/drafts/{d["id"]}/accept', json={'version': d['version'], 'plan_hash': d['plan']['hash'], 'acknowledged_warnings': True})
 
 
 def map_layout(c, d, definition, **body):

@@ -399,6 +399,27 @@ def test_a_newer_database_is_refused(tmp_path, monkeypatch):
 
 
 # --- audit log: append-only, hash chain -------------------------------------------------------------------------------------------
+def tamper(sql, params=()):
+    """Run one statement with the append-only triggers dropped (and put back), as someone with a database editor
+    could, to show that verify_audit_chain() notices changes made behind the application's back."""
+    with closing(local_store._connect()) as c:
+        c.isolation_level = None
+        c.execute('BEGIN IMMEDIATE')
+        c.execute('DROP TRIGGER audit_no_update'); c.execute('DROP TRIGGER audit_no_delete')
+        c.execute(sql, params)
+        local_store._m3_audit_chain_triggers(c)
+        c.execute('COMMIT')
+
+
+def rechain(c, start=1):
+    """Recompute the plain SHA-256 chain from entry `start` on, as an attacker without the key file would."""
+    prev = c.execute('SELECT hash FROM audit WHERE id<? ORDER BY id DESC LIMIT 1', (start,)).fetchone()
+    prev = prev[0] if prev else local_store.GENESIS
+    for r in c.execute('SELECT id,at,actor,action,target,detail FROM audit WHERE id>=? ORDER BY id', (start,)).fetchall():
+        h = local_store._audit_hash(prev, dict(zip(('id', 'at', 'actor', 'action', 'target', 'detail'), r)))
+        c.execute('UPDATE audit SET prev_hash=?,hash=? WHERE id=?', (prev, h, r[0])); prev = h
+
+
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(local_store, 'DATA', tmp_path); local_store.init()
@@ -417,13 +438,13 @@ def test_audit_rows_cannot_be_updated_or_deleted(store):
     assert store.verify_audit_chain() == dict(ok=True, rows=6, head=store.verify_audit_chain()['head'], last_id=6)
 
 
-@pytest.mark.parametrize('tamper,row', [
+@pytest.mark.parametrize('change,row', [
     ("UPDATE audit SET detail='{\"n\": 99}' WHERE id=3", 3),
     ('DELETE FROM audit WHERE id=4', 5),
     ("UPDATE audit SET at='2020-01-01T00:00:00+00:00' WHERE id=6", 6),
 ])
-def test_verify_finds_changes_made_behind_the_apps_back(store, tamper, row):
-    store.audit_tamper_for_tests(tamper)
+def test_verify_finds_changes_made_behind_the_apps_back(store, change, row):
+    tamper(change)
     result = store.verify_audit_chain()
     assert result['ok'] is False and result['row'] == row and result['problem']
 
@@ -432,6 +453,45 @@ def test_verify_finds_removed_protection(store):
     with closing(sqlite3.connect(store.path())) as c:
         c.execute('DROP TRIGGER audit_no_delete'); c.commit()
     assert store.verify_audit_chain()['ok'] is False
+
+
+def test_a_chain_rebuilt_without_the_key_is_found(store):
+    """Rewriting an entry and recomputing every later SHA-256 hash passes the plain chain; the keyed MAC does not."""
+    with closing(local_store._connect()) as c:
+        c.isolation_level = None; c.execute('BEGIN IMMEDIATE')
+        c.execute('DROP TRIGGER audit_no_update'); c.execute('DROP TRIGGER audit_no_delete')
+        c.execute("UPDATE audit SET actor='mallory' WHERE id=2"); rechain(c)
+        local_store._m3_audit_chain_triggers(c); c.execute('COMMIT')
+    result = store.verify_audit_chain()
+    assert result['ok'] is False and result['row'] == 2 and 'rewritten' in result['problem']
+
+
+def test_removing_the_newest_entries_is_found(store):
+    tamper('DELETE FROM audit WHERE id>=5')
+    result = store.verify_audit_chain()
+    assert result['ok'] is False and 'newest entries were removed' in result['problem'] and 'entry 6' in result['problem']
+
+
+def test_a_harmless_trigger_with_the_same_name_is_found(store):
+    with closing(local_store._connect()) as c:
+        c.execute('DROP TRIGGER audit_no_delete')
+        c.execute("CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit WHEN 0 BEGIN SELECT 1; END"); c.commit()
+    assert store.verify_audit_chain()['ok'] is False
+
+
+def test_a_missing_key_file_is_reported_not_ignored(store, tmp_path):
+    (tmp_path / local_store.AUDIT_KEY).unlink()
+    result = store.verify_audit_chain()
+    assert result['ok'] is False and 'audit key file' in result['problem']
+
+
+def test_an_upgraded_chain_is_keyed_and_anchored(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_store, 'DATA', tmp_path)
+    legacy_db(tmp_path); local_store.init()
+    assert (tmp_path / local_store.AUDIT_KEY).is_file() and (tmp_path / local_store.AUDIT_ANCHOR).is_file()
+    assert local_store.verify_audit_chain()['ok']
+    tamper('DELETE FROM audit WHERE id=5')
+    assert local_store.verify_audit_chain()['ok'] is False
 
 
 def test_concurrent_audit_writes_keep_one_chain(store):
@@ -448,11 +508,13 @@ def test_concurrent_audit_writes_keep_one_chain(store):
 
 
 def test_admin_endpoint_verifies_the_chain(admin):
-    r = admin.get('/api/audit/verify')
+    assert admin.get('/api/audit/verify').status_code == 405          # it writes an audit entry: POST only (CSRF-checked)
+    r = admin.post('/api/audit/verify')
     assert r.status_code == 200 and r.json()['ok'] is True and r.json()['rows'] >= 1
     assert admin.post('/api/users', json={'username': 'appr', 'password': PW, 'role': 'approver'}).status_code == 200
     with TestClient(main.app) as other:
         other.post('/api/login', json={'username': 'appr', 'password': PW})
-        assert other.get('/api/audit').status_code == 200 and other.get('/api/audit/verify').status_code == 403
-    local_store.audit_tamper_for_tests("UPDATE audit SET actor='nobody' WHERE id=1")
-    assert admin.get('/api/audit/verify').json()['ok'] is False
+        other.post('/api/me/password', json={'current': PW, 'new': 'quiet tractor nine field'})
+        assert other.get('/api/audit').status_code == 200 and other.post('/api/audit/verify').status_code == 403
+    tamper("UPDATE audit SET actor='nobody' WHERE id=1")
+    assert admin.post('/api/audit/verify').json()['ok'] is False

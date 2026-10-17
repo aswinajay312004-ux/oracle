@@ -41,6 +41,13 @@ def admin(client):
     return client
 
 
+def own_password(c, username, current=PW, new='my own loom phrase 7'):
+    """The first sign-in after an administrator set the password: the person chooses their own."""
+    r = c.post('/api/me/password', json={'current': current, 'new': new})
+    assert r.status_code == 200, r.text
+    return new
+
+
 def sessions_of(username):
     with local_store.db() as c:
         return c.execute('SELECT * FROM sessions WHERE username=?', (username,)).fetchall()
@@ -153,7 +160,7 @@ def test_library_value_error_is_a_500_with_a_reference_and_the_traceback_only_in
     r = admin.get('/api/drafts')
     assert r.status_code == 500 and r.headers['content-type'].startswith('application/problem+json')
     rid = r.json()['request_id']
-    assert r.json()['detail'] == f'Something went wrong. Nothing was saved. Reference {rid}.'
+    assert r.json()['detail'] == f'Something went wrong while loading this. Reference {rid}.'   # a GET saves nothing: no claim about saving
     assert 'Expecting' not in r.text and 'secret' not in r.text and 'Traceback' not in r.text
     main.logs.flush()
     lines = [json.loads(x) for x in (tmp_path / 'logs' / 'app.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -180,8 +187,79 @@ def test_runtime_error_from_a_library_is_not_shown(admin, monkeypatch):
 def test_validation_errors_do_not_echo_the_input_or_context(client):
     r = client.post('/api/login', json={'username': 'bad name!', 'password': 'P' * 300})
     assert r.status_code == 422
-    for e in r.json()['detail']:
+    assert r.json()['detail'] == 'Username has characters that are not allowed; Password can have at most 256 characters'
+    assert 'bad name' not in r.text and 'PPPP' not in r.text
+    for e in r.json()['errors']:
         assert set(e) <= {'type', 'loc', 'msg'}, e
+
+
+def test_validation_errors_are_plain_sentences_for_staff(admin):
+    d = admin.post('/api/uploads', files={'file': ('w.csv', b'Style,Colour,Size,Qty\nT1,RED,S,10\n')}).json()
+    r = admin.post(f'/api/drafts/{d["id"]}/map', json={'version': d['version'], 'sheet': 'Sheet1', 'qty_unit': 'PACK', 'pieces_per_unit': 20000})
+    assert r.status_code == 422 and r.json()['detail'] == 'Pieces per pack must be at most 10000'
+
+
+def test_an_administrator_set_password_is_temporary(admin):
+    assert admin.post('/api/users', json={'username': 'opuser', 'password': PW, 'role': 'operator'}).status_code == 200
+    with TestClient(main.app) as op:
+        assert op.post('/api/login', json={'username': 'opuser', 'password': PW}).status_code == 200
+        assert op.get('/api/session').json()['password_change_required'] is True
+        r = op.get('/api/drafts')
+        assert r.status_code == 403 and r.json()['detail'] == 'Choose your own password first.'
+        assert op.get('/api/health').status_code == 200                       # the status poll keeps working
+        bad = op.post('/api/me/password', json={'current': 'wrong-password-99', 'new': 'my own loom phrase 7'})
+        assert bad.status_code == 400 and 'not correct' in bad.json()['detail']
+        same = op.post('/api/me/password', json={'current': PW, 'new': PW})
+        assert same.status_code == 400 and 'different' in same.json()['detail']
+        weak = op.post('/api/me/password', json={'current': PW, 'new': 'password1234'})
+        assert weak.status_code == 400 and 'too common' in weak.json()['detail']
+        with TestClient(main.app) as second:                                  # another browser of the same person
+            assert second.post('/api/login', json={'username': 'opuser', 'password': PW}).status_code == 200
+            new = own_password(op, 'opuser')
+            assert second.get('/api/session').json()['authenticated'] is False   # the other session ended
+        assert op.get('/api/drafts').status_code == 200 and op.get('/api/session').json()['password_change_required'] is False
+        assert op.post('/api/logout').status_code == 200
+        assert op.post('/api/login', json={'username': 'opuser', 'password': new}).status_code == 200
+    assert admin.patch('/api/users/opuser', json={'password': 'reset by the boss 42'}).status_code == 200
+    with TestClient(main.app) as op:
+        op.post('/api/login', json={'username': 'opuser', 'password': 'reset by the boss 42'})
+        assert op.get('/api/session').json()['password_change_required'] is True    # a reset is temporary again
+    assert admin.patch('/api/users/admin', json={'password': 'boss own phrase 42'}).status_code == 200
+    admin.post('/api/login', json={'username': 'admin', 'password': 'boss own phrase 42'})
+    assert admin.get('/api/session').json()['password_change_required'] is False    # an administrator's own change is final
+    events = [e['action'] for e in admin.get('/api/audit').json()]
+    assert {'password_change_failed', 'password_changed'} <= set(events)
+
+
+def test_only_administrators_see_where_the_database_is(admin):
+    assert admin.post('/api/users', json={'username': 'opuser', 'password': PW, 'role': 'operator'}).status_code == 200
+    with TestClient(main.app) as op:
+        op.post('/api/login', json={'username': 'opuser', 'password': PW}); own_password(op, 'opuser')
+        db = op.get('/api/health').json()['database']
+        assert 'dsn' not in db and 'version' not in db
+
+
+def test_rating_someone_elses_answer_is_refused(admin):
+    local_store.log_chat('c-alice', 'alice', 'how many orders', {'kind': 'answer'})
+    assert admin.post('/api/users', json={'username': 'opuser', 'password': PW, 'role': 'operator'}).status_code == 200
+    with TestClient(main.app) as op:
+        op.post('/api/login', json={'username': 'opuser', 'password': PW}); own_password(op, 'opuser')
+        assert op.post('/api/chat/c-alice/feedback', json={'correct': True}).status_code == 404
+    assert local_store.chat_entry('c-alice')['feedback'] is None
+
+
+def test_only_loopback_host_names_are_answered(client, monkeypatch):
+    assert client.get('/api/session', headers={'Host': 'attacker.example'}).status_code == 400
+    assert client.get('/api/session', headers={'Host': '127.0.0.1:8008'}).status_code == 200
+
+
+def test_typed_text_in_a_draft_must_be_one_value(admin):
+    d = admin.post('/api/uploads', files={'file': ('w.csv', b'Style,Colour,Size,Qty\nT1,RED,S,10\n')}).json()
+    o = dict(d['orders'][0], description={'<img src=x>': 1})
+    r = admin.put(f'/api/drafts/{d["id"]}', json={'version': d['version'], 'orders': [o]})
+    assert r.status_code == 409 and 'must be a single value' in r.json()['detail']
+    o = dict(d['orders'][0], description='x' * 3000)
+    assert 'too long' in admin.put(f'/api/drafts/{d["id"]}', json={'version': d['version'], 'orders': [o]}).json()['detail']
     assert 'P' * 50 not in r.text and 'bad name!' not in r.text
 
 
@@ -296,6 +374,7 @@ def test_a_change_of_role_active_or_password_ends_that_users_sessions(admin, cha
     assert admin.post('/api/users', json={'username': 'opuser', 'password': PW, 'role': 'operator'}).status_code == 200
     with TestClient(main.app) as op:
         assert op.post('/api/login', json={'username': 'opuser', 'password': PW}).status_code == 200
+        own_password(op, 'opuser')
         assert op.get('/api/drafts').status_code == 200
         r = admin.patch('/api/users/opuser', json=change)
         assert r.status_code == 200 and r.json()['sessions_ended'] == 1

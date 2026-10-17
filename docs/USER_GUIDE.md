@@ -7,7 +7,8 @@ Open it in Edge or Chrome: **http://127.0.0.1:8008**
 ## 1. Sign in
 
 - Type your username and password, then click **Sign in**.
-- After 30 minutes without using it, you are signed out. Sign in again and open your file from **Recent files**: the draft is kept as it was last checked.
+- **The first time** (or after the administrator reset your password) you are asked to choose your own password: type the one you were given, then a new one of at least 12 characters. A short sentence is easiest to remember, for example `blue tractor seventeen`.
+- After 30 minutes without using it, you are signed out. Sign in again on the same screen: what you were typing is still there. Drafts you left are under **Recent files**.
 - Too many wrong passwords make you wait. After 20 wrong tries the account is locked: ask the administrator to unlock it.
 
 ## 2. Upload the buyer's file
@@ -40,15 +41,15 @@ The screen looks like the Axpert entry screen: the order details on top, then th
   - **"Could be 3 April or 4 March"**: type the right date.
   - **"Written with a dot between thousands"**: type the quantity as a whole number, for example `2000`.
 - **Show me the next one ›** jumps to the next red field.
-- Your corrections are saved in the draft when you click **Check & continue**. Click it before you leave the computer: corrections not yet checked are lost if you are signed out. When nothing is red, it takes you to the approval step.
+- Your corrections are saved in the draft when you click **Check & continue**. If you close the browser tab before that, the browser asks first, because unchecked corrections would be lost. When nothing is red, **Check & continue** takes you to the approval step.
 
 ## 5. Check & approve
 
 POPPYS AI shows the exact records it will create in Axpert, and the total pieces.
 
-- Read the yellow box **Please read before approving**, if there is one. It lists what the file itself says that may need a second look: a total row that does not match the sizes, a second ship date, rows hidden in Excel, the same order on two sheets.
+- Read the yellow box **Please read before approving**, if there is one. It lists what the file itself says that may need a second look: a total row that does not match the sizes, a second ship date, rows hidden in Excel, the same order on two sheets. Tick **I have read these notes**: the approve button works only after that.
 - If anything is wrong, click **← Back to the order entry** and fix it.
-- Only people with the **approver** role can click **Accept and save to Oracle →**. If the administrator has turned on the four-eyes rule, the approver must be a different person from the one who uploaded the file.
+- Only people with the **approver** role can click **Accept and save to Oracle →**. If the administrator has turned on the four-eyes rule, the approver must be a different person from everyone who uploaded or changed the order.
 
 ## 6. Saved
 
@@ -83,5 +84,5 @@ Each answer shows the table, how the tables are linked, and the exact query. Ask
 1. **New order** → buyer Excel file-ஐ இழுத்துப் போடுங்கள் → **Open the order entry →**
 2. சிவப்பு கோடு உள்ள field-களை சரி செய்யுங்கள் (pieces-ஆ packs-ஆ, தேதி, quantity). **Show me the next one ›** அடுத்ததைக் காட்டும்.
 3. **Check & continue** → **Please read before approving** பெட்டியைப் படியுங்கள்.
-4. Approver மட்டும் **Accept and save to Oracle →** அழுத்தலாம். அதுவரை Axpert-ல் எதுவும் சேமிக்கப்படாது.
+4. **I have read these notes** என்பதை tick செய்யுங்கள். Approver மட்டும் **Accept and save to Oracle →** அழுத்தலாம். அதுவரை Axpert-ல் எதுவும் சேமிக்கப்படாது.
 5. சேமித்த பிறகு diagram-ல் ✓ இருந்தால், Oracle-ல் நீங்கள் approve செய்தது அப்படியே உள்ளது.

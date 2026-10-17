@@ -10,15 +10,21 @@ Durability (docs/RESEARCH_DECISIONS.md, "Logging and ops: SQLite durability, bac
   counts); if that copy cannot be made and verified, nothing is changed and the app refuses to start.
 * The audit table is append-only (BEFORE UPDATE / DELETE triggers abort) and hash-chained: each row stores the
   previous row's hash and a SHA-256 over itself, so an edit, a deleted row or a removed trigger is found by
-  verify_audit_chain().
+  verify_audit_chain(). Since schema 4 each row also carries an HMAC-SHA256 chain (``mac``) keyed with
+  DATA/audit.key, a file outside the database, so a chain cannot be rebuilt with the database alone; and the
+  newest entry's number and MAC are kept in DATA/audit.anchor, so removing the newest entries is found too.
+  Someone who can change every file in the data folder can still rewrite history: the data folder's
+  permissions (only the service account and administrators) are the boundary.
 """
 from contextlib import closing, contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
+import threading
 import time
 import uuid
 from .config import DATA
@@ -26,6 +32,8 @@ from .config import DATA
 DB_NAME = 'poppys.sqlite3'
 BUSY_TIMEOUT_S = 20
 GENESIS = '0' * 64
+AUDIT_KEY = 'audit.key'          # HMAC key of the audit chain: outside the database, copied by scripts/backup.py
+AUDIT_ANCHOR = 'audit.anchor'    # {"id", "mac"} of the newest audit entry, outside the database
 
 ROLES = ('admin', 'approver', 'operator', 'viewer')
 ORDER_FIELDS = ('buyer', 'style', 'description', 'po_number', 'order_ref', 'ship_date', 'order_date', 'season', 'merch',
@@ -142,7 +150,22 @@ def _m3_audit_chain(c):
     _m3_audit_chain_triggers(c)
 
 
-MIGRATIONS = ((1, _m1_baseline), (2, _m2_sessions_and_sign_in), (3, _m3_audit_chain))
+def _m4_own_passwords_and_keyed_audit(c):
+    """users.must_change: a password an administrator set (new user, reset) must be replaced by the person at the
+    next sign-in. audit.mac: the keyed chain (module docstring), computed for the existing rows in id order."""
+    if 'must_change' not in _columns(c, 'users'):
+        c.execute('ALTER TABLE users ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0')
+    if 'mac' not in _columns(c, 'audit'):
+        c.execute('ALTER TABLE audit ADD COLUMN mac TEXT')
+    c.execute('DROP TRIGGER IF EXISTS audit_no_update'); c.execute('DROP TRIGGER IF EXISTS audit_no_delete')
+    key = _audit_key(); prev = GENESIS
+    for r in c.execute('SELECT id,at,actor,action,target,detail FROM audit ORDER BY id').fetchall():
+        prev = _audit_mac(key, prev, r)
+        c.execute('UPDATE audit SET mac=? WHERE id=?', (prev, r['id']))
+    _m3_audit_chain_triggers(c)
+
+
+MIGRATIONS = ((1, _m1_baseline), (2, _m2_sessions_and_sign_in), (3, _m3_audit_chain), (4, _m4_own_passwords_and_keyed_audit))
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -214,6 +237,7 @@ def init():
             except BaseException:
                 c.execute('ROLLBACK')
                 raise
+    _anchor_from_db()
     return copy
 
 
@@ -238,45 +262,128 @@ def _audit_hash(prev, r):
     return hashlib.sha256((prev + '\n' + _audit_canonical(r)).encode('utf-8')).hexdigest()
 
 
+def _audit_key(create=True):
+    """The audit chain's HMAC key (32 random bytes, hex) from DATA/audit.key; made on first use, readable by the
+    owner only where the OS honours the mode. None when it is missing and create is False."""
+    file = DATA / AUDIT_KEY
+    try:
+        return bytes.fromhex(file.read_text(encoding='ascii').strip())
+    except FileNotFoundError:
+        if not create:
+            return None
+    try:
+        fd = os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:                          # made by a concurrent start
+        return bytes.fromhex(file.read_text(encoding='ascii').strip())
+    key = os.urandom(32)
+    with os.fdopen(fd, 'w', encoding='ascii') as out:
+        out.write(key.hex()); out.flush(); os.fsync(out.fileno())
+    return key
+
+
+def _audit_mac(key, prev, r):
+    return hmac.new(key, (prev + '\n' + _audit_canonical(r)).encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+_anchor_lock = threading.Lock()
+
+
+def _read_anchor():
+    try:
+        a = json.loads((DATA / AUDIT_ANCHOR).read_text(encoding='utf-8'))
+        return dict(id=int(a['id']), mac=str(a['mac']))
+    except FileNotFoundError:
+        return None
+    except (ValueError, KeyError, TypeError, OSError):
+        return dict(id=-1, mac='')                   # unreadable: verify reports it
+
+
+def _write_anchor(entry_id, mac):
+    """Keep the newest entry's number and MAC outside the database (atomic replace; never moves backwards). A
+    failure is logged by the caller's absence of an anchor update, never fails the audited action."""
+    with _anchor_lock:
+        current = _read_anchor()
+        if current and current['id'] >= entry_id:
+            return
+        tmp = DATA / f'{AUDIT_ANCHOR}.{uuid.uuid4().hex[:8]}.tmp'
+        try:
+            tmp.write_text(json.dumps(dict(id=entry_id, mac=mac)), encoding='utf-8')
+            os.replace(tmp, DATA / AUDIT_ANCHOR)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _anchor_from_db():
+    """After a migration (or on a workspace that has none yet): anchor the newest entry as it is now."""
+    with closing(_connect()) as c:
+        if 'mac' not in _columns(c, 'audit'):
+            return
+        last = c.execute('SELECT id,mac FROM audit ORDER BY id DESC LIMIT 1').fetchone()
+    if last and last['mac'] and _read_anchor() is None:
+        _write_anchor(last['id'], last['mac'])
+
+
 def audit(actor, action, target=None, **detail):
+    key = _audit_key()
     with db() as c:
         c.execute('BEGIN IMMEDIATE')      # one writer at a time, so two events never chain to the same row
-        last = c.execute('SELECT id,hash FROM audit ORDER BY id DESC LIMIT 1').fetchone()
+        last = c.execute('SELECT id,hash,mac FROM audit ORDER BY id DESC LIMIT 1').fetchone()
         row = dict(id=(last['id'] if last else 0) + 1, at=now(), actor=actor, action=action, target=target,
                    detail=json.dumps(detail, ensure_ascii=False, default=str))
         prev = (last['hash'] if last else None) or GENESIS
-        c.execute('INSERT INTO audit(id,at,actor,action,target,detail,prev_hash,hash) VALUES (?,?,?,?,?,?,?,?)',
-                  (row['id'], row['at'], actor, action, target, row['detail'], prev, _audit_hash(prev, row)))
+        prev_mac = (last['mac'] if last else None) or GENESIS
+        mac = _audit_mac(key, prev_mac, row)
+        c.execute('INSERT INTO audit(id,at,actor,action,target,detail,prev_hash,hash,mac) VALUES (?,?,?,?,?,?,?,?,?)',
+                  (row['id'], row['at'], actor, action, target, row['detail'], prev, _audit_hash(prev, row), mac))
+    _write_anchor(row['id'], mac)         # after the commit: an anchor never names an entry that was rolled back
+
+
+TRIGGERS = {
+    'audit_no_update': "CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT,'audit log is append-only'); END",
+    'audit_no_delete': "CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'audit log is append-only'); END",
+}
+
+
+def _same_sql(a, b):
+    squash = lambda t: ' '.join((t or '').replace('IF NOT EXISTS ', '').split()).lower()   # noqa: E731
+    return squash(a) == squash(b)
 
 
 def verify_audit_chain():
-    """{ok, rows, head, problem?, row?}: every row links to the one before and still has its own hash, and the
-    append-only triggers are in place."""
+    """{ok, rows, head, problem?, row?}: every row links to the one before, still has its own hash and keyed MAC,
+    the append-only triggers are in place exactly as written, and the newest entry recorded outside the database
+    is still there."""
+    key = _audit_key(create=False)
     with closing(_connect()) as c:
-        triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='audit'")}
-        missing = {'audit_no_update', 'audit_no_delete'} - triggers
-        prev = GENESIS; n = 0; last_id = 0
+        triggers = {r['name']: r['sql'] for r in c.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name='audit'")}
+        keyed = 'mac' in _columns(c, 'audit')
+        prev = GENESIS; prev_mac = GENESIS; n = 0; last_id = 0; macs = {}
         for r in c.execute('SELECT * FROM audit ORDER BY id'):
             if r['prev_hash'] != prev:
                 return dict(ok=False, rows=n, row=r['id'], problem='This entry does not follow the one before it: an entry was removed or inserted.')
             if _audit_hash(prev, r) != r['hash']:
                 return dict(ok=False, rows=n, row=r['id'], problem='This entry was changed after it was written.')
+            if keyed and key is not None:
+                if not hmac.compare_digest(_audit_mac(key, prev_mac, r), r['mac'] or ''):
+                    return dict(ok=False, rows=n, row=r['id'], problem='This entry, or one before it, was rewritten after it was written.')
+                prev_mac = r['mac']; macs[r['id']] = r['mac']
             prev = r['hash']; n += 1; last_id = r['id']
-    if missing:
-        return dict(ok=False, rows=n, row=None, problem='The protection that keeps the audit history append-only was removed.')
+    if any(not _same_sql(triggers.get(name), sql) for name, sql in TRIGGERS.items()):
+        return dict(ok=False, rows=n, row=None, problem='The protection that keeps the audit history append-only was removed or changed.')
+    if keyed and key is None and n:
+        return dict(ok=False, rows=n, row=None, problem=f'The audit key file ({AUDIT_KEY} in the data folder) is missing, so the history '
+                                                        'cannot be proven untouched. Restore it from the backup made with this database.')
+    anchor = _read_anchor() if keyed else None
+    if anchor and (anchor['id'] > last_id or (anchor['id'] in macs and not hmac.compare_digest(macs[anchor['id']], anchor['mac']))
+                   or anchor['id'] < 0 or (anchor['id'] and anchor['id'] not in macs)):
+        return dict(ok=False, rows=n, row=None, problem=f'The newest entries were removed or rewritten: the record kept outside the database '
+                                                        f'names entry {max(anchor["id"], 0)}, the history ends at entry {last_id}.')
+    if keyed and n and anchor is None:
+        return dict(ok=False, rows=n, row=None, problem=f'The record of the newest entry kept outside the database ({AUDIT_ANCHOR}) is missing.')
     return dict(ok=True, rows=n, head=prev, last_id=last_id)
-
-
-def audit_tamper_for_tests(sql, params=()):
-    """Only for tests: run one statement with the append-only triggers dropped (and put them back), to show
-    that verify_audit_chain() notices changes made behind the application's back."""
-    with closing(_connect()) as c:
-        c.isolation_level = None
-        c.execute('BEGIN IMMEDIATE')
-        c.execute('DROP TRIGGER audit_no_update'); c.execute('DROP TRIGGER audit_no_delete')
-        c.execute(sql, params)
-        _m3_audit_chain_triggers(c)
-        c.execute('COMMIT')
 
 
 def _m3_audit_chain_triggers(c):
@@ -296,10 +403,10 @@ def session_create(token_hash, username, at, absolute, idle, drop=None):
 
 
 def session_user(token_hash, at, idle, touch_after=None):
-    """(username, role) for a live session of an active user, else None. An expired session is deleted.
+    """(username, role, must_change) for a live session of an active user, else None. An expired session is deleted.
     touch_after: refresh last_seen when it is older than this many seconds (None: never)."""
     with db() as c:
-        row = c.execute('''SELECT s.username,s.last_seen,s.expires,u.role FROM sessions s JOIN users u ON u.username=s.username
+        row = c.execute('''SELECT s.username,s.last_seen,s.expires,u.role,u.must_change FROM sessions s JOIN users u ON u.username=s.username
                            WHERE s.token_hash=? AND u.active=1''', (token_hash,)).fetchone()
         if not row:
             return None
@@ -308,7 +415,7 @@ def session_user(token_hash, at, idle, touch_after=None):
             return None
         if touch_after is not None and at - row['last_seen'] >= touch_after:
             c.execute('UPDATE sessions SET last_seen=? WHERE token_hash=?', (at, token_hash))
-        return row['username'], row['role']
+        return row['username'], row['role'], row['must_change']
 
 
 def session_delete(token_hash):
@@ -437,9 +544,12 @@ def templates(active_only=True):
         return [_template(r) for r in rows]
 
 
-def save_template(name, signature, labels, definition, actor, buyer='', anchors=None, unit=None, quantity_basis=None):
+def save_template(name, signature, labels, definition, actor, buyer='', anchors=None, unit=None, quantity_basis=None, replace=True):
     """Save a confirmed layout. The same name, or the same signature for the same buyer, is a new version of
-    that layout: version n+1 becomes the active one and older versions are kept, inactive, as history."""
+    that layout: version n+1 becomes the active one and older versions are kept, inactive, as history.
+    replace=False (someone without the templates permission): a new version of an existing layout is saved
+    switched off, and the version in use stays in use until an administrator switches the new one on.
+    Returns {id, version, family, active}."""
     tid = uuid.uuid4().hex; buyer = ' '.join(str(buyer or '').split())
     with db() as c:
         prev = c.execute("SELECT family, max(version) AS v FROM templates WHERE lower(name)=lower(?) "
@@ -447,13 +557,15 @@ def save_template(name, signature, labels, definition, actor, buyer='', anchors=
                          (name, signature, buyer)).fetchone()
         family = prev['family'] if prev else tid
         version = (prev['v'] or 0) + 1 if prev else 1
-        c.execute('UPDATE templates SET active=0 WHERE family=?', (family,))
-        c.execute('INSERT INTO templates(id,name,signature,labels,definition,created_by,created_at,buyer,version,family,anchors,unit,quantity_basis) '
-                  'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        active = replace or not prev
+        if active:
+            c.execute('UPDATE templates SET active=0 WHERE family=?', (family,))
+        c.execute('INSERT INTO templates(id,name,signature,labels,definition,created_by,created_at,buyer,version,family,anchors,unit,quantity_basis,active) '
+                  'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                   (tid, name, signature, json.dumps(sorted(labels)), json.dumps(definition), actor, now(), buyer, version, family,
                    None if anchors is None else json.dumps(anchors, ensure_ascii=False),
-                   None if unit is None else json.dumps(unit), quantity_basis))
-    return dict(id=tid, version=version, family=family)
+                   None if unit is None else json.dumps(unit), quantity_basis, 1 if active else 0))
+    return dict(id=tid, version=version, family=family, active=active)
 
 
 def template_used(tid):
@@ -578,6 +690,32 @@ def summaries():
                 for r in c.execute('SELECT payload FROM drafts ORDER BY rowid DESC LIMIT 100') for d in [json.loads(r[0])]]
 
 
+CHANGES = ('edit', 'mapping_applied')      # audit actions that change what a draft will save
+
+
+def draft_editors(draft_id):
+    """Everyone who changed the content of a draft after its upload (edits, an applied layout); a preview is
+    not a change. Used by the four-eyes rule."""
+    with db() as c:
+        return {r[0] for r in c.execute(f'SELECT DISTINCT actor FROM audit WHERE target=? AND action IN ({",".join("?" * len(CHANGES))})',
+                                        (draft_id, *CHANGES))}
+
+
+MAX_VALUE_TEXT = 2000
+
+
+def _value(field, v):
+    """A business field holds one plain value: text, a number, true/false or nothing. Lists, objects and very long
+    text are refused here, before anything is stored (the planner then checks meaning and Oracle limits)."""
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        if len(v) > MAX_VALUE_TEXT:
+            raise ValueError(f'{field.replace("_", " ").capitalize()} is too long ({len(v):,} characters). Shorten it.')
+        return v
+    raise ValueError(f'{field.replace("_", " ").capitalize()} must be a single value.')
+
+
 def _merge_rows(old_rows, incoming, fields, child=None):
     """Keep server-owned provenance for known rows; accept only whitelisted business fields."""
     by_id = {r['id']: r for r in old_rows if 'id' in r}; out = []
@@ -586,7 +724,7 @@ def _merge_rows(old_rows, incoming, fields, child=None):
         clean = deepcopy(prev) if prev else dict(id=uuid.uuid4().hex, source={'origin': 'Manual entry'})
         for f in fields:
             if f in row:
-                clean[f] = row[f]
+                clean[f] = _value(f, row[f])
         if child:
             key, child_fields = child
             clean[key] = _merge_rows((prev or {}).get(key, []), row.get(key, []), child_fields)
@@ -609,21 +747,21 @@ def edited_orders(old_orders, incoming):
         new = deepcopy(original)
         for field in ORDER_FIELDS:
             if field in o:
-                new[field] = o[field]
+                new[field] = _value(field, o[field])
         existing_lines = {l['id']: l for key in ('lines', 'order_lines', 'sample_lines') for l in original.get(key, [])}
         new['lines'] = []
         for line in o.get('lines', []):
             source_line = existing_lines.get(line.get('id'), {})
             clean = deepcopy(source_line) or dict(id=uuid.uuid4().hex, provenance={})
             for f in ('label', 'color'):
-                clean[f] = str(line.get(f, ''))
+                clean[f] = str(_value(f, line.get(f, '')))
             clean['sizes'] = []
             originals = {s['id']: s for s in source_line.get('sizes', [])}
             changed = False
             for s in line.get('sizes', []):
                 prev = originals.get(s.get('id'), {})
                 row = deepcopy(prev) or dict(id=uuid.uuid4().hex, source={'origin': 'Manual correction'})
-                row['size'] = str(s.get('size', '')); row['quantity'] = s.get('quantity')
+                row['size'] = str(_value('size', s.get('size', ''))); row['quantity'] = _value('quantity', s.get('quantity'))
                 if row['size'] != prev.get('size') or str(row['quantity']) != str(prev.get('quantity')):
                     changed = True
                 clean['sizes'].append(row)
