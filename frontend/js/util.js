@@ -31,13 +31,13 @@ export async function busy(message, action) {
   finally { state.busy = false; $('#busy').hidden = true; }
 }
 
-// Where a value came from: an Excel/PDF cell, a calculation or a default.
+// Where a value came from: an Excel cell, a calculation or a default.
 export function source(src) {
   if (!src) return '';
   if (src.derivation && !src.cell) return `<span class="chip calc" title="${esc(src.derivation)}">${esc(src.derivation.length > 28 ? src.derivation.slice(0, 26) + '…' : src.derivation)}</span>`;
   if (src.origin) return `<span class="chip calc">${esc(src.origin)}</span>`;
   if (!src.cell) return '';
-  const where = String(src.sheet || '').startsWith('PDF') ? `${src.sheet} · ${src.cell}` : `${src.sheet ? src.sheet + '!' : ''}${src.cell}`;
+  const where = `${src.sheet ? src.sheet + '!' : ''}${src.cell}`;
   return `<span class="chip cell" title="${esc((src.formula ? 'Formula ' + src.formula + ' · ' : '') + 'read from ' + where)}">${esc(where.length > 22 ? '…' + where.slice(-20) : where)}</span>`;
 }
 

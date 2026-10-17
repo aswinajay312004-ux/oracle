@@ -141,15 +141,127 @@ def unknown_matrix():
     return save(wb)
 
 
-def purchase_order_pdf():
-    from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.pdfgen import canvas
-    buf = BytesIO(); c = canvas.Canvas(buf, pagesize=landscape(A4)); y = 560
-    for line in ['PURCHASE ORDER', 'Buyer: BABY SHOP', 'Style No: 0008', 'Description: BABY ROMPER', 'PO No: BS-7781', 'Ship Date: 2026-12-20']:
-        c.drawString(40, y, line); y -= 18
-    y -= 10
-    for r in [['Style', 'Colour', 'Size', 'Qty'], ['0008', 'ABSTRACT BLUE', '0-3M', '40'], ['0008', 'ABSTRACT BLUE', '3-6M', '60'], ['0008', 'SOFT PINK', '0-3M', '25'], ['Total', '', '', '125']]:
-        for i, v in enumerate(r):
-            c.drawString(40 + i * 120, y, v)
-        y -= 18
-    c.save(); return buf.getvalue()
+def as_xls(content):
+    """The same workbook saved as legacy Excel 97-2003 (.xls): values, dates, leading-zero formats,
+    merged ranges and hidden sheets are carried over, like Excel's own "Save as .xls"."""
+    import xlwt
+    from datetime import date, datetime as dt
+    from openpyxl import load_workbook
+    src = load_workbook(BytesIO(content), data_only=True)
+    book = xlwt.Workbook()
+    date_style = xlwt.easyxf(num_format_str='YYYY-MM-DD')
+    for ws in src.worksheets:
+        out = book.add_sheet(ws.title, cell_overwrite_ok=True)
+        if ws.sheet_state != 'visible':
+            out.visibility = 1
+        merged = {}
+        for rng in ws.merged_cells.ranges:
+            merged[(rng.min_row, rng.min_col)] = rng
+        for row in ws.iter_rows():
+            for c in row:
+                v = c.value
+                if v is None:
+                    continue
+                if isinstance(v, (dt, date)):
+                    style = date_style
+                elif isinstance(v, (int, float)) and c.number_format and set(c.number_format) == {'0'} and len(c.number_format) > 1:
+                    style = xlwt.easyxf(num_format_str=c.number_format)
+                else:
+                    style = xlwt.Style.default_style
+                rng = merged.get((c.row, c.column))
+                if rng is not None:
+                    out.write_merge(rng.min_row - 1, rng.max_row - 1, rng.min_col - 1, rng.max_col - 1, v, style)
+                else:
+                    out.write(c.row - 1, c.column - 1, v, style)
+    buf = BytesIO(); book.save(buf); return buf.getvalue()
+
+
+def _grid(content, sheet=None):
+    """[(sheet title, hidden, {(row, col): value}, merged ranges)] from an xlsx fixture (cached values)."""
+    from openpyxl import load_workbook
+    wb = load_workbook(BytesIO(content), data_only=True)
+    out = []
+    for ws in wb.worksheets:
+        if sheet and ws.title != sheet:
+            continue
+        cells = {(c.row, c.column): c.value for row in ws.iter_rows() for c in row if c.value is not None}
+        out.append((ws.title, ws.sheet_state != 'visible', cells, list(ws.merged_cells.ranges)))
+    return out
+
+
+def as_xml2003(content):
+    """Excel 2003 XML Spreadsheet (what Excel writes for "XML Spreadsheet 2003")."""
+    from datetime import date, datetime as dt
+    from xml.sax.saxutils import escape
+    parts = ['<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n'
+             '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" '
+             'xmlns:x="urn:schemas-microsoft-com:office:excel">']
+    for title, hidden, cells, merged in _grid(content):
+        spans = {(m.min_row, m.min_col): (m.max_col - m.min_col, m.max_row - m.min_row) for m in merged}
+        parts.append(f'<Worksheet ss:Name="{escape(title)}"><Table>')
+        for r in sorted({r for r, _ in cells}):
+            parts.append(f'<Row ss:Index="{r}">')
+            for c in sorted(c for rr, c in cells if rr == r):
+                v = cells[(r, c)]
+                if isinstance(v, (dt, date)):
+                    t, text = 'DateTime', (v if isinstance(v, dt) else dt(v.year, v.month, v.day)).isoformat() + '.000'
+                elif isinstance(v, bool):
+                    t, text = 'Boolean', '1' if v else '0'
+                elif isinstance(v, (int, float)):
+                    t, text = 'Number', repr(v)
+                else:
+                    t, text = 'String', escape(str(v))
+                across, down = spans.get((r, c), (0, 0))
+                merge = (f' ss:MergeAcross="{across}"' if across else '') + (f' ss:MergeDown="{down}"' if down else '')
+                parts.append(f'<Cell ss:Index="{c}"{merge}><Data ss:Type="{t}">{text}</Data></Cell>')
+            parts.append('</Row>')
+        parts.append('</Table>' + ('<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><Visible>SheetHidden</Visible></WorksheetOptions>' if hidden else '') + '</Worksheet>')
+    parts.append('</Workbook>')
+    return ''.join(parts).encode('utf-8')
+
+
+def as_html(content, sheet=None):
+    """An ERP-style "Export to Excel" file: an HTML table saved with an .xls name (first sheet)."""
+    from html import escape
+    title, _, cells, merged = _grid(content, sheet)[0]
+    covered = {(r, c) for m in merged for r in range(m.min_row, m.max_row + 1) for c in range(m.min_col, m.max_col + 1)} - {(m.min_row, m.min_col) for m in merged}
+    spans = {(m.min_row, m.min_col): (m.max_col - m.min_col + 1, m.max_row - m.min_row + 1) for m in merged}
+    rows = max(r for r, _ in cells); cols = max(c for _, c in cells)
+    out = ['<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"><style>td{mso-number-format:General}</style>'
+           '<script>alert(1)</script></head><body><table border="1">']
+    for r in range(1, rows + 1):
+        out.append('<tr>')
+        for c in range(1, cols + 1):
+            if (r, c) in covered:
+                continue
+            v = cells.get((r, c))
+            span = spans.get((r, c), (1, 1))
+            attrs = (f' colspan="{span[0]}"' if span[0] > 1 else '') + (f' rowspan="{span[1]}"' if span[1] > 1 else '')
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                attrs += f' x:num="{v}"'; text = f'{v:,}'
+            else:
+                text = escape(v.isoformat()[:10] if hasattr(v, 'isoformat') else str(v)) if v is not None else ''
+            out.append(f'<td{attrs}>{text}</td>')
+        out.append('</tr>')
+    out.append('</table></body></html>')
+    return ''.join(out).encode('utf-8')
+
+
+def as_csv(content, delimiter=',', encoding='utf-8'):
+    import csv
+    from io import StringIO
+    _, _, cells, _ = _grid(content)[0]
+    rows = max(r for r, _ in cells); cols = max(c for _, c in cells)
+    buf = StringIO(); w = csv.writer(buf, delimiter=delimiter, lineterminator='\r\n')
+    for r in range(1, rows + 1):
+        w.writerow(['' if cells.get((r, c)) is None else (cells[(r, c)].isoformat()[:10] if hasattr(cells[(r, c)], 'isoformat') else cells[(r, c)])
+                    for c in range(1, cols + 1)])
+    return buf.getvalue().encode(encoding)
+
+
+def as_json_records(content):
+    import json
+    _, _, cells, _ = _grid(content)[0]
+    rows = max(r for r, _ in cells); cols = max(c for _, c in cells)
+    head = [cells.get((1, c)) for c in range(1, cols + 1)]
+    return json.dumps([{h: cells.get((r, c)) for c, h in enumerate(head, 1)} for r in range(2, rows + 1)]).encode()

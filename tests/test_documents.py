@@ -1,6 +1,6 @@
 """Document understanding on synthetic layouts (structure of the client files, invented values)."""
-from backend import workbooks, pdfdocs, ai
-from fixtures import merch_bom, flat_orders, unknown_matrix, purchase_order_pdf
+from backend import workbooks, ai
+from fixtures import merch_bom, flat_orders, unknown_matrix, as_xls
 
 
 def test_merch_bom_header_blocks_bom_and_provenance():
@@ -62,18 +62,27 @@ def test_template_definitions_are_validated():
         workbooks.validate_definition(sheet, dict(fields={}, table=dict(type='matrix', header_row=5, first_size_col=5, last_size_col=3)))
 
 
-def test_pdf_purchase_order_is_read_like_a_sheet():
-    sheets, scanned = pdfdocs.inspect(purchase_order_pdf())
-    assert scanned == []
-    d = workbooks.parse_sheets(sheets)
-    o = d['orders'][0]
-    assert (o['buyer'], o['style'], o['description'], o['po_number'], o['ship_date']) == ('BABY SHOP', '0008', 'BABY ROMPER', 'BS-7781', '2026-12-20')
-    assert [(l['color'], [(s['size'], s['quantity']) for s in l['sizes']]) for l in o['lines']] == \
-        [('ABSTRACT BLUE', [('0-3M', 40), ('3-6M', 60)]), ('SOFT PINK', [('0-3M', 25)])]
-    assert o['lines'][0]['sizes'][0]['source']['sheet'] == 'PDF page 1'
+def _summary(parsed):
+    return [(o['buyer'], o['style'], o['po_number'], o['ship_date'],
+             [(l['color'], [(x['size'], x['quantity'], x['source']['cell']) for x in l['sizes']]) for l in o['lines']],
+             len(o['fabrics']), len(o['accessories']), o['provenance'].get('buyer', {}).get('cell')) for o in parsed['orders']]
 
 
-def test_non_pdf_bytes_rejected():
+def test_legacy_xls_is_read_exactly_like_xlsx():
+    for build in (merch_bom, flat_orders, unknown_matrix):
+        xlsx = build(); xls = as_xls(xlsx)
+        assert workbooks.kind_of(xls) == 'xls'
+        a, b = workbooks.parse(xlsx), workbooks.parse(xls)
+        assert a['format'] == b['format'] and _summary(a) == _summary(b), build.__name__
+
+
+def test_xls_keeps_leading_zero_style_codes():
+    o = workbooks.parse(as_xls(flat_orders()))['orders'][0]
+    assert o['style'] == '0008'
+
+
+def test_only_excel_files_are_accepted():
     import pytest
-    with pytest.raises(ValueError):
-        pdfdocs.inspect(b'not a pdf')
+    for content in (b'%PDF-1.7 not excel', b'plain text', b''):
+        with pytest.raises(ValueError, match='not an Excel workbook|empty'):
+            workbooks.inspect(content)

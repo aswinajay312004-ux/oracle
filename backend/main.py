@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
-from . import local_store as store, oracle_store as oracle, workbooks, pdfdocs, ai
+from . import local_store as store, oracle_store as oracle, workbooks, readers, ai
 from .config import DATA, ROOT, OWNER
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
@@ -60,6 +60,10 @@ async def protect(request, call_next):
     response.headers['Cache-Control'] = 'no-store'
     response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"
     return response
+
+
+@app.exception_handler(readers.Unsupported)
+async def unsupported(request, exc): return JSONResponse({'detail': str(exc)}, status_code=415)
 
 
 @app.exception_handler(ValueError)
@@ -283,17 +287,11 @@ def _new_order_defaults(orders):
 def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
     name = str(file.filename or '').replace('\\', '/').split('/')[-1]
     lower = name.lower()
-    if not lower.endswith(('.xlsx', '.xlsm', '.pdf')):
-        raise HTTPException(415, 'Upload an Excel workbook (.xlsx, .xlsm) or a PDF. Save legacy .xls files as .xlsx first.')
-    content = file.file.read(12 * 1024 * 1024 + 1)
-    templates = store.templates()
-    if lower.endswith('.pdf'):
-        sheets, scanned = pdfdocs.inspect(content)
-        parsed = workbooks.parse_sheets(sheets, templates); kind = 'pdf'
-        if scanned:
-            parsed.setdefault('notes', []).append(f'Pages {", ".join(map(str, scanned))} have no text layer (scanned) and were skipped.')
-    else:
-        parsed = workbooks.parse(content, templates); kind = 'excel'
+    if not lower.endswith(readers.ACCEPT):
+        raise HTTPException(415, 'Upload the buyer Excel file (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv, Excel XML/HTML export) or JSON data.')
+    content = file.file.read(readers.MAX_BYTES + 1)
+    fmt = readers.sniff(content, name)
+    parsed = workbooks.parse(content, store.templates(), name); kind = 'excel'
     for tid in parsed.pop('templates_used', []):
         store.template_used(tid)
     id = uuid.uuid4().hex
@@ -311,7 +309,7 @@ def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
                  **parsed, suggestion=suggestion, plan=None, result=None)
     _new_order_defaults(draft['orders'])
     store.identify(draft['orders'])
-    (DATA / (id + ('.pdf' if kind == 'pdf' else '.xlsx'))).write_bytes(content)
+    (DATA / (id + '.upload')).write_bytes(content)
     store.save(draft, user['username'])
     store.audit(user['username'], 'upload', id, filename=name, format=draft['format'], orders=len(draft['orders']),
                 sha256=draft['filehash'])

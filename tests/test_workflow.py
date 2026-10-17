@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from backend import local_store, main
 from fake_oracle import FakeOracle
-from fixtures import merch_bom, unknown_matrix, purchase_order_pdf
+from fixtures import merch_bom, unknown_matrix, as_xls
 
 PW = 'test-password-123'
 
@@ -134,10 +134,14 @@ def test_mapping_new_layout_saves_template_for_next_upload(env):
     assert c.get('/api/templates').json()[0]['uses'] == 1
 
 
-def test_pdf_upload(env):
+def test_xls_upload_and_non_excel_refused(env):
     c, _ = env
-    d = upload(c, purchase_order_pdf(), 'po.pdf')
-    assert d['kind'] == 'pdf' and d['orders'][0]['buyer'] == 'BABY SHOP'
+    d = upload(c, as_xls(merch_bom()), 'bom.xls')
+    assert d['orders'][0]['buyer'] == 'TESTBUYER' and d['format'] == 'Merch BOM'
+    r = c.post('/api/uploads', files={'file': ('po.pdf', b'%PDF-1.7', 'application/pdf')})
+    assert r.status_code == 415 and 'Excel' in r.json()['detail']
+    r = c.post('/api/uploads', files={'file': ('renamed.xlsx', b'%PDF-1.7', 'application/octet-stream')})
+    assert r.status_code == 415 and 'not an Excel workbook' in r.json()['detail']
 
 
 def test_offline_preview_is_marked_and_cannot_be_approved(env, monkeypatch):

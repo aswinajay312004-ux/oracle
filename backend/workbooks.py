@@ -1,8 +1,9 @@
-"""Read-only document ingestion. Workbook/PDF text is data, never executable instructions.
+"""Read-only Excel ingestion (.xlsx, .xlsm and legacy .xls). Cell text is data, never instructions.
 
 Pipeline per sheet: saved user template (exact layout signature) → built-in structural
 detectors (merch BOM, buyer contract) → alias-matched flat table → "needs mapping".
 BOM tables (fabric, accessories) are detected by their header structure on the same sheet.
+Both file formats are read into the same cell model, so every detector works on either.
 """
 from __future__ import annotations
 from copy import deepcopy
@@ -10,8 +11,7 @@ from datetime import date, datetime
 from io import BytesIO
 import hashlib
 import re
-from zipfile import ZipFile, BadZipFile
-from openpyxl import load_workbook
+from . import readers
 
 ALIASES = {
  'buyer': ['buyer', 'buyer name', 'customer', 'customer name', 'brand'],
@@ -86,38 +86,16 @@ def base_order():
         warnings=[], order_lines=[], sample_lines=[], fabrics=[], accessories=[], packs=None, workbook_pieces=None)
 
 
-def inspect(content):
-    if len(content) > 12 * 1024 * 1024:
-        raise ValueError('Workbook exceeds 12 MB.')
-    try:
-        with ZipFile(BytesIO(content)) as archive:
-            if len(archive.infolist()) > 10000 or sum(z.file_size for z in archive.infolist()) > 80 * 1024 * 1024:
-                raise ValueError('Workbook expanded size exceeds 80 MB.')
-            if '[Content_Types].xml' not in archive.namelist():
-                raise ValueError('Please upload an Excel .xlsx or .xlsm workbook.')
-    except BadZipFile as exc:
-        raise ValueError('Please upload an unencrypted .xlsx or .xlsm workbook.') from exc
-    raw = load_workbook(BytesIO(content), data_only=False, keep_links=False)
-    cached = load_workbook(BytesIO(content), data_only=True, keep_links=False)
-    sheets = []
-    if len(raw.worksheets) > 30:
-        raise ValueError('Workbook exceeds 30 sheets.')
-    for ws in raw:
-        if ws.max_row * ws.max_column > 250000:
-            raise ValueError(f'{ws.title}: sheet exceeds 250,000 cells; trim unused formatting.')
-        cells = []
-        for row in ws:
-            for cell in row:
-                if cell.value is not None:
-                    formula = cell.value if cell.data_type == 'f' else None
-                    value = scalar(cached[ws.title][cell.coordinate]) if formula else scalar(cell)
-                    cells.append(dict(cell=cell.coordinate, row=cell.row, col=cell.column, value=value,
-                        formula=formula, hidden=bool(ws.row_dimensions[cell.row].hidden or ws.column_dimensions[cell.column_letter].hidden),
-                        error=cell.data_type == 'e'))
-        sheets.append(dict(name=ws.title, hidden=ws.sheet_state != 'visible', rows=ws.max_row, cols=ws.max_column,
-                           merged=[str(r) for r in ws.merged_cells.ranges], cells=cells))
-    raw.close(); cached.close()
-    return sheets
+MAX_BYTES = readers.MAX_BYTES
+
+
+def kind_of(content, filename=''):
+    """The real spreadsheet format of an upload (see backend/readers.py)."""
+    return readers.sniff(content, filename)
+
+
+def inspect(content, filename=''):
+    return readers.read(content, filename)[1]
 
 
 # --- layout signatures (reusable templates) ------------------------------------
@@ -464,13 +442,73 @@ def attach_bom(g, orders):
         o['warnings'] = list(dict.fromkeys(o['warnings']))
 
 
+DATE_FIELDS = ('ship_date', 'order_date')
+MONTHS = {m: i for i, m in enumerate(('jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'), 1)}
+
+
+def iso_date(value):
+    """(YYYY-MM-DD or None, note). Buyer files write dates many ways; numbers are read day-first
+    (Indian convention) and an ambiguous day/month is reported, never silently guessed."""
+    if value is None or value == '':
+        return None, None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()[:10], None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if 20000 <= value <= 80000:      # Excel serial day number (1954–2119)
+            from datetime import timedelta
+            return (date(1899, 12, 30) + timedelta(days=int(value))).isoformat(), f'Excel date number {value:g} read as a date'
+        return None, None
+    t = str(value).strip()
+    m = re.fullmatch(r'(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?', t)
+    if m:
+        y, mo, d = map(int, m.groups()); note = None
+    else:
+        m = re.fullmatch(r'(\d{4})[/.](\d{1,2})[/.](\d{1,2})', t)
+        if m:
+            y, mo, d = map(int, m.groups()); note = None
+        else:
+            m = re.fullmatch(r'(\d{1,2})[-/. ]([A-Za-z]{3,9})[-/., ]+(\d{2,4})', t)
+            if m and m.group(2)[:3].lower() in MONTHS:
+                d, mo, y = int(m.group(1)), MONTHS[m.group(2)[:3].lower()], int(m.group(3)); note = None
+            else:
+                m = re.fullmatch(r'(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})', t)
+                if not m:
+                    return None, None
+                d, mo, y = map(int, m.groups())
+                note = f'"{t}" read as day/month/year' if d <= 12 and mo <= 12 and d != mo else None
+                if mo > 12 and d <= 12:      # unmistakably month/day/year
+                    d, mo = mo, d; note = f'"{t}" read as month/day/year'
+    if y < 100:
+        y += 2000
+    try:
+        return date(y, mo, d).isoformat(), note
+    except ValueError:
+        return None, None
+
+
 def finish(o):
     o['workbook_pieces'] = sum(int(number(s.get('quantity')) or 0) for l in o.get('order_lines', []) for s in l.get('sizes', [])) or None
+    for key in DATE_FIELDS:
+        raw = o.get(key)
+        if raw in (None, ''):
+            continue
+        iso, note = iso_date(raw)
+        if iso and iso != raw:
+            o[key] = iso
+            o.setdefault('provenance', {}).setdefault(key, {})['derivation'] = note or f'"{raw}" converted to {iso}'
+            if note and 'day/month' in note:
+                o.setdefault('warnings', []).append(f'{key.replace("_", " ").capitalize()}: {note} — check it.')
+        elif not iso:
+            o.setdefault('warnings', []).append(f'{key.replace("_", " ").capitalize()} "{raw}" is not a date this product can read — enter it.')
+            o[key] = ''
     return o
 
 
-def parse(content, templates=()):
-    return parse_sheets(inspect(content), templates)
+def parse(content, templates=(), filename=''):
+    fmt, sheets = readers.read(content, filename)
+    out = parse_sheets(sheets, templates)
+    out['source_format'] = readers.LABELS[fmt]
+    return out
 
 
 def parse_sheets(sheets, templates=()):

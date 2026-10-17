@@ -20,7 +20,7 @@ _memo = {}; _lock = threading.RLock()
 LOCAL_TABLE = 'UPLOADS'
 LOCAL_COLUMNS = {
     'FILENAME': ('VARCHAR2', 'File name', ['file', 'file name', 'filename']),
-    'FILEKIND': ('VARCHAR2', 'File type', ['file type', 'excel', 'pdf']),
+    'FILEKIND': ('VARCHAR2', 'File type', ['file type', 'excel']),
     'FORMAT': ('VARCHAR2', 'Detected layout', ['layout', 'format', 'template']),
     'UPLOADED_BY': ('VARCHAR2', 'Uploaded by', ['uploaded by', 'user']),
     'UPLOADED_ON': ('DATE', 'Upload date', ['upload date', 'uploaded on', 'uploaded']),
@@ -110,7 +110,7 @@ def local_physical():
 
 def local_curated():
     return dict(business='Uploaded file', plural='uploaded files', kind='local', description='Files uploaded to POPPYS AI (this computer).',
-                synonyms=['upload', 'uploads', 'uploaded file', 'uploaded files', 'file', 'files', 'import', 'imports', 'excel file', 'excel files', 'pdf files'],
+                synonyms=['upload', 'uploads', 'uploaded file', 'uploaded files', 'file', 'files', 'import', 'imports', 'excel file', 'excel files', 'workbooks'],
                 label='FILENAME', date='UPLOADED_ON', display=['FILENAME', 'UPLOADED_ON', 'UPLOADED_BY', 'BUYER', 'STYLE', 'ORDER_REF', 'STATUS'],
                 columns={c: dict(business=b, synonyms=s, role='date' if t == 'DATE' else 'measure' if c == 'PIECES' else 'label' if c == 'FILENAME' else 'attribute',
                                  searchable=c in ('UPLOADED_BY', 'BUYER', 'STYLE', 'STATUS', 'FILEKIND'))
