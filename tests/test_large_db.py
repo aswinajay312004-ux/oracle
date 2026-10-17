@@ -5,6 +5,8 @@ runs on the local Oracle when POPPYS_TEST_ORACLE=1."""
 from contextlib import contextmanager
 import json
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 import pytest
@@ -241,7 +243,6 @@ def test_query_time_limit_out_of_bounds_is_refused_with_a_log_line(monkeypatch, 
 
 
 def test_an_infinite_time_limit_does_not_stop_the_app_from_starting():
-    import subprocess, sys
     env = dict(os.environ, POPPYS_QUERY_TIMEOUT_S='inf')
     r = subprocess.run([sys.executable, '-c', 'from backend.insight import service; print(service.TIMEOUT_MS)'],
                        cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True, timeout=60)

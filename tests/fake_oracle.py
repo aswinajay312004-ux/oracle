@@ -39,11 +39,11 @@ class FakeOracle:
         r = self.receipts.get(jobid)
         return dict(deepcopy(r), already_committed=True) if r else None
 
-    def commit(self, draft, expected_hash, approver, mapping=None):
+    def commit(self, draft, expected_hash, approver, mapping=None, required=()):
         if draft['id'] in self.receipts:
             return self.read_result(None, draft['id'])
         mapping = mapping or oracle_store.current_mapping()
-        checked = self.plan(None, draft['orders'], draft['filehash'], mapping)
+        checked = self.plan(None, draft['orders'], draft['filehash'], mapping, required)
         if checked['errors']:
             raise ValueError('; '.join(checked['errors']))
         if checked['hash'] != expected_hash:

@@ -486,6 +486,8 @@ def unit_question(o):
         return 'The file mentions both pieces and packs — which are these quantities?'
     if p.get('reason') in ('conflict', 'mismatch') and ev:
         return ev[0].upper() + ev[1:] + ' — are these quantities pieces or packs?'
+    if p.get('reason') == 'review' and ev:        # the person chose to decide on review: quote the file as it is
+        return ev[0].upper() + ev[1:] + ' — are these quantities pieces or packs?'
     if p.get('said'):
         return f'The file says only “{p["said"]}” — are these pieces or packs?'
     return 'The file does not say whether these quantities are pieces or packs — which are they?'
@@ -1042,6 +1044,8 @@ def parse_sheets(sheets, templates=(), fields=None):
         if found:
             for o in found:
                 o['warnings'] += [n for n in mine if n not in o['warnings']]
+                if hidden:
+                    review(o, 'lines', hidden)
                 rival_dates(g, o)
             attach_bom(g, found)
             uncalculated = [c['cell'] for c in sheet['cells'] if c.get('formula') and c.get('value') is None]
@@ -1057,6 +1061,19 @@ def parse_sheets(sheets, templates=(), fields=None):
     same_order_on_two_sheets(origin)
     return dict(sheets=sheets, orders=orders, format=', '.join(dict.fromkeys(formats)) or 'Needs column mapping',
                 templates_used=used, notes=notes, templates_refused=refusals)
+
+
+def review(o, field, message):
+    """A reading finding the person must see before approving (a second date, a total that disagrees, rows
+    left below a table, hidden data, the same order twice). It stays in the order's notes and the planner
+    raises it as a warning on the field it concerns ('lines' = the size table), so it is shown on the review
+    screen and in "Please read before approving"."""
+    o.setdefault('warnings', [])
+    if message not in o['warnings']:
+        o['warnings'].append(message)
+    items = o.setdefault('review', [])
+    if not any(i['message'] == message for i in items):
+        items.append(dict(field=field, message=message))
 
 
 def rival_dates(g, o):
@@ -1077,9 +1094,8 @@ def rival_dates(g, o):
                 continue
             other = iso_date(g.v(*t))[0]
             if other and other != mine:
-                o.setdefault('warnings', []).append(
-                    f'{cell["cell"]} “{text(cell["value"])}” says {other}, but the {key.replace("_", " ")} was read from {chosen} '
-                    f'({mine}) — check which date is meant.')
+                review(o, key, f'{cell["cell"]} “{text(cell["value"])}” says {other}, but the {key.replace("_", " ")} was read from {chosen} '
+                               f'({mine}) — check which date is meant.')
 
 
 def same_order_on_two_sheets(origin):
@@ -1095,7 +1111,7 @@ def same_order_on_two_sheets(origin):
             note = (f'Sheets {" and ".join(f"“{s}”" for s in names)} both hold style {first["style"]}'
                     + (f' and PO {first["po_number"]}' if po else '') + ' — if one is an older copy, remove that order before saving.')
             for _, o in items:
-                o['warnings'].append(note)
+                review(o, 'style', note)
 
 
 def canon(value):
@@ -1204,7 +1220,9 @@ def parse_mapping(sheets, mapping, fields=None):
         line['sizes'].append(dict(size=text(size), quantity=quantity_of(qty), source=g.p(r, columns['quantity'])))
     notes = [n for n in (_total_note(g, totals, read), _below_note(g, stop, [columns['quantity']])) if n]
     for o in groups.values():
-        o['warnings'] = ['Confirm whether the source quantities represent pieces or packs, and whether they are sample quantities.'] + notes
+        o['warnings'] = ['Confirm whether the source quantities represent pieces or packs, and whether they are sample quantities.']
+        for n in notes:
+            review(o, 'lines', n)
         o['order_lines'] = deepcopy(o['lines'])
     return list(groups.values())
 
@@ -1267,7 +1285,10 @@ def matrix_order(g, t):
                           sizes=[dict(size=text(g.v(header, c)), quantity=quantity_of(g.v(r, c)), source=g.p(r, c), size_source=g.p(header, c))
                                  for c in sizes if g.v(header, c) is not None]))
     o['lines'] = lines; o['order_lines'] = deepcopy(lines)
-    o['warnings'] = [n for n in (_total_note(g, totals, read), _below_note(g, stop, list(sizes))) if n]
+    o['warnings'] = []
+    for n in (_total_note(g, totals, read), _below_note(g, stop, list(sizes))):
+        if n:
+            review(o, 'lines', n)
     return o
 
 

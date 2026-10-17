@@ -488,9 +488,14 @@ def _confirm_unit(o, data):
     """The unit / basis the person chose while confirming the layout (overrides what the file suggested)."""
     prov = o.setdefault('provenance', {})
     if data.qty_unit is not None:
+        before = dict(prov.get('qty_unit') or {})
         o['qty_unit'] = data.qty_unit
         o['pieces_per_unit'] = 1 if data.qty_unit == 'PCS' else data.pieces_per_unit if data.qty_unit == 'PACK' else None
-        prov['qty_unit'] = dict(derivation='Chosen when the layout was confirmed', reason='person')
+        if data.qty_unit:
+            prov['qty_unit'] = dict(derivation='Chosen when the layout was confirmed', reason='person')
+        else:   # "ask on review": keep what the file said, so the question on the review screen quotes it
+            prov['qty_unit'] = {k: v for k, v in before.items() if k in ('sheet', 'cell', 'value', 'evidence', 'said')}
+            prov['qty_unit'].update(derivation='Left to decide on the review screen', reason='review')
         if data.qty_unit == 'PACK' and data.pieces_per_unit:
             prov['pieces_per_unit'] = dict(derivation='Chosen when the layout was confirmed', reason='person')
     if data.quantity_basis:
@@ -565,7 +570,7 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
         if d.get('uploaded_by') == user['username'] and not settings()['allow_self_approval']:
             raise HTTPException(403, 'A different approver must approve this upload (four-eyes rule is on).')
         try:
-            result = oracle.commit(d, data.plan_hash, user['username'])
+            result = oracle.commit(d, data.plan_hash, user['username'], required=list(current_fields().extra_required))
         except Exception as exc:
             store.audit(user['username'], 'approve_failed', id, error=str(exc)[:500])
             raise
@@ -806,7 +811,7 @@ _values_idle = threading.Event(); _values_idle.set()
 
 
 def value_index_status():
-    """For /api/knowledge: not started | off | building | ready | empty | offline | failed, with when and how many."""
+    """For /api/knowledge: not started | off | starting | building | ready | empty | offline | failed, with when and how many."""
     with _values_lock:
         return {k: v for k, v in _VALUES.items() if k != 'at'}
 
@@ -849,11 +854,19 @@ def _fill_values(kb, sources):
 
 
 def _startup_values():
-    if store.value_stats():
+    try:
+        stats = store.value_stats()
+        if stats:
+            with _values_lock:
+                _VALUES.update(state='ready', source='earlier refresh', columns=len(stats), values=sum(x['values'] for x in stats),
+                               at=time.time())
+            return
+        _build_values('startup')
+    except Exception as exc:   # the local store cannot be read: report it, questions fall back as usual
         with _values_lock:
-            _VALUES.update(state='ready', source='earlier refresh', at=time.time())
-        return
-    _build_values('startup')
+            _VALUES.update(state='failed', source='startup', error=str(exc)[:200], at=time.time())
+    finally:
+        _values_idle.set()
 
 
 def start_value_index():
@@ -865,6 +878,9 @@ def start_value_index():
             if _VALUES['state'] == 'not started':
                 _VALUES.update(state='off')
         return None
+    with _values_lock:   # questions asked from now until the thread has looked wait for it (briefly), not build it twice
+        _VALUES.update(state='starting', source='startup', at=time.time())
+        _values_idle.clear()
     thread = threading.Thread(target=_startup_values, name='poppys-value-index', daemon=True)
     thread.start()
     return thread

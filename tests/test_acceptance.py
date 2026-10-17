@@ -72,8 +72,8 @@ def world(tmp_path, monkeypatch):
     FakeOracle(masters=masters).install(monkeypatch)
     commit = oracle_store.commit
 
-    def commit_and_copy(draft, expected_hash, approver, mapping=None):
-        result = commit(draft, expected_hash, approver, mapping)
+    def commit_and_copy(draft, expected_hash, approver, mapping=None, required=()):
+        result = commit(draft, expected_hash, approver, mapping, required)
         if not result.get('already_committed'):
             for row in result['rows']:
                 conn.execute(f'INSERT INTO {row["table"]} ({",".join(row["values"])}) VALUES ({",".join("?" * len(row["values"]))})',

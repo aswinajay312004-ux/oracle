@@ -215,7 +215,7 @@ def planted_leaks():
         ('docs/hash.md', f'ORACLE_{PW}=#{other}\n', 'possible password or key at docs/hash.md:1'),
         ('deploy/compose.yml', f'    DB_ADMIN_PASSWORD: "{other}"\n', 'possible password or key at deploy/compose.yml:1'),
         ('deploy/run.ps1', f"$env:ORACLE_PASSWORD = '{other}'\n", 'possible password or key at deploy/run.ps1:1'),
-        ('config/poppys.env', f'ORACLE_USER=POPPYS_APP\n', 'must not be committed: config/poppys.env'),
+        ('config/poppys.env', 'ORACLE_USER=POPPYS_APP\n', 'must not be committed: config/poppys.env'),
     ]
 
 

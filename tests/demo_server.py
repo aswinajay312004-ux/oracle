@@ -46,8 +46,8 @@ def build():
                                                                 for role, spec in registry.effective()['masters'].items() if roles is None or role in roles}
     commit = fake.commit
 
-    def commit_and_copy(draft, expected_hash, approver, mapping=None):
-        result = commit(draft, expected_hash, approver, mapping)
+    def commit_and_copy(draft, expected_hash, approver, mapping=None, required=()):
+        result = commit(draft, expected_hash, approver, mapping, required)
         if not result.get('already_committed'):
             for row in result['rows']:
                 vals = dict(row['values'])

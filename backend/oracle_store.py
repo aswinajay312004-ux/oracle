@@ -93,14 +93,16 @@ def jsonable(v):
     return v
 
 
-def commit(draft, expected_hash, approver, mapping=None):
+def commit(draft, expected_hash, approver, mapping=None, required=()):
+    """Re-plans inside the write lock with the same rules as the preview (including fields an administrator
+    made required), so nothing the preview would refuse can be saved."""
     mapping = mapping or current_mapping()
     with connect() as conn:
         c = conn.cursor(); c.execute('SELECT ID FROM PP_WRITE_LOCK WHERE ID=1 FOR UPDATE WAIT 10')
         previous = read_result(c, draft['id'])
         if previous:
             return previous
-        checked = plan(conn, draft['orders'], draft['filehash'], mapping)
+        checked = plan(conn, draft['orders'], draft['filehash'], mapping, required)
         if checked['errors']:
             raise ValueError('; '.join(checked['errors']))
         if checked['hash'] != expected_hash:

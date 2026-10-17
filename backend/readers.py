@@ -821,6 +821,10 @@ def _read_inline(content, filename=''):
         raise Unreadable(f'The workbook has more than {MAX_SHEETS} sheets. Delete the sheets that are not part of the order, save it and upload again.')
     if sum(len(s['cells']) for s in sheets) > MAX_TOTAL_CELLS:
         raise Unreadable(f'The workbook has more than {MAX_TOTAL_CELLS:,} filled cells. Split it into smaller workbooks and upload them one at a time.')
+    for s in sheets:        # the same bound as the .xlsx reader, whatever the format: layout code walks this area
+        if s['rows'] * s['cols'] > MAX_CELLS * 4:
+            raise Unreadable(f'{s["name"]}: sheet is too large; its values are spread over too wide an area. '
+                             'Delete unused rows and columns, save it and upload again.')
     if _text_size(sheets) > MAX_TEXT:
         raise Unreadable(MSG_TOO_MUCH_TEXT)
     return kind, sheets
@@ -939,9 +943,8 @@ def _merge_box(ref):
     return r0, c0, min(r1, EXCEL_ROWS), min(c1, EXCEL_COLS)
 
 
-def _merge_block(xml):
-    """(start, end, prefix) of a worksheet's <mergeCells> element (any namespace prefix), or None."""
-    at = 0
+def _merge_block(xml, at=0):
+    """(start, end, prefix) of the first <mergeCells> element (any namespace prefix) from `at`, or None."""
     while True:
         i = xml.find(b'mergeCells', at)
         if i < 0:
@@ -967,12 +970,17 @@ def _sanitize_merges(xml):
     openpyxl and calamine both refuse a whole workbook over one reference such as LibreOffice's '1:1'.
     Ranges are normalised and kept by the same rules as Builder.merge, before either library runs."""
     counts = dict(large=0, excess=0, bad=0)
-    block = _merge_block(xml)
-    if block is None:
+    blocks, at = [], 0
+    while len(blocks) < 100:                  # a well-formed sheet has one; openpyxl would read every one
+        block = _merge_block(xml, at)
+        if block is None:
+            break
+        blocks.append(block); at = block[1]
+    if not blocks:
         return None, counts
-    start, end, prefix = block
-    refs = [m.group(2).decode('ascii', 'replace') for m in re.finditer(rb'\bref\s*=\s*(["\'])([^"\']{0,400})\1', xml[start:end])]
-    kept, seen, area_total, changed = [], set(), 0, False
+    kept, seen, area_total, changed = [], set(), 0, len(blocks) > 1
+    refs = [m.group(2).decode('ascii', 'replace') for start, end, _ in blocks
+            for m in re.finditer(rb'\bref\s*=\s*(["\'])([^"\']{0,400})\1', xml[start:end])]
     for ref in refs:
         pieces = ref.split() or ['']                        # 'A1:B2 D1:E2' (a list) is two ranges
         changed = changed or pieces != [ref]
@@ -993,9 +1001,12 @@ def _sanitize_merges(xml):
             kept.append(normal); seen.add(box); area_total += area
     if not changed:
         return None, counts
-    p = prefix.decode('ascii')
+    p = blocks[0][2].decode('ascii')
     new = (f'<{p}mergeCells count="{len(kept)}">' + ''.join(f'<{p}mergeCell ref="{r}"/>' for r in kept) + f'</{p}mergeCells>') if kept else ''
-    return xml[:start] + new.encode('ascii') + xml[end:], counts
+    out, last = [], 0
+    for i, (start, end, _) in enumerate(blocks):          # every kept range goes in the first block's place
+        out += [xml[last:start], new.encode('ascii') if i == 0 else b'']; last = end
+    return b''.join(out) + xml[last:], counts
 
 
 def _ooxml_sheet_names(archive, names):
@@ -1030,7 +1041,10 @@ def _ooxml_prepare(content):
             name = _zname(info.filename)
             if not (name.startswith('xl/worksheets/') and name.endswith('.xml')):
                 continue
-            xml = archive.read(info)
+            try:
+                xml = archive.read(info)
+            except Exception:         # a damaged part (bad checksum ...): the readers decide what to do with it
+                continue
             if sheet_names is None:
                 sheet_names = _ooxml_sheet_names(archive, names)
             label = sheet_names.get(name) or name.rsplit('/', 1)[-1]
@@ -1046,9 +1060,12 @@ def _ooxml_prepare(content):
         if not replaced:
             return content, counts
         out = BytesIO()
-        with zipfile.ZipFile(out, 'w', zipfile.ZIP_STORED) as rebuilt:     # stored: no CPU spent compressing
-            for info in infos:
-                rebuilt.writestr(info.filename, replaced[info.filename] if info.filename in replaced else archive.read(info))
+        try:
+            with zipfile.ZipFile(out, 'w', zipfile.ZIP_STORED) as rebuilt:     # stored: no CPU spent compressing
+                for info in infos:
+                    rebuilt.writestr(info.filename, replaced[info.filename] if info.filename in replaced else archive.read(info))
+        except Exception:             # a damaged part: give the readers the file as it came, to refuse plainly
+            return content, counts
     return out.getvalue(), counts
 
 

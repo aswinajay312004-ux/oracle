@@ -975,6 +975,17 @@ def test_ooxml_merged_ranges_are_made_safe_before_openpyxl_loads(refs, merged, n
     assert po['merged'] == merged and (po['notes'] == [note] if note else po['notes'] == [])
 
 
+def test_every_mergecells_block_is_made_safe_not_only_the_first():
+    blocks = b'<mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells><x:mergeCells count="1"><x:mergeCell ref="A1:XFD1048576"/></x:mergeCells>'
+    content = small_xlsx(lambda d: d.replace(b'</sheetData>', b'</sheetData>' + blocks, 1))
+    new, counts = readers._ooxml_prepare(content)
+    assert zipfile.ZipFile(BytesIO(new)).read('xl/worksheets/sheet1.xml').count(b'mergeCells count=') == 1
+    assert counts == {'PO': {'large': 1, 'excess': 0, 'bad': 0}}
+    started = time.monotonic()
+    po = read_one(content, 'two.xlsx')
+    assert po['merged'] == ['A1:B1'] and po['notes'] == ['1 merged areas larger than 10,000 cells were ignored.'] and time.monotonic() - started < 5
+
+
 def test_libreoffice_whole_sheet_merge_is_ignored_with_a_note():
     content = (FORMATS / 'merge_rows_libreoffice.xlsx').read_bytes()
     assert b'ref="1:1048576"' in zipfile.ZipFile(BytesIO(content)).read('xl/worksheets/sheet1.xml')
@@ -1175,10 +1186,12 @@ def test_csv_rows_padded_with_empty_fields_are_read_quickly():
 def test_json_records_with_many_different_keys_are_laid_out_sparsely():
     """100,000 records with one different key each kept a worker busy for the full minute."""
     started = time.monotonic()
-    sheet = read_one(json.dumps([{f'k{i}': i} for i in range(100_000)]).encode(), 'x.json')
+    with pytest.raises(readers.Unreadable, match='spread over too wide an area'):     # 100,001 rows x 16,384 columns
+        readers.read(json.dumps([{f'k{i}': i} for i in range(100_000)]).encode(), 'x.json')
     assert time.monotonic() - started < 10
+    sheet = read_one(json.dumps([{f'k{i}': i} for i in range(300)]).encode(), 'x.json')
+    assert (sheet['rows'], sheet['cols'], len(sheet['cells'])) == (301, 300, 600)
     assert cells_of(sheet)['A1'] == 'k0' and cells_of(sheet)['A2'] == 0 and cells_of(sheet)['B3'] == 1
-    assert any("beyond Excel's last row" in n for n in sheet['notes'])                  # keys past column XFD
     doc = read_one(b'{"PO": "X", "lines": [{"Style": "A", "Qty": 1}, {"Qty": 2, "Colour": "RED"}]}', 'x.json')
     assert cells_of(doc) == {'A1': 'PO', 'B1': 'X', 'A3': 'lines', 'A4': 'Style', 'B4': 'Qty', 'C4': 'Colour',
                              'A5': 'A', 'B5': 1, 'B6': 2, 'C6': 'RED'}
@@ -1188,6 +1201,18 @@ def test_cells_beyond_excels_grid_are_ignored_with_a_note():
     page = b'<table><tr>' + b'<td>1</td>' * (readers.EXCEL_COLS + 3) + b'</tr></table>'
     sheet = read_one(page, 'wide.xls')
     assert sheet['cols'] == readers.EXCEL_COLS and sheet['notes'] == ["3 cells beyond Excel's last row (1,048,576) or column (16,384) were ignored."]
+
+
+@pytest.mark.parametrize('name,content', [
+    ('corner.xml', ('<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
+                    '<Worksheet ss:Name="PO"><Table><Row><Cell><Data ss:Type="String">Style</Data></Cell><Cell ss:Index="16384"><Data ss:Type="String">far</Data></Cell></Row>'
+                    '<Row ss:Index="1048576"><Cell><Data ss:Type="String">end</Data></Cell></Row></Table></Worksheet></Workbook>').encode()),
+    ('corner.csv', b'Style,Qty' + b',' * 2000 + b'far\r\n' + b'\r\n' * 600 + b'end\r\n'),
+])
+def test_values_spread_over_a_huge_area_are_refused_in_every_format(name, content):
+    """The .xlsx reader already refused A1 + XFD1048576; every other format now gives the same answer."""
+    with pytest.raises(readers.Unreadable, match=r'^PO: sheet is too large|^Sheet1: sheet is too large'):
+        readers.read(content, name)
 
 
 def test_spreadsheetml_column_styles_are_found_by_bisection():

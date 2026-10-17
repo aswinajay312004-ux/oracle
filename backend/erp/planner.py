@@ -241,6 +241,8 @@ def plan(catalog, orders, filehash, mapping, required=()):
     seen = set()
     for index, o in enumerate(orders):
         prefix = f'Order {index + 1}'; base = f'orders.{index}'
+        for item in o.get('review') or []:     # reading findings (second date, total mismatch, hidden rows…)
+            issues.warn(f'{prefix}: {item["message"]}', f'{base}.{item["field"]}')
         ref = str(o.get('order_ref', '')).strip()
         if not ref:
             issues.error(f'{prefix}: enter a unique sample order reference.', base + '.order_ref')

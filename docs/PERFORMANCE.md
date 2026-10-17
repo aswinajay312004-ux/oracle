@@ -119,7 +119,7 @@ How it compiles (`backend/insight/query.py` `_condition`):
 Other follow-ups from the review:
 - **Value index at startup.** It is built in a background thread when the server starts and the index is empty
   (`VALUE_INDEX_AT_STARTUP=0` in `.env.poppys` turns that off). `/api/knowledge` reports it as `value_index`:
-  `state` (off, building, ready, empty, offline, failed), `source`, start and finish time, columns, values and the
+  `state` (off, starting, building, ready, empty, offline, failed), `source`, start and finish time, columns, values and the
   error, if any. A question asked while it builds waits at most 5 s and then goes on without it (codes are still
   found live). A question builds it itself only as a fallback (startup build off, Oracle down at startup), and after
   a build that failed or found nothing, at most once every 5 minutes.
@@ -164,7 +164,7 @@ list of complete and partial columns is saved in `data/value_index_meta.json`, n
 `.env.poppys` to change it. Counts get 4 s and live lookups 2.5 s. A timeout raises a plain-English
 `TimedOut` message instead of a raw `DPY-4024` error. Ask AI shows it as *Cannot answer safely*, and the
 explorer shows it as a message. The thin driver keeps the connection usable after a timeout (checked on Oracle
-23 with python-oracledb 4.0.1).
+23 with python-oracledb 4.0.1, and again with 4.0.2, the version now pinned).
 
 **Explorer** (`backend/main.py`: `explorer_rows`, `_count`, `table_counts`).
 - Rows are read before counting. A result that fits on the first page needs no COUNT at all.

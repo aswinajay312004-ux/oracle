@@ -121,6 +121,8 @@ function clientIssues() {
       if (!String(l.color || '').trim()) out.push({ severity: 'error', message: 'Enter the colour / combo.', path: `orders.${oi}.lines.${li}.color`, client: true });
       if (lineQty(l) === 0) out.push({ severity: 'error', message: 'All quantities are zero — type the quantities or choose another quantity source.', path: `orders.${oi}.lines.${li}.sizes`, client: true });
     });
+    // reading findings (a second date, a total row that disagrees, hidden rows…) show from the start, as warnings
+    (o.review || []).forEach(r => out.push({ severity: 'warning', message: r.message, path: `orders.${oi}.${r.field}`, client: true, review: true }));
   });
   return out;
 }
@@ -128,7 +130,8 @@ function clientIssues() {
 function allIssues() {
   // live checks on what is on screen win over the last server check for the same field
   const client = clientIssues();
-  const plan = (state.planIssues || []).filter(i => i.path && !client.some(c => c.path === i.path));
+  // (a client warning never hides a server error on the same field, and the same finding is not shown twice)
+  const plan = (state.planIssues || []).filter(i => i.path && !client.some(c => c.path === i.path && (c.severity === 'error' || strip(c.message) === strip(i.message))));
   return [...client, ...plan];
 }
 function fileIssues() { return (state.planIssues || []).filter(i => !i.path); }
@@ -234,13 +237,23 @@ function orderTab(o, oi) {
         ${unitRow(o, oi)}</div>
       ${matrix(o, oi)}
       ${packs.length ? `<div class="banner warning" style="margin-top:10px"><span class="b-ic">!</span><div>${packs.map(i => esc(strip(i.message))).join('<br>')}</div></div>` : ''}
+      ${tableNotes(oi)}
       ${notesHtml(o, oi)}</div>`;
+}
+
+function tableNotes(oi) {
+  // findings about the size table as a whole (total row disagrees, rows below the table, hidden rows)
+  const list = allIssues().filter(i => i.path === `orders.${oi}.lines`);
+  if (!list.length) return '';
+  const err = list.some(i => i.severity === 'error');
+  return `<div class="banner ${err ? 'error' : 'warning'}" style="margin-top:10px" role="${err ? 'alert' : 'status'}"><span class="b-ic">!</span><div>${list.map(i => esc(strip(i.message))).join('<br>')}</div></div>`;
 }
 
 function notesHtml(o, oi) {
   // the unit and basis questions are asked on their fields, so they are not repeated here
   const onField = [o.provenance?.qty_unit?.question, 'Confirm whether these are sample quantities.'];
-  const notes = [...new Set([...(oi === 0 ? state.draft.notes || [] : []), ...(o.warnings || []).filter(w => !onField.includes(w))])];
+  const shown = (o.review || []).map(r => r.message);   // already shown on their field or under the size table
+  const notes = [...new Set([...(oi === 0 ? state.draft.notes || [] : []), ...(o.warnings || [])])].filter(w => !onField.includes(w) && !shown.includes(w));
   return notes.length ? `<details class="notes"><summary class="muted small-text" style="cursor:pointer">Notes from reading the file (${notes.length})</summary><ul class="small-text">${notes.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : '';
 }
 
