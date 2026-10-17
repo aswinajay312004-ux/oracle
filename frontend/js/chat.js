@@ -111,7 +111,7 @@ function graphModel(entry) {
   const r = entry.result; const used = new Set(r.graph.nodes.map(n => n.table));
   const nodes = r.graph.nodes.map(n => ({ id: n.table, title: n.business, code: n.table, kind: n.kind, base: n.base,
     line3: n.base ? 'answer starts here' : n.columns.length ? `used: ${n.columns.slice(0, 3).join(', ')}` : 'link only',
-    status: { text: n.rows != null ? `${fmt(n.rows, 0)} rows` : '', cls: 'muted' } }));
+    status: { text: n.rows != null ? `${n.approx ? '≈ ' : ''}${fmt(n.rows, 0)} rows` : '', cls: 'muted' } }));
   entry.extra.nodes.filter(n => !used.has(n.id)).forEach(n => nodes.push(n));
   const edges = r.graph.edges.map(e => ({ from: e.source, to: e.target, label: e.on.split(' AND ').pop().replace(/^[A-Z0-9_]+\./, '').split(' = ')[0], title: `${e.label} · ${e.on} (${e.status})`, cls: e.status === 'verified' || e.status === 'declared' ? 'link' : 'proposed' }));
   entry.extra.edges.forEach(e => { if (!edges.some(x => x.from === e.from && x.to === e.to)) edges.push(e); });
@@ -131,7 +131,7 @@ async function expand(aid, table) {
     const have = new Set(graphModel(entry).nodes.map(x => x.id));
     let added = 0;
     n.neighbours.slice(0, 10).forEach(x => {
-      if (!have.has(x.table)) { entry.extra.nodes.push({ id: x.table, title: x.business, code: x.table, kind: x.kind, dashed: true, line3: x.label, status: { text: x.rows != null ? `${fmt(x.rows, 0)} rows` : x.status, cls: 'muted' } }); have.add(x.table); added++; }
+      if (!have.has(x.table)) { entry.extra.nodes.push({ id: x.table, title: x.business, code: x.table, kind: x.kind, dashed: true, line3: x.label, status: { text: x.rows != null ? `${x.approx ? '≈ ' : ''}${fmt(x.rows, 0)} rows` : x.status, cls: 'muted' } }); have.add(x.table); added++; }
       const from = x.direction === 'up' ? x.table : table, to = x.direction === 'up' ? table : x.table;
       entry.extra.edges.push({ from, to, title: `${x.label} · ${x.on} (${x.status})`, label: '', cls: x.status === 'verified' || x.status === 'declared' ? 'related' : 'proposed' });
     });
@@ -160,7 +160,7 @@ async function preview(aid, table) {
           <td>${esc(c.role || '')}${c.references ? ` <span class="chip label">→ ${esc(c.references)}</span>` : ''}</td><td>${addBtn(c)}</td></tr>`).join('')}</tbody></table></div>`); };
   const render = () => {
     const m = modal(`<div class="row wrap"><span class="pill ${p.kind === 'master' ? 'master' : p.kind === 'header' ? 'header' : 'brand'}">${esc(p.kind)}</span><h2 id="modal-title">${esc(p.business)}</h2><code class="muted">${esc(p.table)}</code>
-        ${p.rows_total != null ? `<span class="pill">${fmt(p.rows_total, 0)} rows in Oracle</span>` : ''}</div>
+        ${p.rows_total != null ? `<span class="pill" title="${p.rows_approx ? 'Approximate (Oracle statistics) — this table is very large' : 'Exact count, read just now'}">${p.rows_approx ? '≈ ' : ''}${fmt(p.rows_total, 0)} rows in Oracle</span>` : ''}</div>
         <p class="muted small-text" style="margin-top:4px">${esc(p.description || '')}${p.scoped ? ` · Showing rows related to this answer (${esc(p.scope.join(', '))}).` : ' · Showing the latest rows (this table is not linked to the answer’s filters).'}</p>
         <nav class="tabs" style="margin:8px 0 -17px -12px"><button class="${tab === 'data' ? 'active' : ''}" data-ptab="data">Data preview</button><button class="${tab === 'cols' ? 'active' : ''}" data-ptab="cols">Columns (${all.length})</button></nav>`,
       body(),

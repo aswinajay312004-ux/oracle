@@ -231,7 +231,7 @@ def health(user=Depends(authenticated)):
         with oracle.connect() as conn:
             m = oracle.current_mapping(); cat = OracleCatalog(conn)
             visible = cat.columns(registry.referenced_tables(m))
-            status.update(connected=True, tables=len(visible), insertable=sorted(cat.insertable(registry.referenced_tables(m))),
+            status.update(connected=True, tables=len(cat.visible_tables()), mapped_tables=len(visible), insertable=sorted(cat.insertable(registry.referenced_tables(m))),
                           version=conn.version, dsn=conn.dsn)
     except Exception as exc:
         status['error'] = ('Local Oracle is not reachable. Start Docker Desktop and the oracle26ai container, '
@@ -469,6 +469,7 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
             store.audit(user['username'], 'approve_failed', id, error=str(exc)[:500])
             raise
         d['result'] = result; d['version'] += 1
+        clear_counts()
         store.save(d, user['username'], data.version)
         store.audit(user['username'], 'approved_saved', id, orders=result.get('orders'), rows=len(result.get('rows', [])),
                     plan_hash=data.plan_hash)
@@ -691,7 +692,12 @@ def knowledge_table(table: str, user=Depends(authenticated)):
 @app.get('/api/knowledge/neighbours/{table}')
 def knowledge_neighbours(table: str, user=Depends(authenticated)):
     kb = knowledge_base(); t = _table_meta(kb, table.upper())
-    return dict(table=t['name'], business=t['business'], kind=t['kind'], neighbours=_neighbours(kb, t['name']))
+    out = _neighbours(kb, t['name'])
+    with query_sources() as sources:
+        counted = table_counts(kb, sources, [n['table'] for n in out])
+    for n in out:
+        n['rows'], n['approx'] = counted.get(n['table'], (n['rows'], True))
+    return dict(table=t['name'], business=t['business'], kind=t['kind'], neighbours=out)
 
 
 @app.get('/api/knowledge/joins')
@@ -759,6 +765,9 @@ def _answer(fn, question, user):
                 _ensure_values(kb, sources)
             result = fn(kb, sources)
             result.update(kind='answer')
+            counted = table_counts(kb, sources, [n['table'] for n in result.get('graph', {}).get('nodes', [])])
+            for n in result.get('graph', {}).get('nodes', []):
+                n['rows'], n['approx'] = counted.get(n['table'], (None, True))
         except understand.NotUnderstood as exc:
             result = dict(kind='clarify', question=question, message=str(exc), suggestions=exc.suggestions +
                           ['How many orders for NEXT?', 'Size wise quantity for order PK/26-27/S/9001', 'Buyer wise order quantity this year'])
@@ -820,10 +829,11 @@ def chat_preview(data: Preview, user=Depends(require('view'))):
             execute, dialect = engine.pick(kb, intent, safe)
             comp = compile_intent(intent, kb, dialect)
             raw = execute(comp['sql'], comp['binds'], data.limit)
+            total, approx = table_counts(kb, safe, [t['name']]).get(t['name'], (None, True))
         except QueryError as exc:
             raise HTTPException(409, str(exc))
     rows = [[engine.cell(v) for v in r] for r in raw]
-    return dict(table=t['name'], business=t['business'], description=t['description'], kind=t['kind'], rows_total=t.get('rows'),
+    return dict(table=t['name'], business=t['business'], description=t['description'], kind=t['kind'], rows_total=total, rows_approx=approx,
                 scoped=scoped, scope=[engine.describe_filter(f, kb) for f in filters],
                 columns=[dict(key=c['key'], column=c['ref'].split('.')[1], ref=c['ref'], label=c['label'], role=(kb.column(c['ref']) or {}).get('role'),
                               type=(kb.column(c['ref']) or {}).get('type'), references=(kb.column(c['ref']) or {}).get('references'),
@@ -870,17 +880,9 @@ def chat_example_delete(eid: int, user=Depends(require('mapping'))):
 
 
 # --- read-only database explorer (same read-only executor and catalog as Ask AI) ---------------
-def _db(sources):
-    if not sources.get('db'):
-        raise HTTPException(503, 'Oracle is not connected. Start Docker Desktop and the oracle26ai container, then refresh.')
-    return sources['db']
-
-
-def _oracle_tables(kb):
-    return {n: t for n, t in kb.tables.items() if t.get('source') != 'local'}
-
-
 BIG_ROWS = 1_000_000
+COUNT_TTL = 30
+_counts = {}; _counts_lock = threading.Lock()
 
 
 def _count(execute, dialect, table, meta, cond='', binds=None):
@@ -894,16 +896,52 @@ def _count(execute, dialect, table, meta, cond='', binds=None):
         return stats, True
 
 
+def table_counts(kb, sources, tables):
+    """{table: (rows, approximate)} shared by Ask AI, the explorer and the data dictionary. Exact counts
+    (cached 30 s, cleared after every save) so a number on screen never silently disagrees with Oracle;
+    very large tables use statistics and are shown with ≈."""
+    out = {}; now = time.time()
+    for t in dict.fromkeys(tables):
+        meta = kb.table(t)
+        if not meta:
+            continue
+        with _counts_lock:
+            hit = _counts.get(t)
+        if hit and now - hit[0] < COUNT_TTL:
+            out[t] = hit[1:]; continue
+        src = sources.get('local') if meta.get('source') == 'local' else sources.get('db')
+        if not src:
+            out[t] = (meta.get('rows'), True); continue
+        out[t] = _count(*src, t, meta)
+        if meta.get('source') != 'local':   # uploaded-file table is in memory: always counted fresh
+            with _counts_lock:
+                _counts[t] = (now, *out[t])
+    return out
+
+
+def clear_counts():
+    with _counts_lock:
+        _counts.clear()
+
+
+def _db(sources):
+    if not sources.get('db'):
+        raise HTTPException(503, 'Oracle is not connected. Start Docker Desktop and the oracle26ai container, then refresh.')
+    return sources['db']
+
+
+def _oracle_tables(kb):
+    return {n: t for n, t in kb.tables.items() if t.get('source') != 'local'}
+
+
 @app.get('/api/explorer/tables')
 def explorer_tables(user=Depends(authenticated)):
     """Table list. Exact row counts for normal tables; dictionary statistics (marked approximate) for very
     large ones or very large schemas, so the list stays fast on a big database."""
     kb = knowledge_base(); tables = _oracle_tables(kb)
-    counts = {}
     with query_sources() as sources:
-        execute, dialect = _db(sources)
-        for t, m in tables.items():
-            counts[t] = _count(execute, dialect, t, m) if len(tables) <= 300 else (m.get('rows'), True)
+        _db(sources)
+        counts = table_counts(kb, sources, list(tables)) if len(tables) <= 300 else {t: (m.get('rows'), True) for t, m in tables.items()}
     return [dict(table=t, columns=len(m['columns']), rows=counts[t][0], approx=counts[t][1], business=m['business'],
                  kind=m['kind'], description=m['description'], key=m.get('key'),
                  links=sum(1 for j in kb.joins if t in (j['child'], j['parent']))) for t, m in tables.items()]

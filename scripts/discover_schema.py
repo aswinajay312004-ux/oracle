@@ -130,8 +130,8 @@ def main():
                 evidence.setdefault(f'{con["table_name"]}.{col}', {})['foreign_key'] = f'{con["ref_table"]}.{rc}'
 
     result = dict(generated_at=datetime.now().astimezone().isoformat(timespec='seconds'), owner=OWNER, dsn=conn.dsn,
-                  database_version=conn.version, tables=tables, columns=columns, constraints=constraints, triggers=triggers,
-                  sequences=sequences, objects=objects, links=links, columns=evidence, dictionary=columns)
+                  database_version=conn.version, tables=tables, dictionary=columns, constraints=constraints, triggers=triggers,
+                  sequences=sequences, objects=objects, links=links, columns=evidence)
     OUT.mkdir(exist_ok=True)
     (OUT / 'schema_discovery.json').write_text(json.dumps(result, indent=1, default=str, ensure_ascii=False), encoding='utf-8')
 

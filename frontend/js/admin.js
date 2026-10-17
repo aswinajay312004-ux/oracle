@@ -158,7 +158,7 @@ async function dictionary(body) {
 async function openDict(table, edit) {
   const t = await api(`/api/knowledge/tables/${id(table)}`);
   const el = $('#dict-edit');
-  el.innerHTML = `<form id="dict-form" class="form-card" style="max-width:none"><div class="row wrap"><h3>${esc(t.business)}</h3><code class="muted">${esc(t.name)}</code><span class="pill">${esc(t.kind)}</span>${t.rows != null ? `<span class="pill">${fmt(t.rows, 0)} rows</span>` : ''}</div>
+  el.innerHTML = `<form id="dict-form" class="form-card" style="max-width:none"><div class="row wrap"><h3>${esc(t.business)}</h3><code class="muted">${esc(t.name)}</code><span class="pill">${esc(t.kind)}</span>${t.rows != null ? `<span class="pill" title="From Oracle statistics; the Database screen shows exact counts">≈ ${fmt(t.rows, 0)} rows</span>` : ''}</div>
       <div class="grid2"><label>Business name<input name="business" value="${esc(t.business)}" maxlength="80" ${edit ? '' : 'disabled'}></label>
       <label>Synonyms (comma separated)<input name="synonyms" value="${esc(t.synonyms.join(', '))}" ${edit ? '' : 'disabled'}></label></div>
       <label>Description<input name="description" value="${esc(t.description)}" maxlength="500" ${edit ? '' : 'disabled'}></label>

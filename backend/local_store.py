@@ -180,11 +180,22 @@ def _pieces(orders):
     return total
 
 
+def _status(d):
+    p = d.get('plan')
+    if d.get('result'):
+        return 'Saved to Oracle'
+    if not p:
+        return 'Draft'
+    if p.get('errors'):
+        return 'Needs attention'
+    return 'Ready to approve' if p.get('live') else 'Checked offline'
+
+
 def summaries():
     with db() as c:
         return [dict(id=d['id'], version=d['version'], filename=d['filename'], format=d['format'], kind=d.get('kind', 'excel'),
                      created_at=d.get('created_at'), uploaded_by=d.get('uploaded_by'),
-                     status='Saved to Oracle' if d.get('result') else 'Preview ready' if d.get('plan') else 'Draft',
+                     status=_status(d),
                      committed=bool(d.get('result')), orders=len(d['orders']),
                      styles=[o.get('style') for o in d['orders']][:5], buyers=[o.get('buyer') for o in d['orders']][:5],
                      order_refs=[o.get('order_ref') for o in d['orders']][:5], pieces=_pieces(d['orders']))

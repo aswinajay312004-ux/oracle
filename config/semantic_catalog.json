@@ -649,9 +649,7 @@
       "label": "BUYERNAME",
       "display": [
         "BUYERNAME",
-        "BUYERCODE",
-        "COUNTRY",
-        "CURR"
+        "BUYERCODE"
       ],
       "columns": {
         "BUYERNAME": {
@@ -673,19 +671,20 @@
           "searchable": true
         },
         "COUNTRY": {
-          "business": "Buyer country",
+          "business": "Country code",
           "synonyms": [
-            "country"
+            "country code"
           ],
           "role": "attribute",
-          "searchable": true
+          "description": "Numeric code into an Axpert master that is not in this schema; shown as stored."
         },
         "CURR": {
-          "business": "Currency",
+          "business": "Currency code",
           "synonyms": [
-            "currency"
+            "currency code"
           ],
-          "role": "attribute"
+          "role": "attribute",
+          "description": "Numeric code into an Axpert master that is not in this schema; shown as stored."
         }
       }
     },
@@ -744,6 +743,14 @@
           ],
           "role": "label",
           "searchable": true
+        },
+        "STYLECATEGORY": {
+          "business": "Style category code",
+          "synonyms": [
+            "style category code"
+          ],
+          "role": "attribute",
+          "description": "Numeric code into an Axpert master that is not in this schema; shown as stored."
         }
       }
     },
@@ -876,8 +883,6 @@
       "display": [
         "LEDGER",
         "SHORTNAME",
-        "STATE",
-        "COUNTRY",
         "GSTNO"
       ],
       "columns": {
@@ -891,6 +896,22 @@
           ],
           "role": "label",
           "searchable": true
+        },
+        "STATE": {
+          "business": "State code",
+          "synonyms": [
+            "state code"
+          ],
+          "role": "attribute",
+          "description": "Numeric code into an Axpert master that is not in this schema; shown as stored."
+        },
+        "COUNTRY": {
+          "business": "Country code",
+          "synonyms": [
+            "country code"
+          ],
+          "role": "attribute",
+          "description": "Numeric code into an Axpert master that is not in this schema; shown as stored."
         }
       }
     }

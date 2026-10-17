@@ -41,7 +41,7 @@ export async function recent() {
       ${drafts.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><span class="row"><span class="file-badge ${d.kind === 'pdf' ? 'pdf' : ''}">${d.kind === 'pdf' ? 'PDF' : 'XLS'}</span><span><b>${esc(d.filename)}</b><br><span class="muted small-text">${esc(d.format)}</span></span></span></td>
         <td>${esc((d.styles || []).filter(Boolean).join(', ') || '—')}<br><span class="muted small-text">${esc((d.buyers || []).filter(Boolean).join(', '))}</span></td>
         <td class="nowrap">${esc(d.uploaded_by || '')}<br><span class="muted small-text">${d.created_at ? esc(new Date(d.created_at).toLocaleString()) : ''}</span></td>
-        <td><span class="pill ${d.committed ? 'ok' : d.status === 'Preview ready' ? 'info' : ''}">${esc(d.status)}</span></td><td><button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></td></tr>`).join('')}
+        <td><span class="pill ${({ 'Saved to Oracle': 'ok', 'Ready to approve': 'info', 'Needs attention': 'err', 'Checked offline': 'warn' })[d.status] || ''}">${esc(d.status)}</span></td><td><button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="empty">Your uploads will appear here.</p>';
   } catch (e) { $('#recent').innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
 }

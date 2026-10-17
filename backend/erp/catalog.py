@@ -54,6 +54,10 @@ class OracleCatalog(Catalog):
                 self._cols.setdefault(table, {})[col] = _column(*meta)
         return {t: self._cols[t] for t in tables if t in self._cols}
 
+    def visible_tables(self):
+        self.columns([])
+        return sorted(self._cols)
+
     def insertable(self, tables):
         c = self.conn.cursor()
         c.execute("select table_name from user_tab_privs where owner=:owner and privilege='INSERT'", owner=OWNER)

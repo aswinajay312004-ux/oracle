@@ -133,7 +133,7 @@ PW = 'test-password-123'
 def api(tmp_path, monkeypatch, world):
     monkeypatch.setattr(local_store, 'DATA', tmp_path); monkeypatch.setattr(main, 'DATA', tmp_path)
     monkeypatch.setattr(service, 'DATA', tmp_path)
-    service.invalidate()
+    service.invalidate(); main.clear_counts()
 
     @contextmanager
     def sources():
