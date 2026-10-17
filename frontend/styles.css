@@ -720,3 +720,70 @@ details.ex-more > summary { cursor: pointer; font-weight: 600; font-size: 12.5px
 .switch[aria-checked="true"] .knob::after { transform: translateX(14px); }
 @media (max-width: 1240px) { .mapgrid { grid-template-columns: 360px minmax(0, 1fr); } }
 @media (max-width: 920px) { .mapgrid { grid-template-columns: 1fr; } .map-right { position: static; } .map-actions { max-width: none; } }
+
+/* ---------- csp-strict: no inline style attributes anywhere (Content-Security-Policy style-src 'self') ----------
+   Every look that used to be a style="…" attribute in index.html or in markup built by the JS lives here. Truly
+   dynamic values (computed sizes, the reading steps' stagger) are set through the CSSOM after the markup is inserted
+   (el.style.x / el.style.setProperty), which style-src does not block. tests/test_csp_static.py keeps it that way. */
+/* spacing and size helpers (an inline style beat the cascade; these single-class rules win over every element-only
+   rule they replace, e.g. input { width: 100% } and p { margin: 0 }) */
+.mt-2 { margin-top: 2px; }
+.mt-4 { margin-top: 4px; }
+.mt-10 { margin-top: 10px; }
+.mt-12 { margin-top: 12px; }
+.mt-14 { margin-top: 14px; }
+.mt-16 { margin-top: 16px; }
+.mb-6 { margin-bottom: 6px; }
+.mb-8 { margin-bottom: 8px; }
+.mb-10 { margin-bottom: 10px; }
+.mb-12 { margin-bottom: 12px; }
+.mb-14 { margin-bottom: 14px; }
+.ml-auto { margin-left: auto; }
+.w-64 { width: 64px; }
+.w-70 { width: 70px; }
+.w-76 { width: 76px; }
+.w-80 { width: 80px; }
+.w-96 { width: 96px; }
+.w-100 { width: 100px; }
+.w-200 { width: 200px; }
+.w-220 { width: 220px; }
+.w-300 { width: 300px; }
+.max-h-420 { max-height: 420px; }
+.max-h-440 { max-height: 440px; }
+.max-h-52vh { max-height: 52vh; }
+.max-h-70vh { max-height: 70vh; }
+.flex-fill { flex: 1; min-width: 0; }   /* a flex child that takes the free space and may shrink below its content */
+.stack { display: grid; gap: 8px; }     /* children one under another, 8px apart */
+.list-tight { margin: 4px 0 0; padding-left: 18px; }
+.req { color: var(--err); }              /* the red * of a required field (field labels add their own weight/spacing) */
+/* sign-in: the larger brand name on the art panel */
+.auth-art .brand-text strong { font-size: 18px; }
+/* reading the file: the actions under the steps, and each step rising in one after another (--step is set by
+   workspace.js through the CSSOM: 0, 1, 2 …) */
+.card-head.read-actions { justify-content: flex-end; border-top: 1px solid var(--line); }
+.read-steps li { animation-delay: calc(var(--step, 0) * 80ms); }
+/* review */
+.notes > summary { cursor: pointer; }
+.tbl-tip { align-self: center; }
+.yarn-table { max-width: 640px; }
+tr.group-row td .group-meta { font-weight: 500; }
+/* flowchart legends: the swatch colours match the diagram (graph.js) */
+.legend i.sw-brand { background: var(--brand); }
+.legend i.sw-header { background: var(--header); }
+.legend i.sw-master { background: var(--master); }
+.legend i.sw-proposed { background: #d39a2c; }
+.legend i.sw-dashed { border: 1.5px dashed #94a3b8; background: #fff; }
+.flow-wrap.rel-map { min-height: 240px; }
+/* Ask AI */
+.hist-when { margin-left: auto; font-size: 11px; padding-left: 6px; }
+.welcome-lead { max-width: 560px; margin: 6px auto 0; }
+.suggestions.align-start { justify-content: flex-start; margin: 0; }
+th.sortable { cursor: pointer; }
+.tabs.modal-tabs { margin: 8px 0 -17px -12px; }
+.answer.rerunning { opacity: .55; }
+/* Setup */
+.map-card { margin-bottom: 14px; overflow: hidden; }
+.dict-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); }
+.dict-list { border-right: 1px solid var(--line); max-height: 560px; overflow: auto; padding: 6px; }
+.dict-edit { padding: 14px 16px; }
+.form-card.form-wide { max-width: none; }

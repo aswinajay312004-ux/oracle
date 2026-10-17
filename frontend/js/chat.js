@@ -21,7 +21,7 @@ export async function loadChat() {
 async function sideLists() {
   try {
     const [hist, ex] = await Promise.all([api('/api/chat/history'), api('/api/chat/examples')]);
-    $('#chat-history').innerHTML = hist.length ? hist.slice(0, 12).map(h => `<button data-hist="${esc(h.id)}" title="${esc(h.question)}">${h.feedback === 'correct' ? '✓ ' : ''}${esc(h.question.length > 46 ? h.question.slice(0, 45) + '…' : h.question)}<span class="muted" style="margin-left:auto;font-size:11px;padding-left:6px">${esc(timeAgo(h.at))}</span></button>`).join('') : '<p class="muted small-text">None yet.</p>';
+    $('#chat-history').innerHTML = hist.length ? hist.slice(0, 12).map(h => `<button data-hist="${esc(h.id)}" title="${esc(h.question)}">${h.feedback === 'correct' ? '✓ ' : ''}${esc(h.question.length > 46 ? h.question.slice(0, 45) + '…' : h.question)}<span class="muted hist-when">${esc(timeAgo(h.at))}</span></button>`).join('') : '<p class="muted small-text">None yet.</p>';
     const learned = ex.slice(0, 4).map(e => e.question);
     $('#chat-examples').innerHTML = [...new Set([...learned, ...STARTERS])].slice(0, 9).map(q => `<button data-ask="${esc(q)}">${learned.includes(q) ? '★ ' : ''}${esc(q)}</button>`).join('');
   } catch (_) { /* side lists are optional */ }
@@ -29,7 +29,7 @@ async function sideLists() {
 
 function welcome() {
   $('#thread').innerHTML = `<section class="card welcome" id="welcome"><div class="orb">✦</div><h2>Ask anything about your orders</h2>
-    <p class="muted" style="max-width:560px;margin:6px auto 0">I find the right tables, link them correctly and show you exactly where each number came from. Try one of these:</p>
+    <p class="muted welcome-lead">I find the right tables, link them correctly and show you exactly where each number came from. Try one of these:</p>
     <div class="suggestions">${STARTERS.slice(0, 6).map(q => `<button class="suggestion" data-ask="${esc(q)}">${esc(q)}</button>`).join('')}</div></section>`;
 }
 
@@ -65,7 +65,7 @@ function draw(aid) {
   if (r.kind !== 'answer') {
     el.innerHTML = `<div class="answer-top"><span class="pill ${r.kind === 'refused' ? 'err' : 'warn'}">${r.kind === 'refused' ? 'Cannot answer safely' : 'Please rephrase'}</span></div>
       <div class="answer-summary">${esc(r.message)}</div>
-      ${(r.suggestions || []).length ? `<div class="answer-body"><div class="muted small-text" style="margin-bottom:6px">For example:</div><div class="suggestions" style="justify-content:flex-start;margin:0">${r.suggestions.map(q => `<button class="suggestion" data-ask="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>` : ''}`;
+      ${(r.suggestions || []).length ? `<div class="answer-body"><div class="muted small-text mb-6">For example:</div><div class="suggestions align-start">${r.suggestions.map(q => `<button class="suggestion" data-ask="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>` : ''}`;
     return;
   }
   const cols = r.columns.map((c, i) => ({ ...c, index: i })).filter(c => !c.hidden);
@@ -75,13 +75,13 @@ function draw(aid) {
   el.innerHTML = `<div class="answer-top"><span class="understood">Understood as: <b>${esc(r.understood)}</b></span><span class="spacer"></span>${confidencePill(r.confidence)}
       <span class="pill" title="How the question was turned into a query">${esc(r.source === 'rules' ? 'matched by rules' : r.source)}</span></div>
     <div class="flow-wrap" data-graph></div>
-    <div class="legend"><span><i style="background:var(--brand)"></i>Used in this answer</span><span><i style="border:1.5px dashed #94a3b8;background:#fff"></i>Linked, not used</span>
-      <span><i style="background:#d39a2c"></i>Unconfirmed link</span><span class="muted">Click a table to preview it and add its columns · ＋ shows linked tables</span></div>
+    <div class="legend"><span><i class="sw-brand"></i>Used in this answer</span><span><i class="sw-dashed"></i>Linked, not used</span>
+      <span><i class="sw-proposed"></i>Unconfirmed link</span><span class="muted">Click a table to preview it and add its columns · ＋ shows linked tables</span></div>
     <div class="answer-summary">${esc(r.summary)}</div>
     <div class="answer-body">
       <div class="answer-tools"><span>${plural(r.row_count, 'row')}${r.truncated ? ` (first ${r.limit} shown)` : ''} · ${r.elapsed_ms} ms</span><span class="spacer"></span>
         <button class="ghost small" data-csv="${esc(aid)}">Download CSV</button></div>
-      ${rows.length ? `<div class="tbl-wrap"><table><thead><tr>${cols.map(c => `<th class="${c.type === 'NUMBER' ? 'num' : ''} ${entry.added.has(c.ref) ? 'added' : ''}" data-sort="${c.index}" style="cursor:pointer" title="${esc((c.table || '') + '.' + (c.column || ''))} — click to sort">${esc(c.label)}${c.unit && !String(c.label).includes(`(${c.unit})`) ? ` <span class="muted">(${esc(c.unit)})</span>` : ''}
+      ${rows.length ? `<div class="tbl-wrap"><table><thead><tr>${cols.map(c => `<th class="sortable ${c.type === 'NUMBER' ? 'num' : ''} ${entry.added.has(c.ref) ? 'added' : ''}" data-sort="${c.index}" title="${esc((c.table || '') + '.' + (c.column || ''))} — click to sort">${esc(c.label)}${c.unit && !String(c.label).includes(`(${c.unit})`) ? ` <span class="muted">(${esc(c.unit)})</span>` : ''}
           ${removable && c.kind !== 'measure' ? `<button class="th-x" data-remove-col="${esc(c.ref)}" data-aid="${esc(aid)}" title="Remove this column" aria-label="Remove ${esc(c.label)}">×</button>` : ''}<span class="code">${esc(c.table)}.${esc(c.column || '*')}</span></th>`).join('')}</tr></thead>
         <tbody>${rows.map(row => `<tr>${cols.map(c => { const v = row[c.index]; return `<td class="${typeof v === 'number' ? 'num' : ''} ${v == null ? 'null' : ''}">${v == null ? '—' : esc(typeof v === 'number' ? fmt(v) : show(v))}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`
         : '<p class="empty">No matching rows.</p>'}
@@ -91,7 +91,7 @@ function draw(aid) {
       ${(r.notes || []).length ? `<div>${r.notes.map(x => `<div>• ${esc(x)}</div>`).join('')}</div>` : ''}
       ${(r.linked_values || []).length ? `<div><b>Values matched in the database:</b> ${r.linked_values.map(v => `<span class="chip ${v.found ? 'reuse' : 'new'}">${esc(v.phrase)} → ${esc(v.column)}${v.found ? '' : ' (not found)'}</span>`).join(' ')}</div>` : ''}
       <div><b>Tables:</b> ${r.tables.map(t => `<code>${esc(t)}</code>`).join(', ')}</div>
-      ${r.joins.length ? `<div><b>Links used:</b><ul style="margin:4px 0 0;padding-left:18px">${r.joins.map(j => `<li><code>${esc(j.on)}</code> <span class="pill ${j.status === 'verified' || j.status === 'declared' ? 'ok' : 'warn'}">${esc(j.status)}</span> <span class="muted">${esc(j.label)}</span></li>`).join('')}</ul></div>` : ''}
+      ${r.joins.length ? `<div><b>Links used:</b><ul class="list-tight">${r.joins.map(j => `<li><code>${esc(j.on)}</code> <span class="pill ${j.status === 'verified' || j.status === 'declared' ? 'ok' : 'warn'}">${esc(j.status)}</span> <span class="muted">${esc(j.label)}</span></li>`).join('')}</ul></div>` : ''}
       <div><b>Read-only query</b> <span class="muted">(values passed separately as bind variables: ${esc(JSON.stringify(r.binds))})</span><div class="sql">${esc(r.sql)}</div></div>
     </div></details>
     <div class="answer-foot"><span class="muted small-text">Is this right?</span>
@@ -152,17 +152,17 @@ async function preview(aid, table) {
   const addBtn = c => inAnswer.has(c.ref) ? '<span class="chip reuse">in answer</span>' : `<button class="tiny secondary" data-add-col="${esc(c.ref)}" title="Add ${esc(c.label)} to the answer">＋ Add</button>`;
   let tab = 'data';
   const body = () => { const cols = tab === 'data' && !showEmpty && filled.length ? filled : all; return (tab === 'data'
-    ? (p.rows.length ? `${all.length > filled.length ? `<label class="check" style="margin-bottom:8px"><input type="checkbox" data-empty ${showEmpty ? 'checked' : ''}> Show empty columns too (${all.length - filled.length})</label>` : ''}` + `<div class="tbl-wrap" style="max-height:52vh"><table><thead><tr>${cols.map(c => `<th>${esc(c.label)}<span class="code">${esc(c.column)}</span><div style="margin-top:4px">${addBtn(c)}</div></th>`).join('')}</tr></thead>
+    ? (p.rows.length ? `${all.length > filled.length ? `<label class="check mb-8"><input type="checkbox" data-empty ${showEmpty ? 'checked' : ''}> Show empty columns too (${all.length - filled.length})</label>` : ''}` + `<div class="tbl-wrap max-h-52vh"><table><thead><tr>${cols.map(c => `<th>${esc(c.label)}<span class="code">${esc(c.column)}</span><div class="mt-4">${addBtn(c)}</div></th>`).join('')}</tr></thead>
         <tbody>${p.rows.map(row => `<tr>${cols.map(c => { const v = row[p.columns.indexOf(c)]; return `<td class="${typeof v === 'number' ? 'num' : ''} ${v == null ? 'null' : ''}">${v == null ? '—' : esc(show(v))}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`
       : '<p class="empty">No rows in this table match the answer.</p>')
-    : `<div class="tbl-wrap" style="max-height:52vh"><table><thead><tr><th>Business name</th><th>Column</th><th>Type</th><th>Meaning</th><th></th></tr></thead><tbody>
+    : `<div class="tbl-wrap max-h-52vh"><table><thead><tr><th>Business name</th><th>Column</th><th>Type</th><th>Meaning</th><th></th></tr></thead><tbody>
         ${cols.map(c => `<tr><td><b>${esc(c.label)}</b></td><td class="mono">${esc(c.column)}</td><td class="muted">${esc(c.type || '')}</td>
           <td>${esc(c.role || '')}${c.references ? ` <span class="chip label">→ ${esc(c.references)}</span>` : ''}</td><td>${addBtn(c)}</td></tr>`).join('')}</tbody></table></div>`); };
   const render = () => {
     const m = modal(`<div class="row wrap"><span class="pill ${p.kind === 'master' ? 'master' : p.kind === 'header' ? 'header' : 'brand'}">${esc(p.kind)}</span><h2 id="modal-title">${esc(p.business)}</h2><code class="muted">${esc(p.table)}</code>
         ${p.rows_total != null ? `<span class="pill" title="${p.rows_approx ? 'Approximate (Oracle statistics) — this table is very large' : 'Exact count, read just now'}">${p.rows_approx ? '≈ ' : ''}${fmt(p.rows_total, 0)} rows in Oracle</span>` : ''}</div>
-        <p class="muted small-text" style="margin-top:4px">${esc(p.description || '')}${p.scoped ? ` · Showing rows related to this answer (${esc(p.scope.join(', '))}).` : ' · Showing the latest rows (this table is not linked to the answer’s filters).'}</p>
-        <nav class="tabs" style="margin:8px 0 -17px -12px"><button class="${tab === 'data' ? 'active' : ''}" data-ptab="data">Data preview</button><button class="${tab === 'cols' ? 'active' : ''}" data-ptab="cols">Columns (${all.length})</button></nav>`,
+        <p class="muted small-text mt-4">${esc(p.description || '')}${p.scoped ? ` · Showing rows related to this answer (${esc(p.scope.join(', '))}).` : ' · Showing the latest rows (this table is not linked to the answer’s filters).'}</p>
+        <nav class="tabs modal-tabs"><button class="${tab === 'data' ? 'active' : ''}" data-ptab="data">Data preview</button><button class="${tab === 'cols' ? 'active' : ''}" data-ptab="cols">Columns (${all.length})</button></nav>`,
       body(),
       `<span class="muted small-text">Linked tables:</span>${p.neighbours.slice(0, 10).map(n => `<button class="tiny ghost" data-open-table="${esc(n.table)}" title="${esc(n.label)} · ${esc(n.on)}">${n.direction === 'up' ? '↑' : '↓'} ${esc(n.business)}</button>`).join('')}`);
     $$('[data-ptab]', m.head).forEach(b => b.onclick = () => { tab = b.dataset.ptab; render(); });
@@ -175,16 +175,16 @@ async function preview(aid, table) {
 
 async function rerun(aid, intent, note) {
   const entry = answers.get(aid); const el = $(`#ans-${aid}`);
-  el.style.opacity = .55;
+  el.classList.add('rerunning');   // dimmed while the answer is re-run
   try {
     const r = await api('/api/chat/run', { method: 'POST', body: { intent, question: entry.result.question } });
-    if (r.kind !== 'answer') { el.style.opacity = 1; return notify(r.message, 'error'); }
+    if (r.kind !== 'answer') { el.classList.remove('rerunning'); return notify(r.message, 'error'); }
     r.linked_values = entry.result.linked_values;
     answers.delete(aid);
     const holder = document.createElement('div'); el.replaceWith(holder);
     mount(holder, r, entry);
     if (note) notify(note, 'success');
-  } catch (e) { el.style.opacity = 1; notify(e.message, 'error'); }
+  } catch (e) { el.classList.remove('rerunning'); notify(e.message, 'error'); }
 }
 
 async function addColumn(aid, ref) {

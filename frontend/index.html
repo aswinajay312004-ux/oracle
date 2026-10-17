@@ -67,7 +67,7 @@
                 <input type="file" id="file-input" accept=".xlsx,.xlsm,.xltx,.xltm,.xls,.xlsb,.ods,.xml,.htm,.html,.mht,.mhtml,.csv,.tsv,.txt,.json" class="visually-hidden">
               </label>
             </div>
-            <section class="card" style="margin-top:16px">
+            <section class="card mt-16">
               <div class="card-head"><div><h2>Recent files</h2><div class="sub">Continue where you left off</div></div></div>
               <div id="recent"><p class="empty">Your uploads will appear here.</p></div>
             </section>
@@ -77,7 +77,7 @@
             <div class="card reading">
               <div class="card-head plain"><h2 id="read-title">Reading your file…</h2></div>
               <ol id="read-steps" class="read-steps"></ol>
-              <div class="card-head plain" style="justify-content:flex-end;border-top:1px solid var(--line)" id="read-actions" hidden>
+              <div class="card-head plain read-actions" id="read-actions" hidden>
                 <button class="primary" id="go-review">Open the order entry →</button></div>
             </div>
           </section>
@@ -91,7 +91,7 @@
         <section id="view-history" class="view" hidden>
           <div class="page-head"><div><span class="eyebrow">Traceable</span><h1>Saved orders</h1><p class="lead">Every approved import, who approved it, and exactly where its records are in Oracle.</p></div></div>
           <section class="card" id="history"></section>
-          <section id="history-detail" style="margin-top:16px" hidden></section>
+          <section id="history-detail" class="mt-16" hidden></section>
         </section>
 
         <!-- ASK AI -->
@@ -118,7 +118,7 @@
         <!-- DATABASE EXPLORER -->
         <section id="view-explorer" class="view" hidden>
           <div class="page-head"><div><span class="eyebrow">Read-only · live Oracle</span><h1>Database</h1><p class="lead">Browse GARMENT_DEMO by business name, follow links between records, and see how tables connect.</p></div>
-            <form id="order-lookup" class="row"><input id="order-id" maxlength="100" placeholder="Find an order: reference or record ID" style="width:300px" aria-label="Find an order"><button class="secondary">Find</button></form></div>
+            <form id="order-lookup" class="row"><input id="order-id" class="w-300" maxlength="100" placeholder="Find an order: reference or record ID" aria-label="Find an order"><button class="secondary">Find</button></form></div>
           <div class="explorer">
             <aside class="card table-list"><div class="search"><input id="table-filter" placeholder="Search tables (e.g. buyer, size, ORDSIZE)" aria-label="Search tables"></div><div class="items" id="tables"></div></aside>
             <section class="card" id="table-view"><p class="empty">Choose a table on the left.</p></section>
@@ -151,7 +151,7 @@
   </aside>
   <div id="scrim" class="scrim" hidden></div>
 
-  <dialog id="modal" class="modal" aria-labelledby="modal-title"><div class="modal-head"><div style="flex:1;min-width:0" id="modal-title-wrap"><h2 id="modal-title"></h2></div><button class="icon-btn" id="modal-close" aria-label="Close">✕</button></div>
+  <dialog id="modal" class="modal" aria-labelledby="modal-title"><div class="modal-head"><div class="flex-fill" id="modal-title-wrap"><h2 id="modal-title"></h2></div><button class="icon-btn" id="modal-close" aria-label="Close">✕</button></div>
     <div class="modal-body" id="modal-body"></div><div class="modal-foot" id="modal-foot"></div></dialog>
 
   <dialog id="confirm" class="confirm"><form method="dialog"><h2 id="confirm-title"></h2><div id="confirm-body"></div>
@@ -159,7 +159,7 @@
 
   <div id="auth" class="auth" hidden>
     <div class="auth-art">
-      <div class="brand"><span class="brand-mark big">P</span><span class="brand-text"><strong style="font-size:18px">POPPYS <em>AI</em></strong><small>Order automation · Axpert ERP</small></span></div>
+      <div class="brand"><span class="brand-mark big">P</span><span class="brand-text"><strong>POPPYS <em>AI</em></strong><small>Order automation · Axpert ERP</small></span></div>
       <div><h2>From buyer file to Oracle order — checked, approved, proven.</h2>
         <ul><li>Reads every buyer’s Excel layout automatically</li><li>Fills the Axpert order entry and highlights only what is missing</li><li>Saves in one transaction after approval, then reads it back</li><li>Answers questions about orders in plain words</li></ul></div>
       <small>Runs entirely on this computer · local Oracle · local AI</small>

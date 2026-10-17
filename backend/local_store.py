@@ -1,11 +1,31 @@
-"""Local workspace state (SQLite): users, sessions, drafts, revisions, audit, templates, mapping verification."""
-from contextlib import contextmanager
+"""Local workspace state (SQLite): users, sessions, drafts, revisions, audit, templates, mapping verification.
+
+Durability (docs/RESEARCH_DECISIONS.md, "Logging and ops: SQLite durability, backups, audit, versioning"):
+* Every connection is closed when the block ends (``with sqlite3.connect()`` only commits or rolls back; it
+  never closes, which leaks a file handle on Windows). One block = one transaction.
+* journal_mode stays DELETE: WAL has a reset bug in SQLite 3.7.0-3.51.2 and CPython 3.13 on Windows bundles
+  3.50.4. synchronous=FULL, foreign_keys=ON and a 20 s busy timeout on every connection.
+* Schema changes are numbered migrations recorded in PRAGMA user_version. Before an existing database is
+  migrated, a copy is made with the SQLite backup API and checked (integrity_check, same tables and row
+  counts); if that copy cannot be made and verified, nothing is changed and the app refuses to start.
+* The audit table is append-only (BEFORE UPDATE / DELETE triggers abort) and hash-chained: each row stores the
+  previous row's hash and a SHA-256 over itself, so an edit, a deleted row or a removed trigger is found by
+  verify_audit_chain().
+"""
+from contextlib import closing, contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import json
+import os
 import sqlite3
+import time
 import uuid
 from .config import DATA
+
+DB_NAME = 'poppys.sqlite3'
+BUSY_TIMEOUT_S = 20
+GENESIS = '0' * 64
 
 ROLES = ('admin', 'approver', 'operator', 'viewer')
 ORDER_FIELDS = ('buyer', 'style', 'description', 'po_number', 'order_ref', 'ship_date', 'order_date', 'season', 'merch',
@@ -21,57 +41,347 @@ def now():
     return datetime.now(timezone.utc).astimezone().isoformat(timespec='seconds')
 
 
-@contextmanager
-def db():
-    with sqlite3.connect(DATA / 'poppys.sqlite3', timeout=20) as conn:
+def path():
+    return DATA / DB_NAME
+
+
+def _connect(file=None, timeout=BUSY_TIMEOUT_S):
+    conn = sqlite3.connect(file or path(), timeout=timeout)
+    try:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys=ON')
-        yield conn
+        conn.execute('PRAGMA synchronous=FULL')
+        conn.execute(f'PRAGMA busy_timeout={int(timeout * 1000)}')
+    except BaseException:
+        conn.close()
+        raise
+    return conn
+
+
+@contextmanager
+def db():
+    """One connection and one transaction: committed when the block ends normally, rolled back on an
+    exception, and closed either way."""
+    with closing(_connect()) as conn:
+        with conn:
+            yield conn
+
+
+# --- schema and migrations -----------------------------------------------------------
+def _columns(c, table):
+    return {r['name'] for r in c.execute(f'PRAGMA table_info({table})')}
+
+
+def _m1_baseline(c):
+    """The schema as it was before numbered migrations (every step is idempotent, so it also upgrades any
+    older copy that had only some of these tables or columns)."""
+    for ddl in (
+        'CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,salt TEXT NOT NULL,password_hash TEXT NOT NULL)',
+        'CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,username TEXT NOT NULL,expires REAL NOT NULL)',
+        'CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY,version INTEGER NOT NULL,payload TEXT NOT NULL)',
+        'CREATE TABLE IF NOT EXISTS revisions(id INTEGER PRIMARY KEY,draft_id TEXT,version INTEGER,actor TEXT,payload TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP)',
+        'CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at TEXT NOT NULL,actor TEXT,action TEXT NOT NULL,target TEXT,detail TEXT)',
+        '''CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,name TEXT NOT NULL,signature TEXT NOT NULL,labels TEXT NOT NULL,
+            definition TEXT NOT NULL,created_by TEXT,created_at TEXT,uses INTEGER DEFAULT 0,active INTEGER DEFAULT 1)''',
+        '''CREATE TABLE IF NOT EXISTS mapping_overrides(table_name TEXT NOT NULL,column_name TEXT NOT NULL DEFAULT '',status TEXT NOT NULL,
+            actor TEXT,at TEXT,note TEXT,PRIMARY KEY(table_name,column_name))''',
+        'CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)',
+        'CREATE TABLE IF NOT EXISTS knowledge_overrides(object TEXT PRIMARY KEY,data TEXT NOT NULL,actor TEXT,at TEXT)',
+        'CREATE TABLE IF NOT EXISTS value_index(tbl TEXT NOT NULL,col TEXT NOT NULL,value TEXT NOT NULL,norm TEXT NOT NULL,n INTEGER)',
+        'CREATE INDEX IF NOT EXISTS value_index_norm ON value_index(norm)',
+        '''CREATE TABLE IF NOT EXISTS nl_examples(id INTEGER PRIMARY KEY,masked TEXT NOT NULL,question TEXT NOT NULL,intent TEXT NOT NULL,
+            actor TEXT,at TEXT,uses INTEGER DEFAULT 0)''',
+        'CREATE TABLE IF NOT EXISTS chat_log(id TEXT PRIMARY KEY,username TEXT,at TEXT,question TEXT,payload TEXT,feedback TEXT)',
+        'CREATE TABLE IF NOT EXISTS field_settings(key TEXT PRIMARY KEY,required INTEGER,aliases TEXT,actor TEXT,at TEXT)',
+    ):
+        c.execute(ddl)
+    tcols = _columns(c, 'templates')
+    # Versioned buyer templates (docs/EXCEL_UNDERSTANDING.md §6).
+    for col, ddl in (('buyer', "TEXT NOT NULL DEFAULT ''"), ('version', 'INTEGER NOT NULL DEFAULT 1'), ('family', 'TEXT'),
+                     ('anchors', 'TEXT'), ('unit', 'TEXT'), ('quantity_basis', 'TEXT')):
+        if col not in tcols:
+            c.execute(f'ALTER TABLE templates ADD COLUMN {col} {ddl}')
+    c.execute('UPDATE templates SET family=id WHERE family IS NULL')
+    cols = _columns(c, 'users')
+    # The original single account becomes the administrator.
+    if 'role' not in cols:
+        c.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
+    if 'active' not in cols:
+        c.execute('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1')
+    if 'created_at' not in cols:
+        c.execute('ALTER TABLE users ADD COLUMN created_at TEXT')
+
+
+def _m2_sessions_and_sign_in(c):
+    """Sessions with idle and absolute expiry; sign-in failures and username locks kept across restarts; a
+    one-row table that /readyz writes to prove the database accepts writes. Sessions from before have no
+    last-activity time, so they end: everyone signs in once after this upgrade."""
+    c.execute('DROP TABLE IF EXISTS sessions')
+    c.execute('''CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,username TEXT NOT NULL,created REAL NOT NULL,
+                 last_seen REAL NOT NULL,expires REAL NOT NULL)''')
+    c.execute('CREATE INDEX sessions_user ON sessions(username)')
+    c.execute('CREATE TABLE IF NOT EXISTS auth_failures(id INTEGER PRIMARY KEY,username TEXT NOT NULL,ip TEXT NOT NULL,at REAL NOT NULL)')
+    c.execute('CREATE INDEX IF NOT EXISTS auth_failures_user ON auth_failures(username,at)')
+    c.execute('CREATE INDEX IF NOT EXISTS auth_failures_ip ON auth_failures(ip,at)')
+    c.execute('CREATE TABLE IF NOT EXISTS auth_locks(username TEXT PRIMARY KEY,until REAL NOT NULL,at TEXT NOT NULL,failures INTEGER)')
+    c.execute('CREATE TABLE IF NOT EXISTS health_probe(id INTEGER PRIMARY KEY CHECK (id=1),at REAL NOT NULL)')
+
+
+def _m3_audit_chain(c):
+    """Hash-chain the existing audit rows in id order, then make the table append-only."""
+    cols = _columns(c, 'audit')
+    if 'prev_hash' not in cols:
+        c.execute('ALTER TABLE audit ADD COLUMN prev_hash TEXT')
+    if 'hash' not in cols:
+        c.execute('ALTER TABLE audit ADD COLUMN hash TEXT')
+    prev = GENESIS
+    for r in c.execute('SELECT id,at,actor,action,target,detail FROM audit ORDER BY id').fetchall():
+        h = _audit_hash(prev, r)
+        c.execute('UPDATE audit SET prev_hash=?,hash=? WHERE id=?', (prev, h, r['id']))
+        prev = h
+    _m3_audit_chain_triggers(c)
+
+
+MIGRATIONS = ((1, _m1_baseline), (2, _m2_sessions_and_sign_in), (3, _m3_audit_chain))
+SCHEMA_VERSION = MIGRATIONS[-1][0]
+
+
+def schema_version(file=None):
+    with closing(_connect(file)) as c:
+        return c.execute('PRAGMA user_version').fetchone()[0]
+
+
+def _snapshot(c):
+    tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    return {t: c.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0] for t in tables}
+
+
+def backup_before_migration(from_version):
+    """Copy the live database with the SQLite backup API into DATA/backups/pre-migration/ and verify the copy
+    (integrity_check ok, same user_version, same tables with the same row counts). Returns the copy's path;
+    raises RuntimeError (nothing changed) when the copy is not good."""
+    folder = DATA / 'backups' / 'pre-migration'
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+    dest = folder / f'poppys-v{from_version}-before-v{SCHEMA_VERSION}-{stamp}-{uuid.uuid4().hex[:6]}.sqlite3'
+    partial = dest.with_name(dest.name + '.partial')
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        with closing(_connect()) as src, closing(sqlite3.connect(partial)) as out:
+            src.execute('BEGIN')                      # one consistent snapshot for the copy and the counts
+            expected = _snapshot(src)
+            src.backup(out, pages=1024, sleep=0.05)
+            src.rollback()
+        with closing(sqlite3.connect(partial.resolve().as_uri() + '?mode=ro', uri=True)) as check:
+            ok = check.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+            same = check.execute('PRAGMA user_version').fetchone()[0] == from_version and \
+                {t: check.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0] for t in expected} == expected
+        if not (ok and same):
+            raise RuntimeError('the copy did not match the database')
+        os.replace(partial, dest)
+    except (OSError, sqlite3.Error, RuntimeError) as exc:
+        try:
+            partial.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RuntimeError(f'The local database needs an upgrade, but a verified backup could not be made first ({exc}). '
+                           f'Nothing was changed. Free some disk space or check the data folder, then start POPPYS AI again.') from exc
+    return dest
 
 
 def init():
-    with db() as c:
-        c.executescript('''
-        CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,salt TEXT NOT NULL,password_hash TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,username TEXT NOT NULL,expires REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY,version INTEGER NOT NULL,payload TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS revisions(id INTEGER PRIMARY KEY,draft_id TEXT,version INTEGER,actor TEXT,payload TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at TEXT NOT NULL,actor TEXT,action TEXT NOT NULL,target TEXT,detail TEXT);
-        CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,name TEXT NOT NULL,signature TEXT NOT NULL,labels TEXT NOT NULL,
-            definition TEXT NOT NULL,created_by TEXT,created_at TEXT,uses INTEGER DEFAULT 0,active INTEGER DEFAULT 1);
-        CREATE TABLE IF NOT EXISTS mapping_overrides(table_name TEXT NOT NULL,column_name TEXT NOT NULL DEFAULT '',status TEXT NOT NULL,
-            actor TEXT,at TEXT,note TEXT,PRIMARY KEY(table_name,column_name));
-        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS knowledge_overrides(object TEXT PRIMARY KEY,data TEXT NOT NULL,actor TEXT,at TEXT);
-        CREATE TABLE IF NOT EXISTS value_index(tbl TEXT NOT NULL,col TEXT NOT NULL,value TEXT NOT NULL,norm TEXT NOT NULL,n INTEGER);
-        CREATE INDEX IF NOT EXISTS value_index_norm ON value_index(norm);
-        CREATE TABLE IF NOT EXISTS nl_examples(id INTEGER PRIMARY KEY,masked TEXT NOT NULL,question TEXT NOT NULL,intent TEXT NOT NULL,
-            actor TEXT,at TEXT,uses INTEGER DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS chat_log(id TEXT PRIMARY KEY,username TEXT,at TEXT,question TEXT,payload TEXT,feedback TEXT);
-        CREATE TABLE IF NOT EXISTS field_settings(key TEXT PRIMARY KEY,required INTEGER,aliases TEXT,actor TEXT,at TEXT);
-        ''')
-        tcols = {r['name'] for r in c.execute('PRAGMA table_info(templates)')}
-        # Additive migration: versioned buyer templates (docs/EXCEL_UNDERSTANDING.md §6).
-        for col, ddl in (('buyer', "TEXT NOT NULL DEFAULT ''"), ('version', 'INTEGER NOT NULL DEFAULT 1'), ('family', 'TEXT'),
-                         ('anchors', 'TEXT'), ('unit', 'TEXT'), ('quantity_basis', 'TEXT')):
-            if col not in tcols:
-                c.execute(f'ALTER TABLE templates ADD COLUMN {col} {ddl}')
-        c.execute('UPDATE templates SET family=id WHERE family IS NULL')
-        cols = {r['name'] for r in c.execute('PRAGMA table_info(users)')}
-        # Additive migration: the original single account becomes the administrator.
-        if 'role' not in cols:
-            c.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
-        if 'active' not in cols:
-            c.execute('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1')
-        if 'created_at' not in cols:
-            c.execute('ALTER TABLE users ADD COLUMN created_at TEXT')
+    """Create or upgrade the local database to SCHEMA_VERSION. Returns the pre-migration backup path, if any."""
+    with closing(_connect()) as c:
+        c.execute('PRAGMA journal_mode=DELETE')
+        current = c.execute('PRAGMA user_version').fetchone()[0]
+        has_tables = c.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0] > 0
+    if current > SCHEMA_VERSION:
+        raise RuntimeError(f'This database was upgraded by a newer POPPYS AI (schema {current}; this version knows {SCHEMA_VERSION}). '
+                           'Start the newer version, or restore the backup made before that upgrade.')
+    if current == SCHEMA_VERSION:
+        return None
+    copy = backup_before_migration(current) if has_tables else None
+    for version, step in MIGRATIONS:
+        if version <= current:
+            continue
+        with closing(_connect()) as c:
+            c.isolation_level = None                  # explicit transaction: DDL and data change together or not at all
+            c.execute('BEGIN IMMEDIATE')
+            try:
+                if c.execute('PRAGMA user_version').fetchone()[0] < version:   # not already done by a concurrent start
+                    step(c)
+                    c.execute(f'PRAGMA user_version={version}')
+                c.execute('COMMIT')
+            except BaseException:
+                c.execute('ROLLBACK')
+                raise
+    return copy
 
 
-# --- audit -----------------------------------------------------------------
+def probe(timeout=2.0):
+    """For /readyz: the database opens, has the expected schema and accepts a write. Raises on any problem."""
+    with closing(_connect(timeout=timeout)) as c:
+        version = c.execute('PRAGMA user_version').fetchone()[0]
+        if version != SCHEMA_VERSION:
+            raise RuntimeError(f'schema {version}, expected {SCHEMA_VERSION}')
+        with c:
+            c.execute('INSERT INTO health_probe(id,at) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET at=excluded.at', (time.time(),))
+    return True
+
+
+# --- audit (append-only, hash-chained) ---------------------------------------
+def _audit_canonical(r):
+    return json.dumps([r['id'], r['at'], r['actor'], r['action'], r['target'], r['detail']],
+                      ensure_ascii=False, separators=(',', ':'))
+
+
+def _audit_hash(prev, r):
+    return hashlib.sha256((prev + '\n' + _audit_canonical(r)).encode('utf-8')).hexdigest()
+
+
 def audit(actor, action, target=None, **detail):
     with db() as c:
-        c.execute('INSERT INTO audit(at,actor,action,target,detail) VALUES (?,?,?,?,?)',
-                  (now(), actor, action, target, json.dumps(detail, ensure_ascii=False, default=str)))
+        c.execute('BEGIN IMMEDIATE')      # one writer at a time, so two events never chain to the same row
+        last = c.execute('SELECT id,hash FROM audit ORDER BY id DESC LIMIT 1').fetchone()
+        row = dict(id=(last['id'] if last else 0) + 1, at=now(), actor=actor, action=action, target=target,
+                   detail=json.dumps(detail, ensure_ascii=False, default=str))
+        prev = (last['hash'] if last else None) or GENESIS
+        c.execute('INSERT INTO audit(id,at,actor,action,target,detail,prev_hash,hash) VALUES (?,?,?,?,?,?,?,?)',
+                  (row['id'], row['at'], actor, action, target, row['detail'], prev, _audit_hash(prev, row)))
+
+
+def verify_audit_chain():
+    """{ok, rows, head, problem?, row?}: every row links to the one before and still has its own hash, and the
+    append-only triggers are in place."""
+    with closing(_connect()) as c:
+        triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='audit'")}
+        missing = {'audit_no_update', 'audit_no_delete'} - triggers
+        prev = GENESIS; n = 0; last_id = 0
+        for r in c.execute('SELECT * FROM audit ORDER BY id'):
+            if r['prev_hash'] != prev:
+                return dict(ok=False, rows=n, row=r['id'], problem='This entry does not follow the one before it: an entry was removed or inserted.')
+            if _audit_hash(prev, r) != r['hash']:
+                return dict(ok=False, rows=n, row=r['id'], problem='This entry was changed after it was written.')
+            prev = r['hash']; n += 1; last_id = r['id']
+    if missing:
+        return dict(ok=False, rows=n, row=None, problem='The protection that keeps the audit history append-only was removed.')
+    return dict(ok=True, rows=n, head=prev, last_id=last_id)
+
+
+def audit_tamper_for_tests(sql, params=()):
+    """Only for tests: run one statement with the append-only triggers dropped (and put them back), to show
+    that verify_audit_chain() notices changes made behind the application's back."""
+    with closing(_connect()) as c:
+        c.isolation_level = None
+        c.execute('BEGIN IMMEDIATE')
+        c.execute('DROP TRIGGER audit_no_update'); c.execute('DROP TRIGGER audit_no_delete')
+        c.execute(sql, params)
+        _m3_audit_chain_triggers(c)
+        c.execute('COMMIT')
+
+
+def _m3_audit_chain_triggers(c):
+    c.execute("CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT,'audit log is append-only'); END")
+    c.execute("CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT,'audit log is append-only'); END")
+
+
+# --- sessions ------------------------------------------------------------------
+def session_create(token_hash, username, at, absolute, idle, drop=None):
+    """Store a new session; also removes the session the browser presented (drop) and every expired one."""
+    with db() as c:
+        if drop:
+            c.execute('DELETE FROM sessions WHERE token_hash=?', (drop,))
+        c.execute('DELETE FROM sessions WHERE expires<=? OR last_seen<=?', (at, at - idle))
+        c.execute('INSERT INTO sessions(token_hash,username,created,last_seen,expires) VALUES (?,?,?,?,?)',
+                  (token_hash, username, at, at, at + absolute))
+
+
+def session_user(token_hash, at, idle, touch_after=None):
+    """(username, role) for a live session of an active user, else None. An expired session is deleted.
+    touch_after: refresh last_seen when it is older than this many seconds (None: never)."""
+    with db() as c:
+        row = c.execute('''SELECT s.username,s.last_seen,s.expires,u.role FROM sessions s JOIN users u ON u.username=s.username
+                           WHERE s.token_hash=? AND u.active=1''', (token_hash,)).fetchone()
+        if not row:
+            return None
+        if row['expires'] <= at or row['last_seen'] + idle <= at:
+            c.execute('DELETE FROM sessions WHERE token_hash=?', (token_hash,))
+            return None
+        if touch_after is not None and at - row['last_seen'] >= touch_after:
+            c.execute('UPDATE sessions SET last_seen=? WHERE token_hash=?', (at, token_hash))
+        return row['username'], row['role']
+
+
+def session_delete(token_hash):
+    """Returns the username whose session it was (or None)."""
+    with db() as c:
+        row = c.execute('SELECT username FROM sessions WHERE token_hash=?', (token_hash,)).fetchone()
+        c.execute('DELETE FROM sessions WHERE token_hash=?', (token_hash,))
+        return row['username'] if row else None
+
+
+def sessions_end_for(username):
+    with db() as c:
+        return c.execute('DELETE FROM sessions WHERE username=?', (username,)).rowcount
+
+
+def sessions_end_all(keep=None):
+    with db() as c:
+        return c.execute('DELETE FROM sessions WHERE token_hash<>?', (keep or '',)).rowcount
+
+
+# --- sign-in failures and locks --------------------------------------------------------
+def login_reserve(username, ip, at, window, wait_for):
+    """In one write transaction: refuse the attempt -> (seconds, 'locked' | 'throttled', None), or record it as
+    a failure in advance -> (0, None, row id). Recording first means attempts made at the same moment cannot
+    all slip past the limit; a successful sign-in removes the row again (login_succeeded)."""
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        c.execute('DELETE FROM auth_failures WHERE at<?', (at - 86400,))
+        lock = c.execute('SELECT until FROM auth_locks WHERE username=?', (username,)).fetchone()
+        if lock and lock['until'] > at:
+            return max(1, int(lock['until'] - at + 0.999)), 'locked', None
+        if lock:
+            c.execute('DELETE FROM auth_locks WHERE username=?', (username,))
+        u = c.execute('SELECT count(*),max(at) FROM auth_failures WHERE username=? AND at>?', (username, at - window)).fetchone()
+        i = c.execute('SELECT count(*),max(at) FROM auth_failures WHERE ip=? AND at>?', (ip, at - window)).fetchone()
+        wait = max(wait_for(u[0], u[1], at), wait_for(i[0], i[1], at))
+        if wait > 0:
+            return wait, 'throttled', None
+        cur = c.execute('INSERT INTO auth_failures(username,ip,at) VALUES (?,?,?)', (username, ip, at))
+        return 0, None, cur.lastrowid
+
+
+def login_failed(username, at, window, lock_after, lock_seconds):
+    """The reserved failure stays. Returns the lock end time when this failure locked the username, else None."""
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        n = c.execute('SELECT count(*) FROM auth_failures WHERE username=? AND at>?', (username, at - window)).fetchone()[0]
+        if n >= lock_after:
+            until = at + lock_seconds
+            c.execute('INSERT INTO auth_locks(username,until,at,failures) VALUES (?,?,?,?) ON CONFLICT(username) DO UPDATE SET '
+                      'until=excluded.until,at=excluded.at,failures=excluded.failures', (username, until, now(), n))
+            return until
+    return None
+
+
+def login_succeeded(username, reserved_id):
+    with db() as c:
+        c.execute('DELETE FROM auth_failures WHERE id=? OR username=?', (reserved_id, username))
+
+
+def unlock(username):
+    """Returns True when the username was locked."""
+    with db() as c:
+        was = c.execute('DELETE FROM auth_locks WHERE username=? AND until>?', (username, time.time())).rowcount
+        c.execute('DELETE FROM auth_locks WHERE username=?', (username,))
+        c.execute('DELETE FROM auth_failures WHERE username=?', (username,))
+        return bool(was)
+
+
+def locks(at=None):
+    """{username (lower case): lock end time} for locks still in force."""
+    with db() as c:
+        return {r['username']: r['until'] for r in c.execute('SELECT username,until FROM auth_locks WHERE until>?', (at or time.time(),))}
 
 
 def audit_events(limit=200, target=None):

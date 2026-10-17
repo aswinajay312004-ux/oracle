@@ -1,13 +1,20 @@
 """The flowchart (frontend/js/graph.js) driven in a real browser: drag versus click, a press released outside
 the diagram, keyboard focus after ＋, the zoom readout, and the diagram toolbar never covering app chrome.
+Then a smoke run of the real app's screens under the strict Content-Security-Policy.
 
 A tiny static server serves the real frontend files with the app's Content-Security-Policy, plus a harness
-page shaped like Ask AI (an answer with a diagram, then the sticky composer). Skipped when Playwright or a
-Chromium for it is not installed (set POPPYS_CHROMIUM to a chrome executable to use a specific one)."""
+page shaped like Ask AI (an answer with a diagram, then the sticky composer). The smoke run starts
+tests/demo_server.py (the app on a stand-in Oracle). Every page fails its test on a CSP violation or a console
+error. Skipped when Playwright or a Chromium for it is not installed (set POPPYS_CHROMIUM to a chrome
+executable to use a specific one)."""
 import glob
 import os
+import socket
+import subprocess
+import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,22 +23,30 @@ import pytest
 
 sync_api = pytest.importorskip('playwright.sync_api')
 
-FRONTEND = Path(__file__).resolve().parents[1] / 'frontend'
-# the app's policy (backend/main.py): no inline script, no eval, nothing from other sites
-CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; "
-       "connect-src 'self'; font-src 'self'; frame-ancestors 'none'")
+TESTS = Path(__file__).resolve().parent
+FRONTEND = TESTS.parent / 'frontend'
+# the app's policy (backend/security.py): no inline script or style ('unsafe-inline' nowhere), no eval,
+# nothing from other sites
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+       "font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 TYPES = {'.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml',
          '.png': 'image/png', '.woff2': 'font/woff2', '.json': 'application/json'}
 HARNESS = b'''<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Flowchart harness</title>
-<link rel="stylesheet" href="/static/styles.css"><script type="module" src="/harness.js"></script></head>
-<body style="margin:0"><main style="width:1100px;padding:16px">
-  <div class="thread"><div style="height:900px"></div><div class="flow-wrap" id="g"></div><div style="height:1400px"></div></div>
+<link rel="stylesheet" href="/static/styles.css"><link rel="stylesheet" href="/harness.css"><script type="module" src="/harness.js"></script></head>
+<body class="harness"><main>
+  <div class="thread"><div class="above"></div><div class="flow-wrap" id="g"></div><div class="below"></div></div>
   <div class="composer"><form id="chat-form"><textarea rows="1" aria-label="Question"></textarea>
     <button class="primary" type="submit" id="ask">Ask</button></form></div>
 </main></body></html>'''
+HARNESS_CSS = b'''body.harness { margin: 0; } body.harness > main { width: 1100px; padding: 16px; }
+.harness .above { height: 900px; } .harness .below { height: 1400px; }'''
 HARNESS_JS = b'''import { renderGraph } from '/static/js/graph.js';
 document.addEventListener('submit', e => { e.preventDefault(); window.asked = (window.asked || 0) + 1; });
 window.renderGraph = renderGraph; window.harnessReady = true;'''
+# Every blocked inline style (or script) fires securitypolicyviolation; collected for the assertions below.
+WATCH_CSP = '''window.__csp = [];
+document.addEventListener('securitypolicyviolation', e => window.__csp.push(
+  `${e.effectiveDirective} blocked ${e.blockedURI || 'inline'} at ${e.sourceFile || ''}:${e.lineNumber}`), true);'''
 MODEL = {'nodes': [{'id': 'A', 'title': 'Order', 'code': 'ORDMAS', 'kind': 'header', 'base': True},
                    {'id': 'B', 'title': 'Order line', 'code': 'ORDSTYLE'},
                    {'id': 'C', 'title': 'Size quantity', 'code': 'ORDSIZE'}],
@@ -49,6 +64,8 @@ class Handler(BaseHTTPRequestHandler):
             body, kind = HARNESS, 'text/html'
         elif path == '/harness.js':
             body, kind = HARNESS_JS, 'text/javascript'
+        elif path == '/harness.css':
+            body, kind = HARNESS_CSS, 'text/css'
         else:
             f = (FRONTEND / path.removeprefix('/static/')).resolve()
             if not path.startswith('/static/') or FRONTEND not in f.parents or not f.is_file():
@@ -99,22 +116,35 @@ def site():
     server.shutdown(); server.server_close()
 
 
+def watched(browser, **kw):
+    """A page whose console errors, page errors and CSP violations are collected in page.problems."""
+    pg = browser.new_page(**kw)
+    pg.problems = []
+    pg.add_init_script(WATCH_CSP)
+    pg.on('console', lambda m: m.type == 'error' and pg.problems.append(m.text))
+    pg.on('pageerror', lambda e: pg.problems.append(str(e)))
+    return pg
+
+
+def csp_violations(pg):
+    return pg.evaluate('() => window.__csp || []')
+
+
 @pytest.fixture
 def page(browser, site):
-    pg = browser.new_page(viewport={'width': 1200, 'height': 700})
-    problems = []
-    pg.on('console', lambda m: m.type == 'error' and problems.append(m.text))
-    pg.on('pageerror', lambda e: problems.append(str(e)))
+    pg = watched(browser, viewport={'width': 1200, 'height': 700})
     pg.goto(site + '/')
     for _ in range(100):   # CSP blocks string-built wait_for_function, so poll instead
         if pg.evaluate('() => window.harnessReady === true'):
             break
         time.sleep(0.05)
     else:
-        pytest.fail(f'harness did not load: {problems}')
+        pytest.fail(f'harness did not load: {pg.problems}')
     yield pg
+    violations = csp_violations(pg)
     pg.close()
-    assert not problems, problems
+    assert not violations, violations
+    assert not pg.problems, pg.problems
 
 
 def render(page, expand=False):
@@ -203,3 +233,100 @@ def test_the_zoom_readout_changes_once_per_zoom_and_never_during_a_drag(page):
     page.mouse.move(svg['x'] + 30, svg['y'] + 30); page.mouse.down(); page.mouse.move(svg['x'] + 130, svg['y'] + 60, steps=20); page.mouse.up()
     page.wait_for_timeout(600)
     assert page.evaluate('() => [changes, said.length]') == [0, 0]
+
+
+# ---- the real app under the strict policy ------------------------------------------------------------------------
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture(scope='module')
+def app_site(tmp_path_factory):
+    """tests/demo_server.py (the app on a stand-in Oracle with SQLite demo data) in its own process."""
+    port, log = free_port(), tmp_path_factory.mktemp('demo-server') / 'server.log'
+    with log.open('w') as out:
+        proc = subprocess.Popen([sys.executable, str(TESTS / 'demo_server.py'), str(port)], cwd=TESTS.parent,
+                                env=dict(os.environ, POPPYS_INLINE_PARSE='1'), stdout=out, stderr=subprocess.STDOUT)
+    base = f'http://127.0.0.1:{port}'
+    try:
+        for _ in range(600):
+            if proc.poll() is not None:
+                pytest.fail(f'the demo server exited: {log.read_text()[-2000:]}')
+            try:
+                urllib.request.urlopen(base + '/api/session', timeout=2).read()
+                break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            pytest.fail('the demo server did not start')
+        yield base
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill(); proc.wait()
+
+
+def until(check, timeout=30):
+    end = time.time() + timeout
+    while time.time() < end:
+        if check():
+            return
+        time.sleep(0.1)
+    raise AssertionError('timed out')
+
+
+def style(pg, selector, prop):
+    return pg.evaluate('([s, p]) => getComputedStyle(document.querySelector(s)).getPropertyValue(p)', [selector, prop])
+
+
+def test_app_screens_under_the_strict_policy(browser, app_site, tmp_path):
+    """Set-up, upload, reading the file, review, Ask AI with its flowchart, Database and Setup under style-src 'self':
+    no CSP violation, no console error, and looks that used to be inline styles still apply (classes now, or values
+    set through the CSSOM)."""
+    from fixtures import merch_bom
+    pg = watched(browser, viewport={'width': 1440, 'height': 900})
+    pg.set_default_timeout(60000)
+    # the page runs under exactly this policy, whatever the server sends
+    pg.route(app_site + '/', lambda route: route.fulfill(response=(r := route.fetch()), headers={**r.headers, 'content-security-policy': CSP}))
+    try:
+        pg.goto(app_site + '/'); pg.wait_for_selector('#auth-submit')
+        until(lambda: 'administrator' in pg.inner_text('#auth-submit').lower())   # a new workspace: create the administrator
+        assert style(pg, '.auth-art .brand-text strong', 'font-size') == '18px'
+        pg.fill('#auth-user', 'admin'); pg.fill('#auth-pass', 'smoke-test-password'); pg.click('#auth-submit')
+        pg.wait_for_selector('#auth', state='hidden')
+        assert style(pg, '#stage-upload > section.card', 'margin-top') == '16px'
+
+        f = tmp_path / 'merch_bom.xlsx'; f.write_bytes(merch_bom())
+        pg.set_input_files('#file-input', str(f)); pg.wait_for_selector('#go-review', state='visible')
+        delays = pg.evaluate("() => [...document.querySelectorAll('#read-steps li')].map(li => getComputedStyle(li).animationDelay)")
+        assert delays[:3] == ['0s', '0.08s', '0.16s'], delays            # the steps still rise in one after another
+        assert style(pg, '#read-actions', 'justify-content') == 'flex-end'
+        pg.click('#go-review'); pg.wait_for_selector('#stage-review .matrix')
+        assert style(pg, '#stage-review .matrix thead .req', 'color') == 'rgb(212, 42, 42)'   # the red * of a required column
+        assert style(pg, '#stage-review .screen', 'margin-bottom') == '14px'
+        pg.click('[data-tab="fabric"]'); pg.wait_for_selector('.fabric-table')
+        assert style(pg, '.fabric-table input.w-76', 'width') == '76px'
+
+        pg.click('.nav [data-view="chat"]'); pg.wait_for_selector('#welcome')
+        assert style(pg, '#welcome .welcome-lead', 'max-width') == '560px'
+        pg.fill('#chat-input', 'Size wise quantity for order PK/26-27/S/9001'); pg.keyboard.press('Enter')
+        pg.wait_for_selector('#thread .answer .gsvg')
+        assert style(pg, '#thread .legend i.sw-brand', 'background-color') == 'rgb(15, 107, 98)'
+        until(lambda: pg.evaluate("() => document.querySelector('#thread .gsvg').style.height.endsWith('px')"))   # sized through the CSSOM
+
+        pg.click('.nav [data-view="explorer"]'); pg.wait_for_selector('#table-view tr[data-row]')
+        assert style(pg, '#table-view .ex-head > div', 'flex-grow') == '1'
+        pg.click('[data-xtab="links"]'); pg.wait_for_selector('#table-view .gsvg')
+        assert style(pg, '#table-view .flow-wrap', 'min-height') == '240px'
+
+        pg.click('.nav [data-view="admin"]'); pg.wait_for_selector('#admin-body .card')
+        pg.click('[data-admin="dictionary"]'); pg.wait_for_selector('#dict-list .tl-item')
+        assert style(pg, '#dict-list', 'max-height') == '560px' and style(pg, '#rel-filter', 'width') == '220px'
+        assert csp_violations(pg) == []
+        assert pg.problems == []
+    finally:
+        pg.close()

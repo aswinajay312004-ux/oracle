@@ -176,7 +176,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
         return '$' + key
 
 
-    def master(role, label, where, provenance=None, path=None, required=True):
+    def master(role, label, where, provenance=None, path=None, required=True, field_path=None):
         spec = mapping['masters'][role]
         label = ' '.join(str(label or '').strip().split())
         if not label:
@@ -210,7 +210,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
         else:
             if table not in insertable:
                 issues.error(f'{where}: new {role} "{label}" needs INSERT permission on {table}.', path)
-            val = add(key, table, {pk: '$' + key, col: label}, provenance=provenance, where=where)
+            val = add(key, table, {pk: '$' + key, col: label}, provenance=provenance, where=where, path=field_path)
         known[code] = val
         return val
 
@@ -232,7 +232,9 @@ def plan(catalog, orders, filehash, mapping, required=()):
                     if c.get('optional') and (value is None or str(value).strip() == ''):
                         continue
                     src = (provenance or {}).get(c.get('field', '').partition('.')[2]) if provenance else None
-                    value = master(c['master'], value, where, src, path, c.get('required', True))
+                    scope, _, name = c.get('field', '').partition('.')
+                    value = master(c['master'], value, where, src, path, c.get('required', True),
+                                   field_path=f'{path}.{name}' if path and name and scope != 'calc' else path)
                 elif c.get('optional') and (value is None or str(value).strip() == ''):
                     continue
             values[col] = plain(value)
@@ -538,6 +540,56 @@ def _plan_accessories(o, octx, keys, ops, subnos, order_pieces, prefix, base, or
                     ', '.join(f'“{a}” → “{b}”' for a, b in sorted(aligned)) + '.', base + '.accessories')
 
 
+# Formula / DDE injection (OWASP "CSV Injection"; docs/RESEARCH_DECISIONS.md, "Sniffing & safety"): text saved to
+# Oracle can later be exported to Excel, where a value starting with = + - @ (or their full-width forms, which
+# Excel also accepts), TAB, CR or LF may run as a formula. Such values are never evaluated here; they are flagged
+# on their field. Values that are plain numbers (-5, +91.5, -1,200) and runs of dashes ("-", "---") are not
+# formulas. Payloads that reach outside the workbook (DDE "cmd|", =HYPERLINK, =WEBSERVICE, =IMPORTXML...) are
+# errors: no buyer file needs them in an order field.
+FORMULA_START = ('=', '+', '-', '@', '\t', '\r', '\n', '＝', '＋', '－', '＠')
+_FORMULA_NUMBER = re.compile(r'^[+\-－＋]?\s*(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?(?:[eE][+-]?\d+)?%?$')
+_DDE = re.compile(r'(?i)(?:\b(?:cmd|msexcel|powershell|pwsh|mshta|rundll32|regsvr32|wscript|cscript)\s*\|'
+                  r'|[=+\-@＝＋－＠]\s*(?:HYPERLINK|WEBSERVICE|IMPORTXML|IMPORTDATA|IMPORTHTML|IMPORTFEED|IMPORTRANGE|FILTERXML|CALL|REGISTER(?:\.ID)?|EXEC|DDE(?:AUTO)?)\s*\('
+                  r'|\bDDE(?:AUTO)?\s*\(|\bDDEAUTO\b|\{\s*DDE(?:AUTO)?\b)')   # DDE("cmd";...), Word's {DDEAUTO ...} field
+
+
+def formula_risk(value):
+    """None, 'warning' (looks like a spreadsheet formula) or 'error' (a DDE / external-call payload)."""
+    if not isinstance(value, str) or not value:
+        return None
+    if _DDE.search(value):
+        return 'error'
+    if not value.startswith(FORMULA_START):
+        return None
+    text = value.strip()
+    if not text or set(text) <= set('-－ ') or (any(ch.isdigit() for ch in text) and _FORMULA_NUMBER.match(text)):
+        return None
+    return 'warning'
+
+
+def _check_formulas(op, vals, tables, registry, issues):
+    for col, value in vals.items():
+        meta = registry.get(op['table'], {}).get(col)
+        if not meta or meta['type'] not in ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR', 'VARCHAR', 'CLOB') or not isinstance(value, str) \
+                or value.startswith('$'):
+            continue
+        risk = formula_risk(value)
+        if not risk:
+            continue
+        field = (tables.get(op['table'], {}).get('columns', {}).get(col) or {}).get('field', '')
+        scope, _, name = field.partition('.')
+        # an order-table column: its field under the row's path; a new master record: its path is already the field's
+        path = f'{op["path"]}.{name}' if op.get('path') and scope != 'calc' and name else op.get('path')
+        where = op['where'] or op['table']
+        shown = value.strip()[:40].replace('\t', ' ').replace('\r', ' ').replace('\n', ' ')
+        if risk == 'error':
+            issues.error(f'{where}: “{shown}” looks like a spreadsheet command (DDE or external formula) and cannot be saved to '
+                         f'{op["table"]}.{col}. Nothing was run; retype the value as plain text.', path)
+        else:
+            issues.warn(f'{where}: “{shown}” starts with “{value[:1].strip() or "a tab or line break"}”, so Excel could treat it as a '
+                        f'formula when {op["table"]}.{col} is exported later. It is saved as text, never calculated; check it is meant.', path)
+
+
 def _check_columns(operations, registry, issues, tables):
     # Fail closed against actual Oracle lengths/precision/scale/nullability rather than silently truncate.
     too_long = {}
@@ -548,6 +600,7 @@ def _check_columns(operations, registry, issues, tables):
         if table not in registry:
             issues.error(f'{table}: table absent in live database.')
             continue
+        _check_formulas(op, vals, tables, registry, issues)
         for col, meta in registry[table].items():
             if meta['nullable'] == 'N' and vals.get(col) is None:
                 issues.error(f'{table}.{col}: mandatory database value missing.')

@@ -35,6 +35,23 @@ Set-ExecutionPolicy -Scope Process Bypass
 3. Runs `scripts\grant_bom_tables.py`. This grants `POPPYS_APP` read access to all GARMENT_DEMO tables (for the Database screen and read-back) and INSERT on `ORDFAB`, `ORDYARN` and `ORDACC`. The app still writes these only after you verify their mapping.
 4. Runs `scripts\check_oracle.py`, which prints what the app can see and write.
 
+### Optional: a read-only account for the reading pages
+
+The Database screen, Ask AI, Saved orders (history) and the read-back flowchart only read. You can give them their own Oracle account, `POPPYS_RO`, which can read but never insert, update or delete. Then even a mistake on those pages cannot change data. Saving orders still uses `POPPYS_APP`.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\create_readonly_user.py
+.\.venv\Scripts\python.exe scripts\check_oracle.py
+```
+
+- The script creates `POPPYS_RO` with a generated password and adds `ORACLE_RO_USER` and `ORACLE_RO_PASSWORD` to `.env.poppys`. The password is never printed.
+- `POPPYS_RO` gets `CREATE SESSION` plus `READ` on the GARMENT_DEMO tables `POPPYS_APP` can read, and on `PP_IMPORT_LOG`. `READ` is like `SELECT` but cannot lock rows. On Oracle 23ai it is also made a READ ONLY user, so Oracle refuses any write by it.
+- It never resets an existing user or password. Run it again after `grant_bom_tables.py` to give `POPPYS_RO` the same tables.
+- If your container is not called `oracle26ai`, set `$env:POPPYS_ORACLE_CONTAINER='<name>'` first.
+- Restart POPPYS AI (`.\start.ps1`) to use it. `check_oracle.py` then confirms that `POPPYS_APP` cannot update or delete, and that `POPPYS_RO` can only read.
+
+Without `POPPYS_RO`, the reading pages use `POPPYS_APP`, as before.
+
 ## 3. Discover your real schema (read-only)
 
 ```powershell
@@ -147,6 +164,8 @@ $env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q tests\test_
 | "Local Oracle configuration is missing" | Run `.\setup.ps1` (creates `.env.poppys`) |
 | "POPPYS_APP already exists. Restore its .env.poppys" | The account was created before but the config file is gone. Copy the old `.env.poppys` back. The password is never reset automatically |
 | "POPPYS AI has no INSERT permission" | Run `.\.venv\Scripts\python.exe scripts\grant_bom_tables.py` |
+| "All 4 Oracle connections of POPPYS AI are in use" | Other requests are using every connection. Wait a moment and try again. If it keeps happening, a long question or report may be running: check the app log |
+| "POPPYS_RO already exists, but .env.poppys has no ORACLE_RO_PASSWORD" | Copy the `ORACLE_RO_*` lines from the old `.env.poppys` back. The password is never reset automatically |
 | "formula cells have no calculated value" | Open the workbook in Excel, save, upload again |
 | "This exact workbook has already been committed" | Duplicate protection: that file was saved before. See **Saved orders** |
 | Ask AI says "Oracle is not connected" | Start Oracle; questions about uploaded files still work offline |

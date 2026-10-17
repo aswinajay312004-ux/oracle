@@ -1,22 +1,29 @@
 from __future__ import annotations
-from contextlib import asynccontextmanager, contextmanager
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from contextlib import asynccontextmanager, closing, contextmanager
 from datetime import datetime
 import hashlib
-import hmac
 import json
 import os
+from pathlib import Path
+import platform
 import re
-import secrets
+import shutil
+import sqlite3
 import threading
 import time
 import uuid
 from fastapi import FastAPI, UploadFile, File, Request, Response, HTTPException, Depends, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
 from . import local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
+from . import logs, security
 from .config import DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
@@ -26,7 +33,6 @@ from .insight import engine, understand
 from .insight.query import Dialect, QueryError, compile_intent
 
 LOCK = threading.RLock()
-ATTEMPTS = {}
 RANK = {'viewer': 0, 'operator': 1, 'approver': 2, 'admin': 3}
 PERMISSIONS = {
     'viewer': ['view'],
@@ -37,62 +43,125 @@ PERMISSIONS = {
 DEFAULT_SETTINGS = dict(allow_self_approval=True, company_exporter='POPPYS KNITWEAR PRIVATE LIMITED', default_sample_type='DEVELOPMENT SAMPLE')
 
 
+def log_dir():
+    """DATA/logs (POPPYS_LOG_DIR overrides). store.DATA is the data folder in use (tests point it elsewhere)."""
+    return Path(os.environ.get('POPPYS_LOG_DIR') or Path(store.DATA) / 'logs')
+
+
 @asynccontextmanager
 async def lifespan(app):
-    store.init()
+    logs.add_secret(setting('ORACLE_PASSWORD'))
+    logs.setup(log_dir())
+    try:
+        copy = store.init()
+    except Exception as exc:
+        logs.app.critical('startup_failed', exc_info=exc, extra={'fields': {'event': 'startup_failed'}})
+        logs.flush()
+        raise
+    logs.event('startup', version=security.app_version(), environment=security.environment(), schema=store.SCHEMA_VERSION,
+               pre_migration_backup=copy and copy.name, cookie_secure=security.cookie_secure())
     start_value_index()   # background: the server answers at once, the first question does not pay for the build
     yield
+    close = getattr(oracle, 'close_pool', None)      # Oracle connection pools (backend/oracle_store.py), when present
+    if close:
+        try:
+            close()
+        except Exception as exc:
+            logs.event('shutdown_pool_error', 30, error=type(exc).__name__)
+    logs.event('shutdown')
+    logs.flush()
 
-app = FastAPI(title='POPPYS AI — Order entry automation', lifespan=lifespan)
+
+_DOCS = {} if not security.production() else dict(docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title='POPPYS AI — Order entry automation', lifespan=lifespan, **_DOCS)
+# Starlette runs the last one added first: request ID, headers and the last-resort 500 handler wrap everything,
+# then the Host check, then the CSRF check, then the body limit right in front of the routes.
+app.add_middleware(security.BodyLimitMiddleware)
+app.add_middleware(security.CSRFMiddleware)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
+app.add_middleware(security.RequestContextMiddleware)
 
 
-@app.middleware('http')
-async def protect(request, call_next):
-    if int(request.headers.get('content-length', '0') or 0) > 14 * 1024 * 1024:
-        return JSONResponse({'detail': 'Request exceeds 14 MB.'}, status_code=413)
-    if request.method not in ('GET', 'HEAD', 'OPTIONS'):
-        origin = request.headers.get('origin')
-        if origin and origin != str(request.base_url).rstrip('/'):
-            return JSONResponse({'detail': 'Cross-origin changes are not permitted.'}, status_code=403)
-    response = await call_next(request)
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['Referrer-Policy'] = 'same-origin'
-    response.headers['Cache-Control'] = 'no-store'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'"
-    return response
+# --- error answers -------------------------------------------------------------------------------------------------
+# Our own ValueError / RuntimeError / readers.Unsupported messages are written for the people using the app and are
+# shown (without file paths or configured secrets). The same exception types raised inside a library (json,
+# pydantic, sqlite3, openpyxl...) are unexpected: the person gets the generic 500 answer with a reference, and the
+# traceback goes to the log only.
+def _error(status, detail, **extra):
+    if isinstance(detail, str):
+        detail = security.safe_text(detail)
+    return JSONResponse({'detail': detail, **extra, 'request_id': logs.request_id()}, status_code=status)
+
+
+def _user_facing(exc, status, request):
+    if isinstance(exc, (RecursionError, NotImplementedError)) or not security.raised_by_our_code(exc):
+        security.log_unexpected(exc, f'{request.method} {request.url.path}')
+        return security.problem(500)
+    return _error(status, str(exc) or 'The request could not be completed.')
 
 
 @app.exception_handler(readers.Unsupported)
-async def unsupported(request, exc): return JSONResponse({'detail': str(exc)}, status_code=415)
+async def unsupported(request, exc): return _user_facing(exc, 415, request)
 
 
 @app.exception_handler(ValueError)
-async def bad_value(request, exc): return JSONResponse({'detail': str(exc)}, status_code=409)
+async def bad_value(request, exc): return _user_facing(exc, 409, request)
+
+
+@app.exception_handler(RuntimeError)
+async def runtime_error(request, exc): return _user_facing(exc, 503, request)
 
 
 @app.exception_handler(KeyError)
-async def missing(request, exc): return JSONResponse({'detail': 'Not found. Reload and try again.'}, status_code=404)
+async def missing(request, exc): return _error(404, 'Not found. Reload and try again.')
 
 
 @app.exception_handler(oracledb.Error)
 async def db_error(request, exc):
     code = getattr(exc.args[0], 'full_code', 'Oracle error') if exc.args else 'Oracle error'
-    return JSONResponse({'detail': f'Oracle could not complete the request ({code}). Nothing was partially saved. Check the database connection, then refresh the preview.'}, status_code=503)
+    logs.event('oracle_error', 30, code=str(code), path=request.url.path)
+    return _error(503, f'Oracle could not complete the request ({code}). Nothing was partially saved. Check the database connection, then refresh the preview.')
 
 
-@app.exception_handler(RuntimeError)
-async def runtime_error(request, exc): return JSONResponse({'detail': str(exc)}, status_code=503)
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request, exc):
+    headers = getattr(exc, 'headers', None)
+    if exc.status_code == 413:      # the streamed body passed the limit (BodyLimitMiddleware)
+        limit = security.body_limit(request.scope)
+        logs.security_event('body_too_large', 30, method=request.method, path=request.url.path, limit=limit)
+        return _error(413, security.too_large_message(limit))
+    if exc.status_code in (204, 304) or exc.status_code < 200:
+        return Response(status_code=exc.status_code, headers=headers)
+    response = _error(exc.status_code, exc.detail)
+    if headers:
+        response.headers.update(headers)
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request, exc):
+    """422 without 'input' and 'ctx' (they echo what was sent, a password included) or documentation links."""
+    errors = [{k: v for k, v in e.items() if k not in ('input', 'ctx', 'url')} for e in exc.errors()]
+    return _error(422, jsonable_encoder(errors))
 
 
 # --- authentication & roles ------------------------------------------------------
-def _user(request):
-    token = request.cookies.get('poppys_session', '')
-    with store.db() as c:
-        row = c.execute('''SELECT u.username,u.role FROM sessions s JOIN users u ON u.username=s.username
-            WHERE s.token_hash=? AND s.expires>? AND u.active=1''', (hashlib.sha256(token.encode()).hexdigest(), time.time())).fetchone()
-    return dict(username=row['username'], role=row['role']) if row else None
+def _client(request):
+    return (request.client.host if request.client else '') or 'local'
+
+
+def _user(request, touch=True):
+    token = request.cookies.get(security.COOKIE, '')
+    if not token:
+        return None
+    passive = (request.method, request.url.path) in security.PASSIVE
+    found = store.session_user(security.token_hash(token), time.time(), security.IDLE_SECONDS,
+                               None if passive or not touch else security.TOUCH_SECONDS)
+    if not found:
+        return None
+    request.state.user = found[0]
+    logs.set_user(found[0])
+    return dict(username=found[0], role=found[1])
 
 
 def authenticated(request: Request):
@@ -110,20 +179,36 @@ def require(permission):
     return check
 
 
-def issue(response, username):
-    token = secrets.token_urlsafe(32)
-    with store.db() as c:
-        c.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
-        c.execute('INSERT INTO sessions VALUES (?,?,?)', (hashlib.sha256(token.encode()).hexdigest(), username, time.time() + 28800))
-    response.set_cookie('poppys_session', token, httponly=True, samesite='strict', max_age=28800)
+def issue(request, response, username):
+    """A new session for username. The session the browser presented (if any) ends: a sign-in never reuses it."""
+    token = security.new_token()
+    presented = request.cookies.get(security.COOKIE)
+    store.session_create(security.token_hash(token), username, time.time(), security.ABSOLUTE_SECONDS, security.IDLE_SECONDS,
+                         drop=security.token_hash(presented) if presented else None)
+    response.set_cookie(security.COOKIE, token, max_age=security.ABSOLUTE_SECONDS, **security.cookie_options())
+    request.state.user = username
+    logs.set_user(username)
+
+
+USERNAME = Field(min_length=2, max_length=50, pattern=r'^[A-Za-z0-9._@-]+$')
 
 
 class Credentials(BaseModel):
-    username: str = Field(min_length=2, max_length=50, pattern=r'^[A-Za-z0-9._@-]+$')
-    password: str = Field(min_length=10, max_length=256)
+    """A new password (setup, new user): the policy in security.password_problem applies on top of these limits."""
+    username: str = USERNAME
+    password: str = Field(min_length=1, max_length=security.MAX_LENGTH)
 
 
-def password_hash(password, salt): return hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(salt), 300000).hex()
+class Login(BaseModel):
+    """Signing in checks no password rules: any wrong password gets the same 401 as an unknown username."""
+    username: str = USERNAME
+    password: str = Field(min_length=1, max_length=security.MAX_LENGTH)
+
+
+def _check_new_password(password, username):
+    problem = security.password_problem(password, username)
+    if problem:
+        raise HTTPException(422, problem)
 
 
 def settings():
@@ -140,40 +225,57 @@ def who(request: Request):
 
 
 @app.post('/api/setup')
-def setup(data: Credentials, response: Response):
+def setup(data: Credentials, request: Request, response: Response):
+    _check_new_password(data.password, data.username)
     with LOCK, store.db() as c:
         if c.execute('SELECT 1 FROM users').fetchone():
             raise HTTPException(409, 'Setup is already complete. Sign in.')
-        salt = secrets.token_hex(16)
+        salt, hashed = security.hash_password(data.password)
         c.execute('INSERT INTO users(username,salt,password_hash,role,active,created_at) VALUES (?,?,?,?,1,?)',
-                  (data.username, salt, password_hash(data.password, salt), 'admin', store.now()))
+                  (data.username, salt, hashed, 'admin', store.now()))
     store.audit(data.username, 'setup', 'workspace', role='admin')
-    issue(response, data.username); return dict(authenticated=True, username=data.username, role='admin')
+    logs.security_event('setup', user=data.username)
+    issue(request, response, data.username); return dict(authenticated=True, username=data.username, role='admin')
 
 
 @app.post('/api/login')
-def login(data: Credentials, request: Request, response: Response):
-    host = request.client.host if request.client else 'local'
-    with LOCK:
-        ATTEMPTS[host] = [t for t in ATTEMPTS.get(host, []) if time.time() - t < 60]
-        if len(ATTEMPTS[host]) >= 10:
-            raise HTTPException(429, 'Wait a minute before trying again.')
-        ATTEMPTS[host].append(time.time())
+def login(data: Login, request: Request, response: Response):
+    key = data.username.lower(); ip = _client(request); started = time.time()
+    wait, reason, reserved = store.login_reserve(key, ip, started, security.WINDOW_SECONDS, security.wait_for)
+    if wait:
+        logs.security_event('login_locked' if reason == 'locked' else 'login_throttled', 30, user=data.username, retry_after=wait)
+        raise HTTPException(429, security.throttle_message(reason, wait), headers={'Retry-After': str(wait)})
     with store.db() as c:
         row = c.execute('SELECT * FROM users WHERE username=?', (data.username,)).fetchone()
-    calculated = password_hash(data.password, row['salt'] if row else '00' * 16)
-    if not row or not hmac.compare_digest(calculated, row['password_hash']) or not row['active']:
+    ok, rehash = security.verify_password(data.password, row['password_hash'] if row else security.DUMMY_HASH, row['salt'] if row else None)
+    if not row or not ok or not row['active']:
+        locked = store.login_failed(key, time.time(), security.WINDOW_SECONDS, security.LOCK_AFTER, security.LOCK_SECONDS)
         store.audit(data.username, 'login_failed', 'workspace')
-        raise HTTPException(401, 'Username or password is incorrect.')
-    store.audit(data.username, 'login', 'workspace')
-    issue(response, data.username); return dict(authenticated=True, username=data.username, role=row['role'])
+        logs.security_event('login_failed', 30, user=data.username)
+        if locked:
+            store.audit(data.username, 'login_locked', 'workspace', minutes=security.LOCK_SECONDS // 60, failures=security.LOCK_AFTER)
+            logs.security_event('login_locked', 30, user=data.username, minutes=security.LOCK_SECONDS // 60)
+        raise HTTPException(401, security.BAD_LOGIN)
+    store.login_succeeded(key, reserved)
+    if rehash:      # an older, cheaper hash: upgrade it now that the password is known
+        salt, hashed = security.hash_password(data.password)
+        with store.db() as c:
+            c.execute('UPDATE users SET salt=?,password_hash=? WHERE username=?', (salt, hashed, row['username']))
+        store.audit(row['username'], 'password_rehashed', row['username'], iterations=security.ITERATIONS)
+    store.audit(row['username'], 'login', 'workspace')
+    logs.security_event('login_ok', user=row['username'])
+    issue(request, response, row['username']); return dict(authenticated=True, username=row['username'], role=row['role'])
 
 
 @app.post('/api/logout')
 def logout(request: Request, response: Response):
-    with store.db() as c:
-        c.execute('DELETE FROM sessions WHERE token_hash=?', (hashlib.sha256(request.cookies.get('poppys_session', '').encode()).hexdigest(),))
-    response.delete_cookie('poppys_session'); return {'ok': True}
+    who = store.session_delete(security.token_hash(request.cookies.get(security.COOKIE, '')))
+    response.delete_cookie(security.COOKIE, **security.cookie_options())
+    response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage"'
+    if who:
+        store.audit(who, 'logout', 'workspace')
+        logs.security_event('logout', user=who)
+    return {'ok': True}
 
 
 class NewUser(Credentials):
@@ -183,30 +285,41 @@ class NewUser(Credentials):
 class UserChange(BaseModel):
     role: str | None = Field(default=None, pattern='^(admin|approver|operator|viewer)$')
     active: bool | None = None
-    password: str | None = Field(default=None, min_length=10, max_length=256)
+    password: str | None = Field(default=None, min_length=1, max_length=security.MAX_LENGTH)
+
+
+def _iso(ts):
+    return datetime.fromtimestamp(ts).astimezone().isoformat(timespec='seconds') if ts else None
 
 
 @app.get('/api/users')
 def users(user=Depends(require('users'))):
+    locked = store.locks()
     with store.db() as c:
-        return [dict(username=r['username'], role=r['role'], active=bool(r['active']), created_at=r['created_at'])
+        return [dict(username=r['username'], role=r['role'], active=bool(r['active']), created_at=r['created_at'],
+                     locked_until=_iso(locked.get(r['username'].lower())))
                 for r in c.execute('SELECT * FROM users ORDER BY username')]
 
 
 @app.post('/api/users')
 def add_user(data: NewUser, user=Depends(require('users'))):
+    _check_new_password(data.password, data.username)
     with LOCK, store.db() as c:
         if c.execute('SELECT 1 FROM users WHERE lower(username)=lower(?)', (data.username,)).fetchone():
             raise HTTPException(409, 'That username already exists.')
-        salt = secrets.token_hex(16)
+        salt, hashed = security.hash_password(data.password)
         c.execute('INSERT INTO users(username,salt,password_hash,role,active,created_at) VALUES (?,?,?,?,1,?)',
-                  (data.username, salt, password_hash(data.password, salt), data.role, store.now()))
+                  (data.username, salt, hashed, data.role, store.now()))
     store.audit(user['username'], 'user_created', data.username, role=data.role)
+    logs.security_event('user_created', user=user['username'], target=data.username, role=data.role)
     return {'ok': True}
 
 
 @app.patch('/api/users/{username}')
 def change_user(username: str, data: UserChange, user=Depends(require('users'))):
+    """A change of password, role or active state ends every session of that person (they sign in again)."""
+    if data.password:
+        _check_new_password(data.password, username)
     with LOCK, store.db() as c:
         row = c.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
         if not row:
@@ -215,18 +328,118 @@ def change_user(username: str, data: UserChange, user=Depends(require('users')))
         demoting = row['role'] == 'admin' and ((data.role and data.role != 'admin') or data.active is False)
         if demoting and admins <= 1:
             raise HTTPException(409, 'At least one active administrator is required.')
-        if data.role:
-            c.execute('UPDATE users SET role=? WHERE username=?', (data.role, username))
-        if data.active is not None:
-            c.execute('UPDATE users SET active=? WHERE username=?', (1 if data.active else 0, username))
-            if not data.active:
-                c.execute('DELETE FROM sessions WHERE username=?', (username,))
+        changed = False
+        if data.role and data.role != row['role']:
+            c.execute('UPDATE users SET role=? WHERE username=?', (data.role, username)); changed = True
+        if data.active is not None and bool(data.active) != bool(row['active']):
+            c.execute('UPDATE users SET active=? WHERE username=?', (1 if data.active else 0, username)); changed = True
         if data.password:
-            salt = secrets.token_hex(16)
-            c.execute('UPDATE users SET salt=?,password_hash=? WHERE username=?', (salt, password_hash(data.password, salt), username))
-            c.execute('DELETE FROM sessions WHERE username=?', (username,))
-    store.audit(user['username'], 'user_changed', username, role=data.role, active=data.active, password_reset=bool(data.password))
-    return {'ok': True}
+            salt, hashed = security.hash_password(data.password)
+            c.execute('UPDATE users SET salt=?,password_hash=? WHERE username=?', (salt, hashed, username)); changed = True
+        ended = c.execute('DELETE FROM sessions WHERE username=?', (username,)).rowcount if changed else 0
+    store.audit(user['username'], 'user_changed', username, role=data.role, active=data.active, password_reset=bool(data.password),
+                sessions_ended=ended)
+    logs.security_event('user_changed', user=user['username'], target=username, role=data.role, active=data.active,
+                        reset=bool(data.password), sessions_ended=ended)
+    return {'ok': True, 'sessions_ended': ended}
+
+
+@app.post('/api/users/{username}/unlock')
+def unlock_user(username: str, user=Depends(require('users'))):
+    """Lift a sign-in lock (too many failed passwords) before its 15 minutes are over."""
+    was = store.unlock(username.lower())
+    store.audit(user['username'], 'user_unlocked', username, was_locked=was)
+    logs.security_event('user_unlocked', user=user['username'], target=username, was_locked=was)
+    return {'ok': True, 'was_locked': was}
+
+
+@app.post('/api/sessions/sign-out-everyone')
+def sign_out_everyone(request: Request, user=Depends(require('users'))):
+    """Ends every session except the administrator's own (for example after a shared password became known)."""
+    ended = store.sessions_end_all(keep=security.token_hash(request.cookies.get(security.COOKIE, '')))
+    store.audit(user['username'], 'sessions_revoked', 'workspace', sessions_ended=ended)
+    logs.security_event('sessions_revoked', 30, user=user['username'], sessions_ended=ended)
+    return {'ok': True, 'sessions_ended': ended}
+
+
+@app.get('/api/audit/verify')
+def audit_verify(user=Depends(require('users'))):
+    """Recomputes the audit history's hash chain: any changed, removed or inserted entry is found."""
+    result = store.verify_audit_chain()
+    store.audit(user['username'], 'audit_verified', 'audit', ok=result['ok'], rows=result['rows'], row=result.get('row'))
+    logs.security_event('audit_verified', 20 if result['ok'] else 40, user=user['username'], ok=result['ok'], rows=result['rows'],
+                        row=result.get('row'))
+    return result
+
+
+# --- liveness, readiness, version ---------------------------------------------------------------
+@app.get('/healthz')
+def healthz():
+    """Liveness: the process answers. No I/O, no sign-in."""
+    return {'status': 'ok'}
+
+
+READY_ORACLE_BUDGET_S = 3.0
+READY_ORACLE_CACHE_S = 15.0
+_ready = dict(at=0.0, status=None, future=None)
+_ready_lock = threading.Lock()
+_ready_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='poppys-readyz')
+
+
+def _ping_oracle():
+    try:
+        with closing(oracle.connect()) as conn:
+            conn.call_timeout = int(READY_ORACLE_BUDGET_S * 1000)
+            conn.ping()
+        return 'ok'
+    except Exception as exc:     # down, not configured, wrong password: all just 'warn' (previews work without Oracle)
+        logs.event('readyz_oracle', 30, error=type(exc).__name__)
+        return 'warn'
+
+
+def _oracle_ready():
+    """'ok' or 'warn' within READY_ORACLE_BUDGET_S. One check runs at a time; its answer is reused for 15 s."""
+    with _ready_lock:
+        if _ready['status'] and time.monotonic() - _ready['at'] < READY_ORACLE_CACHE_S:
+            return _ready['status']
+        if _ready['future'] is None or _ready['future'].done():
+            _ready['future'] = _ready_pool.submit(_ping_oracle)
+        future = _ready['future']
+    try:
+        status = future.result(timeout=READY_ORACLE_BUDGET_S)
+    except FutureTimeout:
+        return 'warn'
+    with _ready_lock:
+        _ready.update(at=time.monotonic(), status=status)
+    return status
+
+
+@app.get('/readyz')
+def readyz():
+    """Readiness, no sign-in: SQLite opens, has the current schema and accepts a write (else 503 'fail'); free disk
+    and Oracle only warn (200 'warn'), because uploads and previews work without Oracle. Never names the DSN,
+    accounts or versions."""
+    checks = {}
+    try:
+        store.probe()
+        checks['sqlite'] = 'ok'
+    except Exception as exc:
+        logs.event('readyz_sqlite', 40, error=type(exc).__name__)
+        checks['sqlite'] = 'fail'
+    try:
+        checks['disk'] = 'ok' if shutil.disk_usage(store.DATA).free >= 1024 ** 3 else 'warn'
+    except OSError:
+        checks['disk'] = 'warn'
+    checks['oracle'] = _oracle_ready()
+    status = 'fail' if 'fail' in checks.values() else 'warn' if 'warn' in checks.values() else 'ok'
+    return JSONResponse({'status': status, 'checks': checks}, status_code=503 if status == 'fail' else 200)
+
+
+@app.get('/api/version')
+def api_version(user=Depends(authenticated)):
+    return dict(version=security.app_version(), git_sha=security.git_sha(), python=platform.python_version(),
+                sqlite=sqlite3.sqlite_version, oracledb=oracledb.__version__, schema=store.SCHEMA_VERSION,
+                environment=security.environment())
 
 
 # --- status ----------------------------------------------------------------------
@@ -357,6 +570,7 @@ def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
     store.save(draft, user['username'])
     store.audit(user['username'], 'upload', id, filename=name, format=draft['format'], orders=len(draft['orders']),
                 sha256=draft['filehash'])
+    logs.event('upload', user=user['username'], draft=id, kind=kind, bytes=len(content), sha256=draft['filehash'], orders=len(draft['orders']))
     return draft
 
 
@@ -604,12 +818,15 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
             result = oracle.commit(d, data.plan_hash, user['username'], required=list(current_fields().extra_required))
         except Exception as exc:
             store.audit(user['username'], 'approve_failed', id, error=str(exc)[:500])
+            logs.event('approve_failed', 40, user=user['username'], draft=id, error=type(exc).__name__)
             raise
         d['result'] = result; d['version'] += 1
         clear_counts()
         store.save(d, user['username'], data.version)
         store.audit(user['username'], 'approved_saved', id, orders=result.get('orders'), rows=len(result.get('rows', [])),
                     plan_hash=data.plan_hash)
+        logs.event('approved_saved', user=user['username'], draft=id, orders=result.get('orders'), rows=len(result.get('rows', [])),
+                   plan_hash=data.plan_hash)
         return result
 
 
@@ -867,7 +1084,7 @@ def _build_values(source, kb=None, sources=None):
             with query_sources() as own:
                 result = _fill_values(kb, own)
     except Exception as exc:   # e.g. Oracle went away in the middle: the next question can try again
-        result = dict(state='failed', error=str(exc)[:200])
+        result = dict(state='failed', error=security.safe_text(exc, 200))
     finally:
         with _values_lock:
             _VALUES.update(result, finished_at=datetime.now().isoformat(timespec='seconds'), seconds=round(time.time() - started, 1),
@@ -895,7 +1112,7 @@ def _startup_values():
         _build_values('startup')
     except Exception as exc:   # the local store cannot be read: report it, questions fall back as usual
         with _values_lock:
-            _VALUES.update(state='failed', source='startup', error=str(exc)[:200], at=time.time())
+            _VALUES.update(state='failed', source='startup', error=security.safe_text(exc, 200), at=time.time())
     finally:
         _values_idle.set()
 
@@ -1017,8 +1234,11 @@ def knowledge_edit(data: KnowledgeEdit, user=Depends(require('mapping'))):
 def knowledge_refresh(user=Depends(require('mapping'))):
     try:
         phys = insight.refresh_physical(oracle.connect)
-    except Exception as exc:
-        raise HTTPException(503, f'Could not read the Oracle data dictionary: {str(exc)[:200]}')
+    except Exception as exc:   # the driver's text can name the host and service: only the error code is shown
+        code = getattr(exc.args[0], 'full_code', None) if isinstance(exc, oracledb.Error) and exc.args else None
+        logs.event('knowledge_refresh_failed', 40, error=type(exc).__name__, code=code)
+        raise HTTPException(503, f'Could not read the Oracle data dictionary ({code or "Oracle is not reachable"}). '
+                                 'Check that Oracle is running, then try again.')
     kb = knowledge_base()
     with query_sources() as sources:
         execute, dialect = _require_db(sources)

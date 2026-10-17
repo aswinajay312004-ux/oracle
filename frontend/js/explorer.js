@@ -148,9 +148,9 @@ function draw() {
   const shown = all.filter(c => c.role === 'system' ? view.showSys : view.showEmpty || !empty.includes(c));
   const filtered = !!(cur.column && cur.value);
   const more = !cur.moreError && (d.key ? d.next_after != null : d.rows.length < (d.total || 0));
-  $('#table-view').innerHTML = `<div class="ex-head"><div style="flex:1;min-width:0"><div class="row wrap"><h2>${esc(d.business || d.table)}</h2><code class="muted">${esc(d.table)}</code>
+  $('#table-view').innerHTML = `<div class="ex-head"><div class="flex-fill"><div class="row wrap"><h2>${esc(d.business || d.table)}</h2><code class="muted">${esc(d.table)}</code>
       ${d.total == null ? (d.rows_known === false ? '<span class="pill" title="Counting every matching row took too long on this large table. The rows shown are correct.">count unavailable</span>' : '') : `<span class="pill" title="${esc(d.approx ? APPROX : 'Exact row count')}">${d.approx ? '≈ ' : ''}${plural(d.total, filtered ? 'matching row' : 'row', filtered ? 'matching rows' : 'rows')}</span>`}${meta.links ? `<span class="pill brand">${plural(meta.links, 'link')}</span>` : ''}</div>
-      <p class="muted small-text" style="margin-top:2px">${esc(d.description || '')} · read-only${d.approx ? ` · <span class="ex-approx" title="${esc(APPROX)}">≈ approximate count (Oracle statistics)</span>` : ''}</p></div></div>
+      <p class="muted small-text mt-2">${esc(d.description || '')} · read-only${d.approx ? ` · <span class="ex-approx" title="${esc(APPROX)}">≈ approximate count (Oracle statistics)</span>` : ''}</p></div></div>
     <nav class="ex-tabs tabs">${[['records', 'Records'], ['columns', d.columns.length ? `Columns (${d.columns.length})` : 'Columns'], ['links', 'Relationships']].map(([k, n]) => `<button class="${tab === k ? 'active' : ''}" data-xtab="${k}">${n}</button>`).join('')}</nav>
     <div data-xbody></div>`;
   const body = $('[data-xbody]');
@@ -180,7 +180,7 @@ function draw() {
       <div class="grid-scroll"><table><thead><tr><th>Business name</th><th>Column</th><th>Type</th><th>Role</th></tr></thead><tbody>
       ${all.map(c => `<tr><td><b>${esc(c.label || '—')}</b>${(d.display || []).includes(c.name) ? ' <span class="pill brand">shown first</span>' : ''}</td><td class="mono">${esc(c.name)}</td><td class="muted">${esc(c.type)}</td><td>${c.role ? `<span class="pill ${c.role === 'system' ? '' : c.role === 'reference' ? 'master' : c.role === 'measure' ? 'brand' : 'info'}">${esc(c.role)}</span>` : ''}${c.references ? ` <span class="muted small-text">→ ${esc(c.references)}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
   } else {
-    body.innerHTML = `<div class="flow-wrap" data-rel style="min-height:240px"></div><div class="legend"><span>Click a table to open it · ＋ adds its linked tables</span><span><i style="background:#d39a2c"></i>Unconfirmed link</span><span data-approx hidden title="${esc(APPROX)}">≈ approximate row count (Oracle statistics)</span></div>`;
+    body.innerHTML = `<div class="flow-wrap rel-map" data-rel></div><div class="legend"><span>Click a table to open it · ＋ adds its linked tables</span><span><i class="sw-proposed"></i>Unconfirmed link</span><span data-approx hidden title="${esc(APPROX)}">≈ approximate row count (Oracle statistics)</span></div>`;
     relationshipMap(body.querySelector('[data-rel]'), current.table, body.querySelector('[data-approx]'));
   }
   $$('[data-xtab]').forEach(b => b.onclick = () => { tab = b.dataset.xtab; draw(); });

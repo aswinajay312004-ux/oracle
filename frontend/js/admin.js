@@ -46,7 +46,7 @@ async function mapping(body) {
   body.innerHTML = `<div class="banner ${m.live ? 'info' : 'warning'}"><span class="b-ic">i</span><div>${m.live ? 'Column types below are read live from Oracle.' : 'Oracle is not connected — showing the saved dictionary snapshot.'}
     ${m.discovery.available ? ` Discovery evidence from ${esc(new Date(m.discovery.generated_at).toLocaleString())}.` : ' No discovery evidence yet: run <code>python scripts/discover_schema.py</code> on this computer.'}
     POPPYS AI writes <b>only verified columns of verified tables</b>. Keys and parent links are fixed.</div></div>
-    ${m.tables.map(t => `<section class="card" style="margin-bottom:14px;overflow:hidden"><div class="card-head"><div><h2>${esc(t.business)}</h2><span class="muted small-text"><code>${esc(t.table)}</code> · ${esc(t.screen || '')}${t.parent ? ` · child of ${esc(t.parent)}` : ''}</span></div>
+    ${m.tables.map(t => `<section class="card map-card"><div class="card-head"><div><h2>${esc(t.business)}</h2><span class="muted small-text"><code>${esc(t.table)}</code> · ${esc(t.screen || '')}${t.parent ? ` · child of ${esc(t.parent)}` : ''}</span></div>
       <span>${t.visible ? '<span class="pill ok">visible</span>' : '<span class="pill err">not visible</span>'} ${t.insertable === null ? '' : t.insertable ? '<span class="pill ok">insert granted</span>' : '<span class="pill warn">no insert grant</span>'}
       ${toggle(`data-map-table="${esc(t.table)}"`, t.status, edit)}</span></div>
       <div class="tbl-wrap flush"><table><thead><tr><th>Oracle column</th><th>Business meaning</th><th>Filled from</th><th>Type</th><th>Evidence</th><th>Status</th></tr></thead><tbody>
@@ -146,7 +146,7 @@ async function fields(body) {
   const draw = k => { const tr = $(`tr[data-frow="${CSS.escape(k)}"]`, body); tr.classList.toggle('row-err', !!fieldEdits[k]?.error); tr.innerHTML = row(list.find(f => f.key === k)); };
   body.innerHTML = `${edit ? '' : '<div class="banner info"><span class="b-ic">i</span><div>Only an administrator can change order fields.</div></div>'}
     <section class="card"><div class="card-head"><div><h2>Order fields</h2><div class="sub">The words buyers use for each field in their files, and which fields every order must have. Reading files, the layout check and the review screen all follow this list.</div></div></div>
-    <div class="tbl-wrap flush"><table class="fields-table"><thead><tr><th style="width:220px">Field</th><th style="width:200px">Required</th><th>Words buyers use for it (aliases)</th><th style="width:80px"></th></tr></thead>
+    <div class="tbl-wrap flush"><table class="fields-table"><thead><tr><th class="w-220">Field</th><th class="w-200">Required</th><th>Words buyers use for it (aliases)</th><th class="w-80"></th></tr></thead>
     <tbody>${list.map(f => `<tr data-frow="${esc(f.key)}">${row(f)}</tr>`).join('')}</tbody></table></div></section>`;
 
   const add = (k, input) => {
@@ -192,7 +192,7 @@ async function users(body) {
       <td>${u.active ? '<span class="pill ok">active</span>' : '<span class="pill">disabled</span>'}</td>
       <td><button class="ghost small" data-active-user="${esc(u.username)}" data-active="${!u.active}">${u.active ? 'Disable' : 'Enable'}</button> <button class="ghost small" data-reset="${esc(u.username)}">Reset password</button></td></tr>`).join('')}
     </tbody></table></div>
-    <div class="card-body"><h3 style="margin-bottom:8px">Add a person</h3>
+    <div class="card-body"><h3 class="mb-8">Add a person</h3>
     <form id="add-user" class="form-row"><label>Username<input name="username" required minlength="2" maxlength="50" pattern="[A-Za-z0-9._@\-]+"></label>
       <label>Temporary password<input name="password" type="password" required minlength="10" autocomplete="new-password"></label>
       <label>Role<select name="role">${roles.map(r => `<option>${r}</option>`).join('')}</select></label><button class="primary">Add</button></form></div></section>`;
@@ -214,8 +214,8 @@ const ACTIONS = { upload: 'Uploaded a file', edit: 'Corrected values', preview: 
 async function audit(body) {
   const list = await api('/api/audit');
   body.innerHTML = `<section class="card"><div class="card-head"><div><h2>Audit history</h2><div class="sub">Latest 300 events · stored locally; Oracle saves are also logged in PP_IMPORT_LOG</div></div></div>
-    <div class="tbl-wrap" style="max-height:70vh"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead><tbody>
-    ${list.map(a => `<tr><td style="white-space:nowrap">${esc(new Date(a.at).toLocaleString())}</td><td>${esc(a.actor)}</td><td>${esc(ACTIONS[a.action] || a.action)}</td>
+    <div class="tbl-wrap max-h-70vh"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead><tbody>
+    ${list.map(a => `<tr><td class="nowrap">${esc(new Date(a.at).toLocaleString())}</td><td>${esc(a.actor)}</td><td>${esc(ACTIONS[a.action] || a.action)}</td>
       <td class="evidence">${a.detail.changes ? a.detail.changes.slice(0, 6).map(c => `<div><code>${esc(c.field)}</code>: ${esc(show(c.before))} → <b>${esc(show(c.after))}</b></div>`).join('') + (a.detail.changes.length > 6 ? `<div>…${a.detail.changes.length - 6} more</div>` : '')
         : esc(Object.entries(a.detail).filter(([, v]) => v != null).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v).slice(0, 120) : v}`).join(' · '))}</td></tr>`).join('')}
     </tbody></table></div></section>`;
@@ -229,7 +229,7 @@ async function settings(body) {
     <label>Default sample type<input name="default_sample_type" value="${esc(s.default_sample_type)}" maxlength="30"></label>
     <label class="check"><input type="checkbox" name="allow_self_approval" ${s.allow_self_approval ? 'checked' : ''}> Allow the person who uploaded a file to approve it (turn off for a four-eyes rule)</label>
     <button class="primary">Save settings</button></form>
-    ${checks.length ? `<section class="card" style="margin-top:14px"><div class="card-head"><div><h2>System checks</h2><div class="sub">Versions that matter for reading buyer files safely on this computer</div></div>
+    ${checks.length ? `<section class="card mt-14"><div class="card-head"><div><h2>System checks</h2><div class="sub">Versions that matter for reading buyer files safely on this computer</div></div>
       ${h.readers.ok ? '<span class="pill ok">all good</span>' : '<span class="pill warn">needs attention</span>'}</div>
       <div class="tbl-wrap flush"><table><thead><tr><th>Check</th><th>Version</th><th>Status</th></tr></thead><tbody>
       ${checks.map(c => `<tr><td>${esc(c.name)}</td><td class="mono">${esc(c.version || '—')}</td><td>${c.ok ? '<span class="pill ok">OK</span>' : `<span class="pill warn">check</span> <span class="small-text">${esc(c.message || '')}</span>`}</td></tr>`).join('')}
@@ -248,13 +248,13 @@ async function dictionary(body) {
   const st = s.statuses || {};
   body.innerHTML = `<div class="banner ${s.live ? 'info' : 'warning'}"><span class="b-ic">i</span><div>${s.live ? `Structure read from Oracle on ${esc(new Date(s.generated_at).toLocaleString())}.` : 'Oracle structure not read yet — using the saved snapshot.'}
       The Ask AI screen only uses these tables, business names and links. Better names and synonyms here = better answers.</div>
-      ${edit ? '<button class="secondary small" id="kb-refresh" style="margin-left:auto">Refresh from Oracle</button>' : ''}</div>
+      ${edit ? '<button class="secondary small ml-auto" id="kb-refresh">Refresh from Oracle</button>' : ''}</div>
     <div class="stat-row">${[['Tables', s.tables], ['Links confirmed', (st.verified || 0) + (st.declared || 0)], ['Links to review', (st.proposed || 0) + (st.inferred || 0)], ['Values indexed', fmt(k.values.reduce((n, v) => n + v.values, 0), 0)], ['Confirmed answers', examples.length]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
-    <section class="card" style="margin-bottom:14px"><div class="card-head"><div><h2>Relationships</h2><div class="sub">How tables link. Confirmed links are used freely; unconfirmed ones lower an answer’s confidence until verified.</div></div>
-      <select id="rel-filter" style="width:220px"><option value="review">Needs review</option><option value="all">All links</option></select></div>
-      <div class="tbl-wrap flush" style="max-height:420px" id="rels"></div></section>
-    <section class="card" style="margin-bottom:14px"><div class="card-head"><div><h2>Tables &amp; business names</h2><div class="sub">Click a table to edit its business name, synonyms and column meanings.</div></div><input id="dict-q" placeholder="Search" style="width:220px"></div>
-      <div style="display:grid;grid-template-columns:300px minmax(0,1fr)"><div id="dict-list" style="border-right:1px solid var(--line);max-height:560px;overflow:auto;padding:6px"></div><div id="dict-edit" style="padding:14px 16px"><p class="empty">Choose a table.</p></div></div></section>
+    <section class="card mb-14"><div class="card-head"><div><h2>Relationships</h2><div class="sub">How tables link. Confirmed links are used freely; unconfirmed ones lower an answer’s confidence until verified.</div></div>
+      <select id="rel-filter" class="w-220"><option value="review">Needs review</option><option value="all">All links</option></select></div>
+      <div class="tbl-wrap flush max-h-420" id="rels"></div></section>
+    <section class="card mb-14"><div class="card-head"><div><h2>Tables &amp; business names</h2><div class="sub">Click a table to edit its business name, synonyms and column meanings.</div></div><input id="dict-q" class="w-220" placeholder="Search"></div>
+      <div class="dict-grid"><div id="dict-list" class="dict-list"></div><div id="dict-edit" class="dict-edit"><p class="empty">Choose a table.</p></div></div></section>
     <section class="card"><div class="card-head"><div><h2>Confirmed answers</h2><div class="sub">Questions marked “correct” in Ask AI. Similar questions reuse the same plan with new values.</div></div></div>
       ${examples.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>Question</th><th>Pattern</th><th>By</th><th>Used</th><th></th></tr></thead><tbody>${examples.map(e => `<tr><td>${esc(e.question)}</td><td class="mono">${esc(e.masked)}</td><td>${esc(e.actor)}</td><td>${e.uses}</td><td>${edit ? `<button class="ghost small" data-del-example="${e.id}">Remove</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">None yet.</p>'}</section>`;
   const drawRels = () => {
@@ -285,12 +285,12 @@ async function dictionary(body) {
 async function openDict(table, edit) {
   const t = await api(`/api/knowledge/tables/${id(table)}`);
   const el = $('#dict-edit');
-  el.innerHTML = `<form id="dict-form" class="form-card" style="max-width:none"><div class="row wrap"><h3>${esc(t.business)}</h3><code class="muted">${esc(t.name)}</code><span class="pill">${esc(t.kind)}</span>${t.rows != null ? `<span class="pill" title="From Oracle statistics; the Database screen shows exact counts">≈ ${fmt(t.rows, 0)} rows</span>` : ''}</div>
+  el.innerHTML = `<form id="dict-form" class="form-card form-wide"><div class="row wrap"><h3>${esc(t.business)}</h3><code class="muted">${esc(t.name)}</code><span class="pill">${esc(t.kind)}</span>${t.rows != null ? `<span class="pill" title="From Oracle statistics; the Database screen shows exact counts">≈ ${fmt(t.rows, 0)} rows</span>` : ''}</div>
       <div class="grid2"><label>Business name<input name="business" value="${esc(t.business)}" maxlength="80" ${edit ? '' : 'disabled'}></label>
       <label>Synonyms (comma separated)<input name="synonyms" value="${esc(t.synonyms.join(', '))}" ${edit ? '' : 'disabled'}></label></div>
       <label>Description<input name="description" value="${esc(t.description)}" maxlength="500" ${edit ? '' : 'disabled'}></label>
       ${edit ? '<div><button class="primary small">Save table</button></div>' : ''}</form>
-    <div class="tbl-wrap" style="margin-top:12px;max-height:420px"><table class="grid-input"><thead><tr><th>Column</th><th>Business name</th><th>Synonyms</th><th>Role</th><th></th></tr></thead><tbody>
+    <div class="tbl-wrap mt-12 max-h-420"><table class="grid-input"><thead><tr><th>Column</th><th>Business name</th><th>Synonyms</th><th>Role</th><th></th></tr></thead><tbody>
       ${t.columns.map(c => `<tr data-col="${esc(c.name)}"><td class="mono">${esc(c.name)}<div class="muted small-text">${esc(c.type)}${c.references ? ` → ${esc(c.references)}` : ''}</div></td>
         <td><input data-k="business" value="${esc(c.business)}" maxlength="80" ${edit ? '' : 'disabled'}></td><td><input data-k="synonyms" value="${esc((c.synonyms || []).join(', '))}" ${edit ? '' : 'disabled'}></td>
         <td><select data-k="role" ${edit ? '' : 'disabled'}>${['label', 'measure', 'date', 'reference', 'attribute', 'key', 'system'].map(r => `<option ${r === c.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>

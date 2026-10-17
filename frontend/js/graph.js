@@ -125,7 +125,7 @@ export function renderGraph(el, model, opts = {}) {
 
   // Until the box is measured the picture simply scales to the width (viewBox); then the zoomable view takes over.
   el.classList.add('gviewport'); el.classList.remove('panning');
-  el.innerHTML = `<svg class="gsvg" viewBox="0 0 ${width} ${height}" style="width:100%;max-width:${width}px" tabindex="0" role="group"
+  el.innerHTML = `<svg class="gsvg" viewBox="0 0 ${width} ${height}" tabindex="0" role="group"
       aria-roledescription="diagram" aria-label="${esc(opts.label || 'Table relationships')}" aria-describedby="ghelp-${n0}">
     <defs><marker id="arr-${n0}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8fb1ab"/></marker></defs>
     <g class="gcanvas">${edges}
@@ -142,6 +142,7 @@ export function renderGraph(el, model, opts = {}) {
       <button type="button" data-z="reset" aria-label="Reset the view" title="Reset view">${icon('reset')}</button>
     </div><span class="visually-hidden" role="status" aria-live="polite" aria-atomic="true" data-zsay></span>`;
   const svg = el.querySelector('svg'), canvas = svg.querySelector('.gcanvas'), tools = el.querySelector('.gtools');
+  svg.style.maxWidth = `${width}px`;   // CSSOM, not a style attribute (CSP style-src 'self'); width: 100% is .gviewport > .gsvg
   const level = tools.querySelector('[data-zl]'), zin = tools.querySelector('[data-z=in]'), zout = tools.querySelector('[data-z=out]');
   const say = el.querySelector('[data-zsay]');
 

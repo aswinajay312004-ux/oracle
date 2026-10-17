@@ -100,7 +100,8 @@ function showReading() {
       need.length ? 'They are outlined in red on the next screen — type them there.' : 'Review the quantities and approve.']);
   }
   $('#read-title').textContent = d.orders.length ? 'Here is what we found' : 'We need one quick hint';
-  $('#read-steps').innerHTML = items.map(([k, t, s], i) => `<li class="${k === 'ok' ? '' : k}" style="animation-delay:${i * 80}ms"><span class="ic">${k === 'ok' ? '✓' : k === 'warn' ? '!' : '–'}</span><div><strong>${esc(t)}</strong><small>${esc(s)}</small></div></li>`).join('');
+  $('#read-steps').innerHTML = items.map(([k, t, s]) => `<li class="${k === 'ok' ? '' : k}"><span class="ic">${k === 'ok' ? '✓' : k === 'warn' ? '!' : '–'}</span><div><strong>${esc(t)}</strong><small>${esc(s)}</small></div></li>`).join('');
+  $$('#read-steps li').forEach((li, i) => li.style.setProperty('--step', i));   // one after another, 80ms apart (CSSOM, CSP-safe)
   $('#read-actions').hidden = false; $('#go-review').focus();
 }
 export function goReview() { renderReview(); stage('review'); }
@@ -162,7 +163,7 @@ export function renderReview() {
       <button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
     ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}
     ${p && !p.live ? '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected, so existing masters and order numbers could not be checked. Start the database and press <b>Check &amp; continue</b> again.</div></div>' : ''}
-    <section id="mapping-panel" class="card" ${needMap || state.showMapping ? '' : 'hidden'} style="margin-bottom:14px"></section>
+    <section id="mapping-panel" class="card mb-14" ${needMap || state.showMapping ? '' : 'hidden'}></section>
     <div id="orders">${d.orders.map((o, i) => orderScreen(o, i)).join('')}
       ${locked ? '' : '<button class="secondary" data-act="add-order">＋ Add another order manually</button>'}</div>
     <div class="action-bar review-bar" id="review-side"></div>`;
@@ -181,7 +182,7 @@ function orderScreen(o, oi) {
   const tab = state.tab[oi] || 'order'; const c = counts(oi);
   const pcs = (o.lines || []).reduce((n, l) => n + lineQty(l), 0) * (num(o.pieces_per_unit) || 1);
   const tabs = [['order', 'Order entry', c.order], ['fabric', `Fabric & yarn · ${o.fabrics?.length || 0}`, c.fabric], ['trims', `Trims · ${o.accessories?.length || 0}`, c.trims]];
-  return `<section class="card screen" id="order-${oi}" style="margin-bottom:14px">
+  return `<section class="card screen mb-14" id="order-${oi}">
     <div class="screen-head"><span class="title">Sample Order Entry${state.draft.orders.length > 1 ? ` · ${oi + 1}` : ''}</span>
       <nav class="tabs" role="tablist">${tabs.map(([t, n, k]) => `<button role="tab" class="${tab === t ? 'active' : ''}" aria-selected="${tab === t}" data-act="tab" data-oi="${oi}" data-tab="${t}">${n}${k ? ` <span class="count-badge err">${k}</span>` : ''}</button>`).join('')}</nav>
       <span class="spacer"></span><span class="pill brand">${fmt(pcs, 0)} pcs</span>
@@ -231,7 +232,7 @@ function orderTab(o, oi) {
   return `<div class="block"><div class="block-head"><h3>Order header</h3><span class="sub">Same fields as the Axpert screen · filled from the file · the cell each value came from is shown on the right</span></div>
       <div class="form-grid">${HEADER.map(h => field(o, oi, h)).join('')}</div></div>
     <div class="block"><div class="block-head"><h3>Style &amp; size quantities</h3><span class="sub">${esc(o.po_number || '')}</span></div>
-      <div class="qty-bar"><div class="qty-row"><span class="lbl" id="basis-lbl-${oi}">Quantities to save <span style="color:var(--err)">*</span></span>
+      <div class="qty-bar"><div class="qty-row"><span class="lbl" id="basis-lbl-${oi}">Quantities to save <span class="req">*</span></span>
         <div class="segmented ${cls(bIssue)}" role="radiogroup" aria-labelledby="basis-lbl-${oi}">
           ${(o.order_lines || []).length ? `<button role="radio" aria-checked="${basis === 'order_demo'}" class="${basis === 'order_demo' ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="order_demo">Buyer order · ${fmt(sum(o.order_lines), 0)} ${o.qty_unit === 'PACK' ? 'packs' : 'pcs'}</button>` : ''}
           ${(o.sample_lines || []).length ? `<button role="radio" aria-checked="${basis === 'sample' && o._manual !== true}" class="${basis === 'sample' && !o._manual ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="sample">Sample section · ${fmt(sum(o.sample_lines), 0)} ${o.qty_unit === 'PACK' ? 'packs' : 'pcs'}</button>` : ''}
@@ -239,7 +240,7 @@ function orderTab(o, oi) {
         ${bIssue ? `<div class="cell-msg ${cls(bIssue)}">${esc(strip(bIssue.message))}</div>` : ''}</div>
         ${unitRow(o, oi)}</div>
       ${matrix(o, oi)}
-      ${packs.length ? `<div class="banner warning" style="margin-top:10px"><span class="b-ic">!</span><div>${packs.map(i => esc(strip(i.message))).join('<br>')}</div></div>` : ''}
+      ${packs.length ? `<div class="banner warning mt-10"><span class="b-ic">!</span><div>${packs.map(i => esc(strip(i.message))).join('<br>')}</div></div>` : ''}
       ${tableNotes(oi)}
       ${notesHtml(o, oi)}</div>`;
 }
@@ -249,7 +250,7 @@ function tableNotes(oi) {
   const list = allIssues().filter(i => i.path === `orders.${oi}.lines`);
   if (!list.length) return '';
   const err = list.some(i => i.severity === 'error');
-  return `<div class="banner ${err ? 'error' : 'warning'}" style="margin-top:10px" role="${err ? 'alert' : 'status'}"><span class="b-ic">!</span><div>${list.map(i => esc(strip(i.message))).join('<br>')}</div></div>`;
+  return `<div class="banner ${err ? 'error' : 'warning'} mt-10" role="${err ? 'alert' : 'status'}"><span class="b-ic">!</span><div>${list.map(i => esc(strip(i.message))).join('<br>')}</div></div>`;
 }
 
 function notesHtml(o, oi) {
@@ -257,7 +258,7 @@ function notesHtml(o, oi) {
   const onField = [o.provenance?.qty_unit?.question, 'Confirm whether these are sample quantities.'];
   const shown = (o.review || []).map(r => r.message);   // already shown on their field or under the size table
   const notes = [...new Set([...(oi === 0 ? state.draft.notes || [] : []), ...(o.warnings || [])])].filter(w => !onField.includes(w) && !shown.includes(w));
-  return notes.length ? `<details class="notes"><summary class="muted small-text" style="cursor:pointer">Notes from reading the file (${notes.length})</summary><ul class="small-text">${notes.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : '';
+  return notes.length ? `<details class="notes"><summary class="muted small-text">Notes from reading the file (${notes.length})</summary><ul class="small-text">${notes.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : '';
 }
 
 function unitRow(o, oi) {
@@ -266,7 +267,7 @@ function unitRow(o, oi) {
     return `<div class="qty-row"><div class="f ${cls(ppIssue)}"><label class="f-label" for="ppu-${oi}">Pieces per unit</label><input id="ppu-${oi}" type="number" min="1" step="1" data-path="${pp}" value="${esc(o.pieces_per_unit ?? '')}" title="1 = quantities are pieces; 3 = each quantity is a pack of 3">${msgHtml(ppIssue)}</div></div>`;
   }
   const u = o.qty_unit || ''; const path = `orders.${oi}.qty_unit`; const issue = at(path);
-  return `<div class="qty-row unit-row" data-field="${esc(path)}"><span class="lbl" id="unit-lbl-${oi}">Quantity unit <span style="color:var(--err)">*</span></span>
+  return `<div class="qty-row unit-row" data-field="${esc(path)}"><span class="lbl" id="unit-lbl-${oi}">Quantity unit <span class="req">*</span></span>
     <div class="segmented ${cls(issue)}" role="radiogroup" aria-labelledby="unit-lbl-${oi}" ${issue ? `aria-describedby="unit-msg-${oi}"` : ''}>
       ${[['PCS', 'Pieces'], ['PACK', 'Packs']].map(([v, l]) => `<button role="radio" aria-checked="${u === v}" class="${u === v ? 'on' : ''}" data-act="unit" data-oi="${oi}" data-unit="${v}">${l}</button>`).join('')}</div>
     ${u === 'PACK' ? `<div class="f ${cls(ppIssue)}"><label class="f-label" for="ppu-${oi}">Pieces in one pack <span class="req">*</span></label><input id="ppu-${oi}" type="number" min="2" step="1" data-path="${pp}" value="${esc(o.pieces_per_unit ?? '')}" ${ppIssue ? 'aria-invalid="true"' : ''}>${msgHtml(ppIssue)}</div>` : ''}
@@ -290,7 +291,7 @@ function matrix(o, oi) {
   const colTotal = s => lines.reduce((n, l) => n + num(l.sizes.find(x => (x.size ?? '') === s)?.quantity), 0);
   const grand = lines.reduce((n, l) => n + lineQty(l), 0);
   const span = sizes.length + 7;
-  return `<div class="tbl-wrap"><table class="grid-input matrix"><thead><tr><th style="width:44px">#</th><th style="min-width:190px">Garment / component</th><th style="min-width:210px">Colour / combo <span style="color:var(--err)">*</span></th>
+  return `<div class="tbl-wrap"><table class="grid-input matrix"><thead><tr><th>#</th><th>Garment / component</th><th>Colour / combo <span class="req">*</span></th>
       ${sizes.map(s => `<th class="size"><div class="size-head"><input data-sizecol="${oi}" data-old="${esc(s)}" value="${esc(s)}" aria-label="Size name" class="${s === '' ? 'err' : ''}" placeholder="size" title="${esc(s)} — click to rename"><button class="th-x" data-act="remove-size-col" data-oi="${oi}" data-size="${esc(s)}" title="Remove size ${esc(s)}" aria-label="Remove size ${esc(s)}">×</button></div></th>`).join('')}
       <th class="add-col"><input data-addsize="${oi}" placeholder="＋ size" aria-label="Add a size column"></th>
       <th class="num">Total</th><th class="num">File total</th><th></th></tr></thead><tbody>
@@ -312,7 +313,7 @@ function matrix(o, oi) {
         ${msgRow(rowIss, span, rowCls)}`;
     }).join('') || `<tr><td colspan="${span}" class="empty">No lines yet. Add a colour line.</td></tr>`}
     </tbody><tfoot><tr><td></td><td>${o.qty_unit === 'PACK' ? 'Total packs' : 'Total pieces'}</td><td class="muted">${ppu > 1 ? `${o.qty_unit === 'PACK' ? `packs × ${ppu} pieces` : `× ${ppu} per unit`} = <b>${fmt(grand * ppu, 0)}</b> pcs` : ''}</td>${sizes.map(s => `<td class="num">${fmt(colTotal(s), 0)}</td>`).join('')}<td></td><td class="num">${fmt(grand, 0)}</td><td></td><td></td></tr></tfoot></table></div>
-    <div class="tbl-actions"><button class="secondary small" data-act="add-line" data-oi="${oi}">＋ Add colour line</button><span class="muted small-text" style="align-self:center">Tip: type a new size name in “＋ size” to add a column.</span></div>`;
+    <div class="tbl-actions"><button class="secondary small" data-act="add-line" data-oi="${oi}">＋ Add colour line</button><span class="muted small-text tbl-tip">Tip: type a new size name in “＋ size” to add a column.</span></div>`;
 }
 
 function lineOptions(o, sel, all = false) {
@@ -331,8 +332,8 @@ function fabricTab(o, oi) {
   const fabrics = o.fabrics || []; const derived = fresh() ? state.draft.plan.derived || {} : {};
   state.openFab ||= new Set();
   return `${refBanner(['ORDFAB', 'ORDYARN'])}<div class="block-head"><h3>Fabric planning</h3><span class="sub">Fabric per garment portion · kg = pieces × g/pc ÷ 1000 × rejection</span></div>
-    <div class="tbl-wrap"><table class="grid-input fabric-table"><thead><tr><th>#</th><th>Garment line <span style="color:var(--err)">*</span></th><th>Portion</th><th>Fabric colour <span style="color:var(--err)">*</span></th><th>Quality</th><th>GSM</th><th>Dia</th><th>Content</th>
-      <th class="num">g / pc <span style="color:var(--err)">*</span></th><th class="num">Rejection</th><th class="num">Pieces</th><th class="num">Kg to save</th><th class="num">File kg</th><th>Yarn</th><th></th></tr></thead><tbody>
+    <div class="tbl-wrap"><table class="grid-input fabric-table"><thead><tr><th>#</th><th>Garment line <span class="req">*</span></th><th>Portion</th><th>Fabric colour <span class="req">*</span></th><th>Quality</th><th>GSM</th><th>Dia</th><th>Content</th>
+      <th class="num">g / pc <span class="req">*</span></th><th class="num">Rejection</th><th class="num">Pieces</th><th class="num">Kg to save</th><th class="num">File kg</th><th>Yarn</th><th></th></tr></thead><tbody>
     ${fabrics.map((f, fi) => {
       const p = `orders.${oi}.fabrics.${fi}`; const iss = under(p);
       const line = o.lines?.[num(f.line) - 1]; const pcs = line ? lineQty(line) * (num(o.pieces_per_unit) || 1) : 0;
@@ -343,16 +344,16 @@ function fabricTab(o, oi) {
       return `<tr class="${rc} ${iss.length ? 'has-msg' : ''}"><td><span class="rowno">${fi + 1}</span></td>
         <td class="w-line"><select data-path="${p}.line" data-type="int" class="${cls(at(`${p}.line`))}">${lineOptions(o, f.line)}</select></td>
         <td>${inp('portion')}</td><td class="w-wide">${inp('color', 'list="list-color"')}</td><td class="w-wide">${inp('quality')}</td><td>${inp('gsm')}</td><td>${inp('dia')}</td><td class="w-wide">${inp('content')}</td>
-        <td class="num"><input type="number" step="any" min="0" data-path="${p}.yy" value="${esc(f.yy ?? '')}" class="${cls(at(`${p}.yy`))}" style="width:76px"></td>
-        <td class="num"><input type="number" step="any" min="1" data-path="${p}.rejection" value="${esc(f.rejection ?? '')}" class="${cls(at(`${p}.rejection`))}" style="width:70px"></td>
+        <td class="num"><input type="number" step="any" min="0" data-path="${p}.yy" value="${esc(f.yy ?? '')}" class="w-76 ${cls(at(`${p}.yy`))}"></td>
+        <td class="num"><input type="number" step="any" min="1" data-path="${p}.rejection" value="${esc(f.rejection ?? '')}" class="w-70 ${cls(at(`${p}.rejection`))}"></td>
         <td class="num">${fmt(pcs, 0)}</td><td class="num"><b>${fmt(Math.round(kg * 1000) / 1000)}</b></td><td class="num muted">${fmt(f.total)}</td>
         <td><button class="link yarn-btn" data-act="toggle-yarn" data-key="${oi}.${fi}">${(f.yarns || []).map(y => `${esc(y.count || '?')} ${fmt(y.percent)}%`).join(' + ') || 'Add yarn'} <span class="${Math.abs(ysum - 100) > 1e-9 && f.yarns?.length ? 'cell-msg err' : 'muted'}">${open ? '▴' : '▾'}</span></button></td>
         <td><button class="icon-btn" data-act="remove-fabric" data-oi="${oi}" data-fi="${fi}" title="Remove fabric row" aria-label="Remove fabric row ${fi + 1}">✕</button></td></tr>
         ${msgRow(iss, 15, rc)}
         ${open ? `<tr class="sub-row"><td colspan="15"><div class="block-head"><h3>Yarn split for fabric ${fi + 1}</h3><span class="sub">${f.yarns?.some(y => y.source?.derivation) ? 'Suggested from the fabric content — please confirm' : ''}</span></div>
-          <table class="grid-input" style="max-width:640px"><thead><tr><th>Yarn count</th><th>Yarn colour</th><th class="num">%</th><th class="num">kg</th><th></th></tr></thead><tbody>
+          <table class="grid-input yarn-table"><thead><tr><th>Yarn count</th><th>Yarn colour</th><th class="num">%</th><th class="num">kg</th><th></th></tr></thead><tbody>
           ${(f.yarns || []).map((y, yi) => `<tr><td><input data-path="${p}.yarns.${yi}.count" value="${esc(y.count)}" class="${cls(at(`${p}.yarns.${yi}.count`))}"></td><td><input data-path="${p}.yarns.${yi}.color" list="list-color" value="${esc(y.color)}"></td>
-            <td class="num"><input type="number" step="any" min="0" max="100" data-path="${p}.yarns.${yi}.percent" value="${esc(y.percent ?? '')}" style="width:80px"></td>
+            <td class="num"><input type="number" step="any" min="0" max="100" data-path="${p}.yarns.${yi}.percent" value="${esc(y.percent ?? '')}" class="w-80"></td>
             <td class="num">${fmt(derived[`${p}.yarns.${yi}`]?.kg ?? kg * num(y.percent) / 100)}</td><td><button class="icon-btn" data-act="remove-yarn" data-path="${p}" data-yi="${yi}" aria-label="Remove yarn">✕</button></td></tr>`).join('')}
           </tbody><tfoot><tr><td colspan="2"><button class="link" data-act="add-yarn" data-path="${p}">＋ Add yarn</button></td><td class="num ${Math.abs(ysum - 100) > 1e-9 && f.yarns?.length ? 'cell-msg err' : ''}">${fmt(ysum)}%</td><td></td><td></td></tr></tfoot></table></td></tr>` : ''}`;
     }).join('') || '<tr><td colspan="15" class="empty">No fabric table was found in this file.</td></tr>'}
@@ -375,7 +376,7 @@ function trimsTab(o, oi) {
       const open = state.openGroups.has(key) || (issues.some(i => i.severity === 'error'));
       const descs = new Set(list.map(([a]) => a.description));
       const descIss = list.map(([, ai]) => at(`orders.${oi}.accessories.${ai}.description`)).find(Boolean);
-      return `<tr class="group-row ${open ? 'open' : ''}" data-act="toggle-group" data-key="${esc(key)}"><td colspan="4"><span class="caret">▸</span> ${esc(first.category || first.name || 'Accessory')} <span class="muted" style="font-weight:500">${esc(first.supplier || '')} · ${plural(list.length, 'row')}</span>
+      return `<tr class="group-row ${open ? 'open' : ''}" data-act="toggle-group" data-key="${esc(key)}"><td colspan="4"><span class="caret">▸</span> ${esc(first.category || first.name || 'Accessory')} <span class="muted group-meta">${esc(first.supplier || '')} · ${plural(list.length, 'row')}</span>
           ${issues.length ? ` <span class="count-badge ${issues.some(i => i.severity === 'error') ? 'err' : 'warn'}" title="${issues.length} to check">${issues.length}</span>` : ''}</td>
         <td>${descs.size === 1 ? `<input data-group-desc="${list.map(([, ai]) => ai).join(',')}" data-oi="${oi}" value="${esc(first.description)}" maxlength="120" class="${cls(descIss)}" title="Description saved for all ${list.length} rows">` : '<span class="muted">varies</span>'}</td>
         <td>${esc(first.uom || '')}</td><td class="num">${fmt(total)}</td><td></td><td></td></tr>
@@ -385,11 +386,11 @@ function trimsTab(o, oi) {
           const rc = iss.some(i => i.severity === 'error') ? 'row-err' : iss.length ? 'row-warn' : '';
           return `<tr class="${rc} ${iss.length ? 'has-msg' : ''}">
           <td><select data-path="${p}.line" data-type="int">${lineOptions(o, a.line, true)}</select></td>
-          <td><input data-path="${p}.size" list="list-size" value="${esc(a.size)}" style="width:80px"></td><td><input data-path="${p}.color" list="list-color" value="${esc(a.color)}"></td>
-          <td><input data-path="${p}.code" value="${esc(a.code)}" style="width:100px"></td>
+          <td><input data-path="${p}.size" list="list-size" value="${esc(a.size)}" class="w-80"></td><td><input data-path="${p}.color" list="list-color" value="${esc(a.color)}"></td>
+          <td><input data-path="${p}.code" value="${esc(a.code)}" class="w-100"></td>
           <td>${descs.size > 1 ? `<input data-path="${p}.description" value="${esc(a.description)}" class="${cls(at(`${p}.description`))}">` : ''}</td>
-          <td><input data-path="${p}.uom" value="${esc(a.uom)}" class="${cls(at(`${p}.uom`))}" style="width:64px"></td>
-          <td class="num"><input type="number" step="any" min="0" data-path="${p}.total" value="${esc(a.total ?? '')}" style="width:96px" class="${cls(at(`${p}.total`))}"></td>
+          <td><input data-path="${p}.uom" value="${esc(a.uom)}" class="w-64 ${cls(at(`${p}.uom`))}"></td>
+          <td class="num"><input type="number" step="any" min="0" data-path="${p}.total" value="${esc(a.total ?? '')}" class="w-96 ${cls(at(`${p}.total`))}"></td>
           <td class="num">${derived[p] ? fmt(derived[p].quantity) : '—'}</td>
           <td><button class="icon-btn" data-act="remove-acc" data-oi="${oi}" data-ai="${ai}" aria-label="Remove row">✕</button></td></tr>${msgRow(iss, 9, rc)}`; }).join('') : ''}`;
     }).join('') || '<tr><td colspan="9" class="empty">No accessory tables were found in this file.</td></tr>'}
@@ -415,7 +416,7 @@ function renderSide() {
 
 function askFile() {
   const body = drawer('Ask about this file', `<p class="muted">The local AI explains this upload using only what was read from the file and the last check. It cannot change or save anything.</p>
-    <form id="ask-form" style="display:grid;gap:8px"><textarea id="ask" rows="3" maxlength="1000" placeholder="Why is the sample quantity zero?" required></textarea>
+    <form id="ask-form" class="stack"><textarea id="ask" rows="3" maxlength="1000" placeholder="Why is the sample quantity zero?" required></textarea>
     <button class="primary" type="submit">Ask</button></form><div id="answer" class="answer-box" hidden></div>`);
   $('#ask-form', body).onsubmit = e => { e.preventDefault(); ask($('#ask').value); };
   $('#ask').focus();
@@ -630,7 +631,7 @@ export function showApprove() {
   const canApprove = plan.live && !plan.errors.length && can('approve');
   const root = $('#stage-approve');
   root.innerHTML = `
-    <div class="row" style="margin-bottom:12px"><button class="ghost" data-act2="back-review">← Back to the order entry</button><span class="spacer"></span>
+    <div class="row mb-12"><button class="ghost" data-act2="back-review">← Back to the order entry</button><span class="spacer"></span>
       <span class="muted small-text">${esc(d.filename)} · ${esc(d.orders.map(o => `${o.order_ref} · ${o.style}`).join(', '))}</span></div>
     ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected. This view used the saved database structure, so existing masters were not checked. Start the database and check again to approve.</div></div>'}
     <div class="kpis">${[['New records', inserts.length], ['Oracle tables', tables.size], ['Existing masters reused', reuse.length], ['Pieces', fmt(plan.totals.pieces, 0)], ['Fabric (kg)', fmt(plan.totals.fabric_kg)]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
@@ -674,9 +675,9 @@ export async function showSaved(result, target = $('#stage-saved'), standalone =
       <h1>${result.already_committed ? 'This order is in Oracle.' : 'The order is saved in Oracle.'}</h1>
       <p class="muted">Approved by ${esc(result.approver || '—')} · ${esc(new Date(result.committed_at).toLocaleString())} · ${plural((result.rows || []).length, 'new record')}${(result.reused || []).length ? `, ${plural(result.reused.length, 'existing master')} linked` : ''}</p>
       <div class="ids">${(result.orders || []).map(o => `<span><b>${esc(o.order_ref)}</b> · ORDMASID <code>${esc(o.ordmasid)}</code></span>`).join('')}</div></div>
-      <div style="display:grid;gap:8px">${(result.orders || []).map(o => `<button class="secondary" data-explore-order="${esc(o.ordmasid)}">Open in Database</button>`).join('')}${standalone ? '' : '<button class="primary" data-act2="another">Start another order</button>'}</div></section>
+      <div class="stack">${(result.orders || []).map(o => `<button class="secondary" data-explore-order="${esc(o.ordmasid)}">Open in Database</button>`).join('')}${standalone ? '' : '<button class="primary" data-act2="another">Start another order</button>'}</div></section>
     ${flowCard('Where your data was saved', 'Reading the rows back from Oracle…', '<span class="pill" data-flow-pill>checking</span>')}
-    ${(result.reference_only || []).length ? `<div class="banner info" style="margin-top:12px"><span class="b-ic">i</span><div>Not saved (mapping not verified yet): ${result.reference_only.map(r => `${esc(r.business)} (${r.rows} rows)`).join(', ')}.</div></div>` : ''}`;
+    ${(result.reference_only || []).length ? `<div class="banner info mt-12"><span class="b-ic">i</span><div>Not saved (mapping not verified yet): ${result.reference_only.map(r => `${esc(r.business)} (${r.rows} rows)`).join(', ')}.</div></div>` : ''}`;
   if (!standalone) stage('saved');
   try {
     const graph = await api(`/api/history/${id(result.job_id)}/graph`);

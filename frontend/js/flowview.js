@@ -30,8 +30,8 @@ export function graphModel(graph) {
 export function renderFlowView(el, graph, { planned = false, columns = {}, onReferenceOnly } = {}) {
   const first = [...graph.nodes].sort((a, b) => (ORDER[a.kind] ?? 3) - (ORDER[b.kind] ?? 3))[0];
   el.innerHTML = `<div class="flow-wrap" data-flow></div>
-    <div class="legend"><span><i style="background:var(--header)"></i>Order header</span><span><i style="background:var(--brand)"></i>Order detail tables</span>
-      <span><i style="background:var(--master)"></i>Master tables</span><span><i style="border:1.5px dashed #94a3b8;background:#fff"></i>Checked but not saved</span>
+    <div class="legend"><span><i class="sw-header"></i>Order header</span><span><i class="sw-brand"></i>Order detail tables</span>
+      <span><i class="sw-master"></i>Master tables</span><span><i class="sw-dashed"></i>Checked but not saved</span>
       <span class="muted">Click a table to see its rows below</span></div>
     <div class="table-view" data-tv></div>`;
   const tv = el.querySelector('[data-tv]');
@@ -91,7 +91,7 @@ function renderTable(el, node, { planned, columns, onReferenceOnly }) {
       body.innerHTML = formView(cols.map(c => ({ label: labelOf(node, c, columns), code: `${node.table}.${c}`, html: valueHtml(node, r, c),
         src: srcOf(node, r, c, columns), written: !planned && written.has(c) })));
     } else {
-      body.innerHTML = `<div class="tbl-wrap" style="max-height:440px"><table><thead><tr><th>#</th>${cols.map(c => `<th>${esc(labelOf(node, c, columns))}<span class="code">${esc(c)}</span></th>`).join('')}
+      body.innerHTML = `<div class="tbl-wrap max-h-440"><table><thead><tr><th>#</th>${cols.map(c => `<th>${esc(labelOf(node, c, columns))}<span class="code">${esc(c)}</span></th>`).join('')}
         <th>${planned ? 'Action' : 'Check'}</th></tr></thead><tbody>
         ${recs.map((r, i) => `<tr><td class="muted" title="${esc(r.where || '')}">${i + 1}</td>${cols.map(c => `<td class="${written.has(c) && !planned ? 'written' : ''} ${String(r.decoded?.[c] ?? r.live?.[c] ?? '').length <= 24 ? 'nowrap' : ''}">${valueHtml(node, r, c)}</td>`).join('')}
           <td>${planned ? (r.kind === 'reused' ? '<span class="chip reuse">use existing</span>' : '<span class="chip new">insert</span>') :
@@ -99,7 +99,7 @@ function renderTable(el, node, { planned, columns, onReferenceOnly }) {
         </tbody></table></div>`;
     }
   };
-  el.innerHTML = head + `${planned ? '' : `<label class="check" style="margin-bottom:10px"><input type="checkbox" data-all> Show every column Oracle returned (not only the ones POPPYS AI wrote)</label>`}<div data-body></div>`;
+  el.innerHTML = head + `${planned ? '' : `<label class="check mb-10"><input type="checkbox" data-all> Show every column Oracle returned (not only the ones POPPYS AI wrote)</label>`}<div data-body></div>`;
   const body = el.querySelector('[data-body]');
   el.querySelector('[data-all]')?.addEventListener('change', e => { showAll = e.target.checked; draw(); });
   draw();

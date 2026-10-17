@@ -66,6 +66,12 @@ def timed_out(exc):
     return code in TIMED_OUT or any(str(exc).startswith(c) for c in TIMED_OUT)
 
 
+def lost(exc):
+    """The driver closed the session (DPY-4011), e.g. when a timed-out call could not be cancelled in time."""
+    code = getattr(exc.args[0], 'full_code', '') if getattr(exc, 'args', None) else ''
+    return code == 'DPY-4011' or str(exc).startswith('DPY-4011')
+
+
 def limited(execute, timeout_ms):
     """The executor with a tighter time limit when it supports one (Oracle); other executors run unchanged."""
     return execute.limited(timeout_ms) if hasattr(execute, 'limited') else execute
@@ -212,9 +218,18 @@ def _guard(sql):
         raise ValueError('Only single SELECT statements may run.')
 
 
+def _alive(conn):
+    """False once the driver knows the session is gone (no round trip); connections without the check count as alive."""
+    check = getattr(conn, 'is_healthy', None)
+    return check() if callable(check) else True
+
+
 class OracleExecutor:
     """Read-only execution: SET TRANSACTION READ ONLY, call timeout, bounded fetch, always rolled back.
-    A query that hits its time limit raises TimedOut (a plain-English QueryError); the connection stays usable."""
+    A query that hits its time limit raises TimedOut (a plain-English QueryError). Usually the driver cancels the
+    call and the session stays usable; when the database cannot be interrupted in time (a busy server, PL/SQL that
+    ignores the break) the driver closes the session (DPY-4011): that is reported as the same TimedOut, and the
+    pool (backend/oracle_store.py) drops the session when the connection is closed."""
 
     def __init__(self, conn, timeout_ms=TIMEOUT_MS):
         self.conn = conn; self.timeout_ms = timeout_ms; conn.call_timeout = timeout_ms
@@ -224,18 +239,23 @@ class OracleExecutor:
         c = self.conn.cursor()
         limit = int(timeout_ms or self.timeout_ms)
         self.conn.call_timeout = limit
+        started = time.monotonic()
         try:
             c.execute('SET TRANSACTION READ ONLY')
             c.arraysize = max(50, min(int(max_rows), 1000))
             c.execute(sql, binds)
             return c.fetchmany(int(max_rows))
         except Exception as exc:
-            if timed_out(exc):
+            if timed_out(exc) or (lost(exc) and (time.monotonic() - started) * 1000 >= limit):
                 raise TimedOut(limit / 1000) from None
             raise
         finally:
-            self.conn.call_timeout = self.timeout_ms
-            self.conn.rollback()
+            try:
+                self.conn.call_timeout = self.timeout_ms
+                self.conn.rollback()
+            except Exception:
+                if _alive(self.conn):
+                    raise     # a live session that cannot roll back is a real error; a lost one has nothing to roll back
 
     def limited(self, timeout_ms):
         return lambda sql, binds, max_rows: self(sql, binds, max_rows, timeout_ms=min(int(timeout_ms), self.timeout_ms))
