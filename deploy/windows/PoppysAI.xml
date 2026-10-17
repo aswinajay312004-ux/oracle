@@ -19,7 +19,9 @@
   embeddable Python instead of a .venv. Interpreter flags: -E and -s ignore PYTHON* variables and the user
   site folder; not -I, which would also drop the working folder from sys.path and break "backend.main".
   The app writes its own JSON logs (request IDs, rotation) to the data folder's logs directory, so uvicorn's
-  access log stays off and no log configuration file is needed.
+  access log stays off and no log configuration file is needed. Proxy headers are off: there is no proxy, and
+  uvicorn trusts X-Forwarded-For from 127.0.0.1 by default, where every client connects from, so a local program
+  could otherwise choose the address that the sign-in throttle counts.
   (XML comments cannot contain two dashes in a row, so command-line options are not spelled out here.)
 -->
 <service>
@@ -28,7 +30,7 @@
   <description>POPPYS AI order entry (http://127.0.0.1:8008): reads buyer Excel files and, after approval, saves orders to the local Oracle database.</description>
 
   <executable>%BASE%\current\.venv\Scripts\python.exe</executable>
-  <arguments>-E -s -X utf8 -m uvicorn backend.main:app --host 127.0.0.1 --port 8008 --workers 1 --no-server-header --no-access-log --limit-concurrency 64 --timeout-graceful-shutdown 20</arguments>
+  <arguments>-E -s -X utf8 -m uvicorn backend.main:app --host 127.0.0.1 --port 8008 --workers 1 --no-server-header --no-access-log --no-proxy-headers --limit-concurrency 64 --timeout-graceful-shutdown 20</arguments>
   <workingdirectory>%BASE%\current</workingdirectory>
   <env name="POPPYS_DATA_DIR" value="%BASE%\data"/>
 

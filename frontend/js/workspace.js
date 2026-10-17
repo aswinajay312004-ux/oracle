@@ -88,7 +88,10 @@ export async function upload(file) {
   await busy('Reading the file and finding the order…', async () => {
     const form = new FormData(); form.append('file', file);
     try { [state.draft] = await Promise.all([api('/api/uploads', { method: 'POST', form }), loadFields()]); }
-    catch (e) { stage('upload', { focus: false }); showUploadError(e.message); $('#dropzone').focus(); throw e; }
+    catch (e) {
+      if (e.network) e.message = NOT_RESPONDING;   // "your draft is kept" means nothing before there is a draft
+      stage('upload', { focus: false }); showUploadError(e.message); $('#dropzone').focus(); throw e;
+    }
     Object.assign(state, { dirty: false, saved: false, tab: {}, planIssues: [], showMapping: false, notice: null, shown: null, mappingDirty: false });
     showReading();
   });
@@ -178,7 +181,7 @@ function cellMsgs(list) { return list.map(i => `<div class="cell-msg ${cls(i)}">
 // ---------------------------------------------------------------- review
 export function renderReview() {
   const d = state.draft; const root = $('#stage-review');
-  const keep = focusKey(root, [focusFallback()]);
+  const keep = focusKey(root, focusFallback());
   const locked = !!d.result;
   const needMap = !d.orders.length || /Needs column mapping/.test(d.format);
   const files = fileIssues();
@@ -203,10 +206,20 @@ export function renderReview() {
   renderSide();
   restoreFocus(keep);
 }
-// where focus goes when the control that had it is gone after a redraw (a removed row): the order's open tab
+// where focus goes when the control that had it is gone after a redraw: after removing a row, the previous row's
+// remove button, else the matching Add button; otherwise the order's open tab
+const ADD_FOR = { 'remove-line': ['li', 'add-line'], 'remove-fabric': ['fi', 'add-fabric'], 'remove-yarn': ['yi', 'add-yarn'], 'remove-acc': ['ai', null] };
 function focusFallback() {
-  const order = document.activeElement?.closest?.('#stage-review .screen');
-  return order ? `#${order.id} [data-act="tab"].active` : '#prepare';
+  const el = document.activeElement; const out = [];
+  const [idx, add] = ADD_FOR[el?.dataset?.act] || [];
+  if (idx) {
+    const scope = ['oi', 'path'].filter(k => el.dataset[k] != null).map(k => `[data-${k}="${CSS.escape(el.dataset[k])}"]`).join('');
+    out.push(`[data-act="${el.dataset.act}"]${scope}[data-${idx}="${Number(el.dataset[idx]) - 1}"]`);
+    if (add) out.push(`[data-act="${add}"]${scope}`);
+  }
+  const order = el?.closest?.('#stage-review .screen');
+  out.push(order ? `#${order.id} [data-act="tab"].active` : '#prepare');
+  return out;
 }
 
 function counts(oi) {
@@ -703,7 +716,7 @@ export function showApprove({ error = null } = {}) {
   const canApprove = plan.live && !plan.errors.length && can('approve') && !stale;
   const notSaved = plan.reference_only || [];
   state.shown = { hash: plan.hash, version: d.version };   // the plan on screen is the only one Accept may approve
-  const note = stale ? 'This check is out of date, so saving is off. <b>Check the order again</b>: it reads Oracle again and shows the entry that would really be saved.'
+  const note = error?.note ? esc(error.note) : stale ? 'This check is out of date, so saving is off. <b>Check the order again</b>: it reads Oracle again and shows the entry that would really be saved.'
     : canApprove ? `Accepting writes these ${plural(inserts.length, 'record')} in <b>one Oracle transaction</b>, reads every row back to confirm it, and records who approved it. If anything fails, nothing is saved.${warned ? ' First read the notes under <b>Please read before approving</b> and tick <b>I have read these notes</b>.' : ''}`
       : !plan.live ? 'Saving is disabled until Oracle is connected.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Your role cannot approve. An approver or administrator must accept this entry.';
   const root = $('#stage-approve');
@@ -795,7 +808,9 @@ async function acceptFailed(e, d, plan) {
   const text = !answered ? `${unsure}${fresh ? '' : ` ${NOT_RESPONDING}`}`
     : /nothing was (partially )?saved/i.test(e.message) ? e.message : `${e.message} Nothing was saved.`;
   notify(text, 'error');
-  showApprove({ error: { title: answered ? 'Not saved.' : 'Not confirmed.', text, history: !answered } });
+  // refused for this person (e.g. the four-eyes rule): the way forward is another approver, not another check
+  const note = e.status === 403 ? 'Another approver must accept this entry: ask them to open it from Recent files on the New order screen.' : null;
+  showApprove({ error: { title: answered ? 'Not saved.' : 'Not confirmed.', text, history: !answered, note } });
 }
 
 // ---------------------------------------------------------------- saved
@@ -828,7 +843,7 @@ export async function showSaved(result, target = $('#stage-saved'), standalone =
       const diffs = graph.nodes.filter(n => !n.verified && !n.reference_only).map(n => {
         const missing = (n.records || []).filter(r => !r.found).length;
         const cols = [...new Set((n.records || []).flatMap(r => r.mismatched || []))];
-        return `${n.business || n.table} (${n.table}): ${[cols.length ? `${cols.join(', ')} differ` : '', missing ? `${plural(missing, 'row')} not found` : ''].filter(Boolean).join('; ') || 'differs'}`;
+        return `${n.business || n.table} (${n.table}): ${[cols.length ? `${cols.join(', ')} ${cols.length === 1 ? 'differs' : 'differ'}` : '', missing ? `${plural(missing, 'row')} not found` : ''].filter(Boolean).join('; ') || 'differs'}`;
       });
       hero('differs', 'Saved — differences found', `Saved — differences found: ${diffs.join(' · ') || 'see the tables below'}. Tell your administrator before this order is used.`);
     }
@@ -854,10 +869,14 @@ export async function toStep(step) {
     if (current !== 'review') { renderReview(); stage('review'); }
     return true;
   }
-  // back to the upload screen
+  // back to the upload screen: a draft without unchecked corrections stays in memory, so Forward returns to it
   if (current === 'upload' || current === 'read') return true;
-  if (d && !d.result && (state.dirty || state.mappingDirty) && !await confirmDialog('Leave this order?', '<p>Corrections not yet checked will be lost. The file stays in Recent files.</p>', 'Leave it')) return false;
-  resetWorkspace();
+  if (d && !d.result && (state.dirty || state.mappingDirty)) {
+    if (!await confirmDialog('Leave this order?', '<p>Corrections not yet checked will be lost. The file stays in Recent files.</p>', 'Leave it')) return false;
+    resetWorkspace(); return true;
+  }
+  if (!d || d.result) { resetWorkspace(); return true; }
+  stage('upload'); recent();
   return true;
 }
 

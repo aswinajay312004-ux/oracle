@@ -85,7 +85,7 @@ function openChangePassword() {
 function forgetUser() {
   clearInterval(start.timer);
   closeDrawer(); if ($('#modal').open) $('#modal').close(); if ($('#confirm').open) $('#confirm').close();
-  ws.clearWorkspace(); resetChat();
+  ws.clearWorkspace(); resetChat(); $('#toasts').innerHTML = '';
   $('#history').innerHTML = ''; $('#history-detail').innerHTML = ''; $('#history-detail').hidden = true; $('#admin-body').innerHTML = '';
   view = null; try { window.history.replaceState(null, '', '#workspace'); } catch (_) { /* file previews */ }
 }
@@ -150,7 +150,7 @@ function go(next, { push = true } = {}) {
   if (next === 'explorer') loadExplorer();
   if (next === 'admin') loadAdmin();
   if (next === 'chat') { loadChat(); setTimeout(() => $('#chat-input').focus(), 50); }
-  if (next === 'workspace' && !state.draft) ws.recent();
+  if (next === 'workspace' && ws.currentStage() === 'upload') ws.recent();
   record(push);
 }
 
@@ -198,7 +198,7 @@ function bind() {
     const before = state.lastUser;
     try {
       await api(state.setup ? '/api/setup' : '/api/login', { method: 'POST', body: { username: $('#auth-user').value.trim(), password: $('#auth-pass').value } });
-      $('#auth-pass').value = '';
+      $('#auth-pass').value = ''; $('#toasts').innerHTML = '';   // "Sign in to continue" and the like are answered now
       const ready = await session();
       // the same person after a time-out keeps their unsaved corrections; a different person sees none of them
       if (before && before !== state.user) forgetUser();

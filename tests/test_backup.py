@@ -1,9 +1,12 @@
 """scripts/backup.py (online SQLite backup, verify, restore, retention, drill) and the Windows service files it ships
-with (deploy/windows, docs/RUNBOOK.md). Everything runs in temporary folders; the real data/ folder is never used."""
+with (deploy/windows, setup.ps1, start.ps1, docs/RUNBOOK.md). Everything runs in temporary folders; the real data/
+folder is never used. PowerShell functions are tested by taking them out of the scripts with the PowerShell parser
+(the scripts themselves need an administrator and Windows)."""
 import datetime as dt
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import secrets
 import shutil
@@ -11,6 +14,8 @@ import socket
 import sqlite3
 import struct
 import subprocess
+import sys
+import time
 import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import closing
@@ -26,7 +31,11 @@ _spec.loader.exec_module(bk)
 
 DEPLOY = ROOT / 'deploy' / 'windows'
 PS_SCRIPTS = ['install-service.ps1', 'upgrade.ps1', 'rollback.ps1', 'backup-task.ps1', 'uninstall-service.ps1']
-POWERSHELL = shutil.which('pwsh') or shutil.which('powershell')
+ROOT_PS = [ROOT / 'setup.ps1', ROOT / 'start.ps1', ROOT / 'scripts' / 'check.ps1']
+# On Windows the laptop's own Windows PowerShell 5.1 (powershell.exe), so the parse checks 5.1; elsewhere PowerShell 7.
+POWERSHELL = (shutil.which('powershell') or shutil.which('pwsh')) if os.name == 'nt' else (shutil.which('pwsh') or shutil.which('powershell'))
+GIT = shutil.which('git')
+needs_ps = pytest.mark.skipif(not POWERSHELL, reason='PowerShell is not installed')
 
 
 def sha(path):
@@ -453,7 +462,7 @@ def test_service_xml_is_well_formed_and_has_the_researched_settings():
     assert args[:2] == ['-E', '-s'] and '-I' not in args
     flat = ' '.join(args)
     for flag in ('-m uvicorn backend.main:app', '--host 127.0.0.1', '--port 8008', '--workers 1', '--no-server-header', '--no-access-log',
-                 '--limit-concurrency 64', '--timeout-graceful-shutdown 20'):
+                 '--no-proxy-headers', '--limit-concurrency 64', '--timeout-graceful-shutdown 20'):
         assert flag in flat, flag
     acct = svc.find('serviceaccount')
     assert acct.findtext('domain') == 'NT AUTHORITY' and acct.findtext('user') == 'LocalService' and acct.find('password') is None

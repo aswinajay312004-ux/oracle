@@ -38,7 +38,13 @@ def heuristic(sheet, fields=None):
                 found[key] = workbooks.address(t[1], t[0]); break
     best = None
     for r in range(1, min(g.rows, 120) + 1):
-        sizes = [c for c in range(1, g.cols + 1) if isinstance(g.v(r, c), (str, int)) and SIZE.match(str(g.v(r, c)).strip())]
+        sizes = [c for c in range(1, g.cols + 1) if isinstance(g.v(r, c), (str, int)) and not isinstance(g.v(r, c), bool)
+                 and SIZE.match(str(g.v(r, c)).strip())]
+        texts = [c for c in range(1, g.cols + 1) if isinstance(g.v(r, c), str) and not matcher.is_number(g.v(r, c))]
+        # Numeric sizes (28, 30, 32) only on a row of headings, as for the matcher: other text headings beside them
+        # (a colour or total heading); a row of numbers with one colour name is a quantity row, not the size header.
+        if sum(isinstance(g.v(r, c), str) for c in sizes) < 3 and len([c for c in texts if c not in sizes]) < 2:
+            continue
         # Text size labels ("S", "3-6M") outrank bare numbers, which are usually quantities.
         score = sum(1 if isinstance(g.v(r, c), str) else 0.4 for c in sizes)
         if len(sizes) >= 3 and (best is None or score > best[2]):

@@ -352,3 +352,333 @@ def test_app_screens_under_the_strict_policy(browser, app_site, tmp_path):
         assert pg.problems == []
     finally:
         pg.close()
+
+
+# ---- the order flow in the real app: review findings -------------------------------------------------------------
+# Each test drives tests/demo_server.py (fake Oracle) the way staff do: upload, review, check, approve, saved.
+ADMIN_PW = 'smoke-test-password'
+_runs = [int(time.time()) % 100000]
+
+
+def sign_in(pg, base, user='admin', password=ADMIN_PW):
+    """Open the app and sign in (creating the administrator on a new workspace)."""
+    pg.goto(base + '/#workspace'); pg.wait_for_selector('#auth-submit', state='attached')
+    until(lambda: pg.is_hidden('#auth') or any(w in pg.inner_text('#auth-submit').lower() for w in ('administrator', 'sign in')))
+    if pg.is_visible('#auth'):
+        pg.fill('#auth-user', user); pg.fill('#auth-pass', password); pg.click('#auth-submit')
+        pg.wait_for_selector('#auth', state='hidden')
+    until(lambda: pg.inner_text('#username') == user)
+
+
+def unique_bom():
+    """The merch BOM with one extra cell, so every run is a new workbook (the same file is never imported twice)."""
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from fixtures import merch_bom, save
+    _runs[0] += 1
+    wb = load_workbook(BytesIO(merch_bom())); wb.active['Z1'] = f'run {_runs[0]} {time.time()}'
+    return save(wb)
+
+
+def to_review(pg):
+    pg.wait_for_selector('#dropzone')
+    pg.set_input_files('#file-input', files=[{'name': f'bom_{_runs[0]}.xlsx', 'mimeType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'buffer': unique_bom()}])
+    pg.wait_for_selector('#go-review', state='visible'); pg.click('#go-review'); pg.wait_for_selector('#stage-review:not([hidden]) .matrix')
+
+
+def fill_review(pg):
+    for sel in ['[data-act="basis"][data-basis="order_demo"]', '[data-act="unit"][data-unit="PCS"]']:
+        if pg.locator(sel).count():
+            pg.click(sel)
+    values = {'order_ref': f'PK/26-27/S/T{_runs[0]}', 'po_number': 'PO-77', 'order_date': '2026-10-01', 'ship_date': '2027-01-15', 'style': 'T1001'}
+    for k, v in values.items():
+        box = pg.locator(f'input[data-path="orders.0.{k}"]')
+        if box.count() and (k == 'order_ref' or not box.input_value()):
+            box.fill(v)
+
+
+def to_approval(pg):
+    to_review(pg); fill_review(pg)
+    pg.click('#prepare'); pg.wait_for_selector('#stage-approve:not([hidden]) .kpis', timeout=60000)
+
+
+def tick_notes(pg):
+    if pg.locator('#ack-warnings').count():
+        pg.check('#ack-warnings')
+
+
+def press_accept(pg):
+    tick_notes(pg)
+    pg.click('[data-act2="approve"]'); pg.wait_for_selector('#confirm[open]')
+    body = pg.inner_text('#confirm-body')
+    pg.click('#confirm-ok')
+    return body
+
+
+def stage_shown(pg):
+    return pg.evaluate("() => ['upload', 'read', 'review', 'approve', 'saved'].find(s => !document.querySelector('#stage-' + s).hidden)")
+
+
+def kpi(pg, name):
+    return pg.evaluate("n => [...document.querySelectorAll('#stage-approve .kpi')].find(k => k.querySelector('small').textContent === n).querySelector('strong').textContent", name)
+
+
+def call(pg, path, method='GET', body=None):
+    """A same-origin request from the page (its session cookie)."""
+    return pg.evaluate("""async ([path, method, body]) => { const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+      let d = null; try { d = await r.json(); } catch (_) { /* empty */ } return { status: r.status, data: d }; }""", [path, method, body])
+
+
+def real_problems(pg):
+    # refused requests the test causes on purpose are logged by Chromium as "Failed to load resource"
+    return [p for p in pg.problems if 'Failed to load resource' not in p]
+
+
+@pytest.fixture
+def app_page(browser, app_site):
+    pages = []
+
+    def make(user='admin', password=ADMIN_PW):
+        ctx = browser.new_context(viewport={'width': 1366, 'height': 860})
+        pg = ctx.new_page(); pg.problems = []; pg.add_init_script(WATCH_CSP)
+        pg.on('console', lambda m: m.type == 'error' and pg.problems.append(m.text))
+        pg.on('pageerror', lambda e: pg.problems.append(str(e)))
+        pg.set_default_timeout(30000)
+        pg.route(app_site + '/', lambda route: route.fulfill(response=(r := route.fetch()), headers={**r.headers, 'content-security-policy': CSP}))
+        if user:
+            sign_in(pg, app_site, user, password)
+        pages.append(pg)
+        return pg
+    yield make
+    try:
+        for pg in pages:
+            assert csp_violations(pg) == [], csp_violations(pg)
+            assert real_problems(pg) == [], real_problems(pg)
+    finally:
+        for pg in pages:
+            pg.context.close()
+
+
+def test_accept_never_saves_a_version_the_approver_did_not_see(app_page):
+    """A colleague changes and re-checks the draft while it is on the approver's screen. Accept is refused (409);
+    the approver must then see the changed draft and a plain reason, and only a fresh check can be saved."""
+    a = app_page(); to_approval(a)
+    seen = kpi(a, 'Pieces')
+    draft_id = call(a, '/api/drafts')['data'][0]['id']
+    b = app_page()
+    d = call(b, f'/api/drafts/{draft_id}')['data']
+    d['orders'][0]['lines'][0]['sizes'][0]['quantity'] = 999
+    d = call(b, f'/api/drafts/{draft_id}', 'PUT', {'version': d['version'], 'orders': d['orders']})['data']
+    assert call(b, f'/api/drafts/{draft_id}/preview', 'POST', {'version': d['version']})['status'] == 200
+    press_accept(a)
+    a.wait_for_selector('#review-notice')
+    assert stage_shown(a) == 'review'
+    notice = a.inner_text('#review-notice')
+    assert 'Someone changed this draft — check it again' in notice and f'You checked {seen} pieces' in notice, notice
+    assert a.input_value('input[data-path="orders.0.lines.0.sizes.0.quantity"]') == '999'   # the latest version is on screen
+    assert call(a, f'/api/drafts/{draft_id}')['data'].get('result') is None                 # nothing was saved
+    a.click('#prepare'); a.wait_for_selector('#stage-approve:not([hidden]) .kpis')
+    pieces = kpi(a, 'Pieces')
+    assert pieces != seen
+    confirm = press_accept(a)
+    assert f'Total: {pieces} pieces' in confirm, confirm            # the confirm box says how much is saved
+    assert 'Not saved (mapping not verified yet)' in confirm         # and what is not (fabric and trims here)
+    a.wait_for_selector('#stage-saved:not([hidden])')
+    saved = call(a, f'/api/drafts/{draft_id}')['data']['result']
+    assert saved['totals']['pieces'] == int(pieces.replace(',', ''))
+
+
+def test_a_failed_accept_makes_the_check_stale_and_the_next_check_runs_preview(app_page):
+    a = app_page(); to_approval(a)
+    a.route('**/accept', lambda r: r.fulfill(status=409, content_type='application/json',
+                                             body='{"detail": "Order reference PK/1 already exists. Existing orders are not overwritten."}'))
+    press_accept(a)
+    a.wait_for_selector('#accept-error')
+    a.unroute('**/accept')
+    bar = a.inner_text('#stage-approve .action-bar')
+    assert 'already exists' in bar and 'Nothing was saved' in bar, bar          # a lasting message in the action bar
+    assert a.locator('[data-act2="approve"]').count() == 0                       # the old check cannot be accepted again
+    assert a.evaluate('() => document.activeElement.dataset.act2') == 'recheck'
+    previews = []
+    a.on('request', lambda r: r.url.endswith('/preview') and previews.append(r.url))
+    a.click('[data-act2="back-review"]'); a.wait_for_selector('#stage-review:not([hidden])')
+    assert a.inner_text('#prepare') == 'Check & continue →' and a.inner_text('#stage-review .doc-bar .pill') == 'Check it again'
+    a.click('#prepare'); a.wait_for_selector('#stage-approve:not([hidden]) [data-act2="approve"]')
+    assert len(previews) == 1
+    # "Open the approval view" (a check that is still fresh) checks again too
+    a.click('[data-act2="back-review"]'); a.wait_for_selector('#stage-review:not([hidden])')
+    a.click('#prepare'); a.wait_for_selector('#stage-approve:not([hidden]) [data-act2="approve"]')
+    until(lambda: len(previews) == 2)
+
+
+def test_accept_with_no_answer_does_not_claim_nothing_was_saved(app_page):
+    a = app_page(); to_approval(a)
+    a.route('**/accept', lambda r: r.abort('connectionreset'))
+    press_accept(a); a.wait_for_selector('#accept-error'); a.unroute('**/accept')
+    text = a.inner_text('#accept-error')
+    assert 'We could not confirm whether it was saved — open Saved orders to check' in text and 'Nothing was' not in text, text
+    assert a.locator('#accept-error [data-goto-view="history"]').count() == 1
+    # the answer is lost after the server saved it: the draft is read again and the saved screen shown
+    a.click('[data-act2="recheck"]'); a.wait_for_selector('#stage-approve:not([hidden]) [data-act2="approve"]')
+
+    def save_then_drop(route):
+        route.fetch(); route.abort('connectionreset')
+    a.route('**/accept', save_then_drop)
+    press_accept(a); a.wait_for_selector('#stage-saved:not([hidden])'); a.unroute('**/accept')
+    assert 'the order was saved' in ' '.join(a.locator('#toasts .toast span').all_inner_texts())
+
+
+def test_saved_screen_says_verified_only_when_the_read_back_matched(app_page):
+    a = app_page()
+    held = []
+    a.route('**/api/history/*/graph', lambda r: held.append(r))
+    to_approval(a); press_accept(a); a.wait_for_selector('#stage-saved:not([hidden]) [data-hero="checking"]')
+    assert a.inner_text('#stage-saved [data-eyebrow]').lower() == 'saved in oracle'          # not "verified" yet
+    until(lambda: a.evaluate('() => true') and held)   # a Playwright call lets the route handler run
+    held[0].fulfill(status=500, content_type='application/problem+json', body='{"detail": "Something went wrong. Nothing was saved. Reference abc123."}')
+    a.wait_for_selector('#stage-saved [data-hero="unchecked"]')
+    check = a.inner_text('#stage-saved [data-check]')
+    assert check.startswith('Saved — the check after saving could not run:') and 'Nothing was saved' not in check, check
+    assert 'Not saved:' in a.inner_text('#stage-saved .saved-hero')            # fabric/trims not saved, said at the top
+    a.unroute('**/api/history/*/graph')
+
+    def differ(route):
+        resp = route.fetch(); g = resp.json(); g['verified'] = False
+        n = next(x for x in g['nodes'] if x['table'] == 'ORDMAS'); n['verified'] = False
+        n['records'][0]['matches'] = False; n['records'][0]['mismatched'] = ['DOCID']
+        route.fulfill(response=resp, json=g)
+    a.route('**/api/history/*/graph', differ)
+    a.click('[data-act2="another"]'); to_approval(a); press_accept(a)
+    a.wait_for_selector('#stage-saved [data-hero="differs"]')
+    assert a.inner_text('#stage-saved [data-check]').startswith('Saved — differences found: Order Entry')
+    a.unroute('**/api/history/*/graph')
+    a.click('[data-act2="another"]'); to_approval(a); press_accept(a)
+    a.wait_for_selector('#stage-saved [data-hero="verified"]')
+    assert a.inner_text('#stage-saved [data-eyebrow]').lower() == 'saved and verified'
+
+
+def test_warnings_must_be_ticked_before_accept(app_page):
+    a = app_page(); to_approval(a)
+    if not a.locator('#ack-warnings').count():
+        pytest.skip('this plan has no warnings')
+    assert a.is_disabled('[data-act2="approve"]')
+    accepts = []
+    a.on('request', lambda r: '/accept' in r.url and accepts.append(r.post_data_json))
+    a.check('#ack-warnings'); assert a.is_enabled('[data-act2="approve"]')
+    a.click('[data-act2="approve"]'); a.click('#confirm-ok'); a.wait_for_selector('#stage-saved:not([hidden])')
+    assert accepts and accepts[0].get('acknowledged_warnings') is True
+
+
+def test_sign_out_and_another_person_clear_the_draft_but_a_time_out_keeps_it(app_page, app_site):
+    admin = app_page()
+    call(admin, '/api/users', 'POST', {'username': 'priya', 'password': 'Garment-Floor-2026', 'role': 'operator'})
+    call(admin, '/api/users/priya', 'PATCH', {'password': 'Garment-Floor-2026'})   # a temporary password again
+    a = app_page()
+    to_review(a); fill_review(a); a.fill('input[data-path="orders.0.season"]', 'KEEP ME')
+    # the same person after a time-out: the corrections are still there and still save
+    call(admin, '/api/sessions/sign-out-everyone', 'POST')
+    a.click('#prepare'); a.wait_for_selector('#auth', state='visible')
+    a.fill('#auth-user', 'admin'); a.fill('#auth-pass', ADMIN_PW); a.click('#auth-submit'); a.wait_for_selector('#auth', state='hidden')
+    assert stage_shown(a) == 'review' and a.input_value('input[data-path="orders.0.season"]') == 'KEEP ME'
+    assert a.locator('#toasts .toast').count() == 0                     # "Sign in to continue" is answered now
+    # another person signs in after a time-out: nothing of the previous draft is left
+    call(admin, '/api/sessions/sign-out-everyone', 'POST')
+    a.click('#prepare'); a.wait_for_selector('#auth', state='visible')
+    a.fill('#auth-user', 'priya'); a.fill('#auth-pass', 'Garment-Floor-2026'); a.click('#auth-submit')
+    a.wait_for_selector('#pw-box:not([hidden])')                         # an administrator-set password: choose one first
+    assert a.evaluate('() => document.activeElement.id') == 'pw-current'
+    a.fill('#pw-current', 'Garment-Floor-2026'); a.fill('#pw-new', 'Floor-Own-Secret-77'); a.fill('#pw-repeat', 'Floor-Own-Secret-7'); a.click('#pw-submit')
+    assert 'not the same' in a.inner_text('#pw-error')
+    a.fill('#pw-repeat', 'Floor-Own-Secret-77'); a.click('#pw-submit'); a.wait_for_selector('#auth', state='hidden')
+    assert a.inner_text('#username') == 'priya' and stage_shown(a) == 'upload'
+    assert a.evaluate("() => ['review', 'approve', 'saved'].every(s => document.querySelector('#stage-' + s).innerHTML === '')")
+    # signing out with unchecked corrections asks first, then clears everything
+    to_review(a); a.fill('input[data-path="orders.0.season"]', 'PRIYA TYPED')
+    a.click('#logout'); a.wait_for_selector('#confirm[open]'); a.click('#confirm-ok'); a.wait_for_selector('#auth', state='visible')
+    assert a.evaluate("() => document.querySelector('#stage-review').innerHTML") == '' and stage_shown(a) == 'upload'
+    # own password, any time: "Change my password" next to Sign out
+    sign_in(a, app_site, 'priya', 'Floor-Own-Secret-77')
+    a.click('#change-pw'); a.wait_for_selector('#modal[open] #cp-form')
+    a.fill('#cp-current', 'wrong-password-123'); a.fill('#cp-new', 'Floor-Second-Secret-88'); a.fill('#cp-repeat', 'Floor-Second-Secret-88'); a.click('#cp-submit')
+    until(lambda: a.is_visible('#cp-error'))
+    a.fill('#cp-current', 'Floor-Own-Secret-77'); a.click('#cp-submit')
+    until(lambda: not a.evaluate("() => document.querySelector('#modal').open"))
+
+
+def test_keyboard_focus_stays_put_and_rows_and_drawer_work_by_keyboard(app_page):
+    a = app_page(); to_review(a)
+    assert a.evaluate('() => document.activeElement.id') == 'ws-title'          # a step change: its heading
+    active = "() => { const e = document.activeElement; return e === document.body ? 'BODY' : (e.dataset.act || '') + ':' + (e.dataset.tab || e.dataset.unit || e.dataset.basis || e.dataset.li || ''); }"
+    for sel, want in [('[data-act="basis"][data-basis="order_demo"]', 'basis:order_demo'), ('[data-act="unit"][data-unit="PCS"]', 'unit:PCS'),
+                      ('[data-act="tab"][data-tab="trims"]', 'tab:trims')]:
+        a.focus(sel); a.keyboard.press('Enter')
+        assert a.evaluate(active) == want                                        # the same control after the redraw
+    rows = a.locator('tr.group-row')
+    assert rows.count() and all(t == 0 for t in a.evaluate("() => [...document.querySelectorAll('tr.group-row')].map(r => r.tabIndex)"))
+    rows.first.focus(); a.keyboard.press('Enter')
+    assert a.evaluate("() => document.activeElement.matches('tr.group-row') && document.activeElement.getAttribute('aria-expanded')") == 'true'
+    a.click('[data-act="tab"][data-tab="order"]'); a.focus('[data-act="add-line"]'); a.keyboard.press('Enter')
+    n = a.locator('[data-act="remove-line"]').count()
+    a.focus(f'[data-act="remove-line"][data-li="{n - 1}"]'); a.keyboard.press('Enter')
+    assert a.evaluate(active) == f'remove-line:{n - 2}'                           # removed: the row above
+    a.click('.nav [data-view="explorer"]'); a.wait_for_selector('#table-view tr[data-row]')
+    row = a.locator('#table-view tr[data-row]').first
+    assert row.get_attribute('tabindex') == '0'
+    row.focus(); a.keyboard.press('Enter'); a.wait_for_selector('#drawer:not([hidden])')
+    assert a.evaluate('() => document.activeElement.id') == 'drawer-close'
+    for key in ['Tab'] * 25 + ['Shift+Tab'] * 5:
+        a.keyboard.press(key)
+        assert a.evaluate("() => !!document.activeElement.closest('#drawer')"), key   # the modal drawer keeps focus
+    a.keyboard.press('Escape')
+    assert a.evaluate("() => document.activeElement.matches('#table-view tr[data-row]')")   # back on the row that opened it
+
+
+def test_every_review_control_has_a_name(app_page):
+    a = app_page(); to_review(a)
+    unnamed = """() => [...document.querySelectorAll('#orders input, #orders select, #orders textarea')].filter(e => e.offsetParent !== null)
+      .filter(e => !((e.labels && [...e.labels].some(l => l.textContent.trim())) || e.getAttribute('aria-label') || e.getAttribute('aria-labelledby') || e.title))
+      .map(e => e.dataset.path || e.id || e.outerHTML.slice(0, 60))"""
+    a.click('[data-act="basis"][data-basis="order_demo"]')
+    assert a.evaluate(unnamed) == []
+    a.click('[data-tab="fabric"]'); a.locator('[data-act="toggle-yarn"]').first.click()
+    assert a.evaluate(unnamed) == []
+    a.click('[data-tab="trims"]'); a.locator('tr.group-row').first.click()
+    assert a.evaluate(unnamed) == []
+
+
+def test_upload_errors_stay_on_the_drop_zone_in_plain_words(app_page):
+    a = app_page()
+    a.route('**/api/uploads', lambda r: r.fulfill(status=413, content_type='text/html', body='<html><body>413 Request Entity Too Large</body></html>'))
+    a.set_input_files('#file-input', files=[{'name': 'big.xlsx', 'mimeType': 'application/octet-stream', 'buffer': b'x'}])
+    a.wait_for_selector('#upload-error', state='visible'); a.unroute('**/api/uploads')
+    assert 'The file is too large (the limit is 12 MB).' in a.inner_text('#upload-error')
+    assert a.evaluate('() => document.activeElement.id') == 'dropzone'
+    assert a.locator('#toasts .toast.error').count() == 1
+    a.click('#upload-error [data-dismiss]')
+    assert a.is_hidden('#upload-error') and a.evaluate('() => document.activeElement.id') == 'dropzone'
+
+
+def test_browser_back_moves_between_screens_inside_the_app(app_page):
+    a = app_page(); to_review(a); fill_review(a)
+    a.click('#prepare'); a.wait_for_selector('#stage-approve:not([hidden]) .kpis')
+    assert a.url.endswith('#workspace/approve')
+    a.go_back(); a.wait_for_selector('#stage-review:not([hidden])')
+    assert a.url.endswith('#workspace/review')
+    a.go_forward(); a.wait_for_selector('#stage-approve:not([hidden])')
+    a.click('.nav [data-view="history"]'); a.wait_for_selector('#view-history:not([hidden])')
+    a.go_back(); a.wait_for_selector('#view-workspace:not([hidden]) #stage-approve:not([hidden])')
+    a.go_back(); a.wait_for_selector('#stage-review:not([hidden])')
+    a.fill('input[data-path="orders.0.season"]', 'NOT CHECKED')
+    a.go_back(); a.wait_for_selector('#confirm[open]')                        # unchecked corrections: asked first
+    a.click('#confirm button[value=cancel]')
+    until(lambda: stage_shown(a) == 'review' and a.url.endswith('#workspace/review'))
+    assert a.input_value('input[data-path="orders.0.season"]') == 'NOT CHECKED'
+
+
+def test_csv_export_neutralises_formulas(page):
+    with page.expect_download() as dl:
+        page.evaluate("""async () => { const { csv } = await import('/static/js/util.js');
+          csv([{ label: 'A', index: 0 }, { label: 'B', index: 1 }], [['=SUM(A1)', -5], ['+1', '@x'], ['-2', 'plain, text']]); }""")
+    text = Path(dl.value.path()).read_bytes().decode('utf-8-sig')
+    # text starting with = + - @ gets a leading ' (Excel shows it as text); numbers stay numbers
+    assert text.split('\r\n') == ['A,B', "'=SUM(A1),-5", "'+1,'@x", "'-2,\"plain, text\""], text

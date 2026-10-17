@@ -6,10 +6,15 @@ template and validator works the same whatever format the buyer sent:
     cell = {cell, row, col, value, formula, hidden, error}, plus these keys only when they say something:
         fmt    number-format code of a number or date cell when it is not General
         raw    the stored number when `value` is the text Excel shows for it (8 formatted 0000 -> '0008')
+        text   the characters the file shows for a number when the number alone would lose them: '5012.10' typed in a
+               text export, or 5012.1 formatted 0.00 in a workbook. Code fields (style, PO) keep this text.
         flag   'decimal_comma' text such as 1.234,56 left as text for a person to check (in a text file that
                                writes decimal commas, 1.500 and 1,500 are left as text too: 1.500 is 1500 there)
                'scientific'    text such as 1.23457E+11: a long code that Excel already damaged
                'big_number'    a 16+ digit number kept as text so that no digit is lost
+
+    date1904 = True on the sheets of a workbook that counts dates from 1904 (Mac Excel): a date typed as a plain
+        number there is 1,462 days later than the same number in a 1900 workbook.
 
     capabilities = {merged, hidden_rows, hidden_cols, number_formats, formulas}: True when the reader
         read it from this file, False when the file can hold it but this reader cannot see it, None when
@@ -250,14 +255,17 @@ NUMBER = re.compile(r'^[-+]?(\d{1,3}(,\d{3})+|\d{1,2}(,\d{2})+,\d{3}|\d+)(\.\d+)
 DECIMAL_COMMA = re.compile(r'^[-+]?(\d{1,3}(\.\d{3})+|\d+),\d+$')
 SCIENTIFIC = re.compile(r'^[-+]?\d+(\.\d+)?[eE][-+]?\d+$')
 LONG_DIGITS = re.compile(r'^[-+]?[1-9]\d{15,}(\.\d+)?$')
+# "2.000", "12.500": a dot between thousands (2000, in files from decimal-comma countries) or a decimal point (2)?
+# Never decided by the reader: kept as the file wrote it (quantities are whole numbers; see workbooks.dotted).
+DOT_GROUPED = re.compile(r'^[-+]?[1-9]\d{0,2}(\.\d{3})+$')
 
 
 def typed(text):
     """Text from CSV/HTML/XML exports, typed the way Excel would show it. Codes with leading zeros
     (style 0008) stay text; '1,500' and '1,50,000' become numbers; 16+ digit numbers stay text so that
-    no digit is lost; decimal-comma text (1.234,56) stays text."""
+    no digit is lost; decimal-comma text (1.234,56) and dot-grouped text (2.000: 2000 or 2?) stay text."""
     value = clean(text)
-    if not isinstance(value, str) or not NUMBER.match(value):
+    if not isinstance(value, str) or not NUMBER.match(value) or DOT_GROUPED.match(value):
         return value
     digits = value.lstrip('+-')
     if len(digits) > 1 and digits[0] == '0' and digits[1] != '.':
@@ -278,7 +286,16 @@ def _text_value(text):
             return value, {'flag': 'scientific'}
         if LONG_DIGITS.match(value.replace(',', '')):
             return value, {'flag': 'big_number'}
-    return value, {}
+    return value, _shown(value, text)
+
+
+def _shown(value, text):
+    """{'text': ...} when a number written with decimals shows more than the number keeps ('5012.10', '100.0'): a code
+    such as a style or PO number is the text, not the number."""
+    t = clean(text) if isinstance(text, str) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isinstance(t, str) or '.' not in t:
+        return {}
+    return {'text': t} if t != str(clean(value)) else {}
 
 
 def _formatted(value, code):
@@ -292,6 +309,9 @@ def _formatted(value, code):
         if shown is not None:
             extras['raw'] = clean(value)
             return shown, extras
+        shown = numfmt.fixed(value, code)          # 5012.1 formatted 0.00 shows 5012.10
+        if shown is not None and shown != str(clean(value)):
+            extras['text'] = shown
     return value, extras
 
 
@@ -342,7 +362,7 @@ class Builder:
         self.name = str(name)[:120] or 'Sheet1'; self.hidden = bool(hidden); self.cells = {}; self.merged = set()
         self.hidden_rows = _Spans(EXCEL_ROWS); self.hidden_cols = _Spans(EXCEL_COLS)
         self.capabilities = dict(capabilities if capabilities is not None else VALUES_ONLY)
-        self.reader = reader; self.notes = []
+        self.reader = reader; self.notes = []; self.date1904 = False
         self.dropped_merges = 0      # merged ranges larger than MAX_MERGE_AREA
         self.excess_merges = 0       # merged ranges past MAX_MERGES / MAX_MERGED_CELLS
         self.bad_merges = 0          # merged-range references that could not be read
@@ -405,8 +425,11 @@ class Builder:
             notes.append(f'{self.outside:,} cells beyond Excel\'s last row ({EXCEL_ROWS:,}) or column ({EXCEL_COLS:,}) were ignored.')
         caps = {k: self.capabilities.get(k, False) for k in CAPABILITY_KEYS}
         merged = [f'{address(c0, r0)}:{address(c1, r1)}' for r0, c0, r1, c1 in sorted(self.merged)]
-        return dict(name=self.name, hidden=self.hidden, rows=rows, cols=cols, merged=merged, cells=cells,
-                    capabilities=caps, reader=self.reader, notes=notes)
+        out = dict(name=self.name, hidden=self.hidden, rows=rows, cols=cols, merged=merged, cells=cells,
+                   capabilities=caps, reader=self.reader, notes=notes)
+        if self.date1904:
+            out['date1904'] = True
+        return out
 
 
 CAPABILITY_TEXT = {'merged': 'merged cells', 'hidden_rows': 'hidden rows', 'hidden_cols': 'hidden columns',
@@ -845,7 +868,7 @@ def _text_size(sheets):
     for s in sheets:
         for c in s['cells']:
             value = c['value']
-            total += (len(value) if isinstance(value, str) else 0) + len(c['formula'] or '') + len(c.get('fmt') or '')
+            total += (len(value) if isinstance(value, str) else 0) + len(c['formula'] or '') + len(c.get('fmt') or '') + len(c.get('text') or '')
     return total
 
 
@@ -1104,6 +1127,7 @@ def read_ooxml(content):
 def _openpyxl_sheets(content, merges=None):
     from openpyxl import load_workbook
     from openpyxl.utils import column_index_from_string
+    from openpyxl.utils.datetime import CALENDAR_MAC_1904
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         raw = load_workbook(BytesIO(content), data_only=False, keep_links=False, keep_vba=False)
@@ -1123,6 +1147,7 @@ def _openpyxl_sheets(content, merges=None):
             if len(stored) > MAX_CELLS * 4:
                 raise Unreadable(f'{ws.title}: sheet is too large; trim unused formatting and upload again.')
             b = Builder(ws.title, ws.sheet_state != 'visible', FULL_CAPS, 'openpyxl')
+            b.date1904 = getattr(raw, 'epoch', None) == CALENDAR_MAC_1904
             _apply_merge_counts(b, merges or {})
             for r, d in ws.row_dimensions.items():
                 if d.hidden or d.ht == 0:                # a zero-height row is hidden too
@@ -1202,6 +1227,7 @@ def _xls_sheets(content, xlrd, formatting, lenient):
         for index in range(book.nsheets):
             ws = book.sheet_by_index(index)
             b = Builder(ws.name, ws.visibility != 0, caps, 'xlrd')
+            b.date1904 = book.datemode == 1
             if not formatting:
                 b.notes.append(MSG_BACKUP_READER.format(why='its formatting records are damaged'))
             for r, info in ws.rowinfo_map.items():
@@ -1601,7 +1627,7 @@ def read_xml2003(content):
                     text = ''.join(data.itertext()); kind = data.get(ss + 'Type', 'String')
                     extras = {}
                     if kind == 'Number':
-                        value = typed(text) if NUMBER.match(text.strip() or 'x') else _float(text)
+                        value = typed(text) if NUMBER.match(text.strip() or 'x') and not DOT_GROUPED.match(text.strip()) else _float(text)
                         style = cell.get(ss + 'StyleID') or row_style or column_style(c) or 'Default'
                         value, extras = _formatted(value, styles.get(style))
                     elif kind == 'DateTime':
@@ -1819,7 +1845,7 @@ class _Tables(HTMLParser):
                     if re.fullmatch(r'0\d+', text):     # a code shown with leading zeros (0008): keep the text
                         value = text; extras['raw'] = clean(_float(cell['num']))
                     else:
-                        value = _float(cell['num'])
+                        value = _float(cell['num']); extras.update(_shown(clean(value), text))
                 else:
                     value, flags = _text_value(text); extras.update(flags)
             self.b.put(cell['row'], cell['col'], value, cell['formula'], **extras)

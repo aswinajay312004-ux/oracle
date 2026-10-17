@@ -4,16 +4,19 @@
   Register (or remove) the nightly POPPYS AI backup in Task Scheduler: every day at 01:30, scripts\backup.py.
 
 .DESCRIPTION
-  The task "\POPPYS AI\Nightly backup" runs
-      <python> -E -s -X utf8 <app>\scripts\backup.py --data-dir <data> --app-root <app> --dest <data>\backups
-  which makes an online SQLite backup, checks it (integrity_check, foreign_key_check, SHA-256), zips it with the
-  mapping config and prunes old backups (14 daily, 8 weekly, 12 monthly). One line per run is written to
-  <data>\backups\backup.log. If the laptop is off at 01:30 the task runs as soon as it is back on.
+  The task "\POPPYS AI\Nightly backup" runs scripts\backup.py --data-dir <data> --app-root <app> --dest <data>\backups,
+  which makes an online SQLite backup (with the audit key and anchor), checks it (integrity_check,
+  foreign_key_check, SHA-256), zips it with the mapping config and prunes old backups (14 daily, 8 weekly,
+  12 monthly). One line per run is written to <data>\backups\backup.log. If the laptop is off at 01:30 the task
+  runs as soon as it is back on.
 
   Service install (C:\ProgramData\PoppysAI\current exists): the task runs as LOCAL SERVICE, the same low-rights
-  account as the service, and uses the "current" junction, so it follows upgrades by itself.
-  Without the service (start.ps1 from a checkout, pass -AppRoot): it runs as you, without storing a password
-  (S4U logon), on <AppRoot>\data.
+  account as the service. It runs C:\ProgramData\PoppysAI\nightly-backup.cmd, which this script writes: that
+  file picks the Python of the active release (through the "current" junction) each time it runs, so the task
+  follows upgrades by itself, even one that changes how a release ships Python. upgrade.ps1 also runs this script
+  with -Refresh after every upgrade.
+  Without the service (start.ps1 from a checkout, pass -AppRoot): it runs the checkout's Python as you, without
+  storing a password (S4U logon), on <AppRoot>\data.
 
   Safe to run again: the task is replaced. Exit codes: 0 OK, 1 failed.
   Not yet tested on real Windows: see docs\RUNBOOK.md, "Not yet tested on real Windows".
@@ -28,6 +31,9 @@
   Use a checkout run with start.ps1 instead of the installed service.
 .PARAMETER RunNow
   Start the task once now and show the result.
+.PARAMETER Refresh
+  Register the existing task again with the same time and options (upgrade.ps1 uses it). Nothing happens when
+  no task is registered.
 .PARAMETER Remove
   Unregister the task (the backups themselves are kept).
 #>
@@ -39,6 +45,7 @@ param(
   [switch]$IncludeUploads,
   [string]$AppRoot = '',
   [switch]$RunNow,
+  [switch]$Refresh,
   [switch]$Remove
 )
 $ErrorActionPreference = 'Stop'
@@ -46,6 +53,7 @@ $ErrorActionPreference = 'Stop'
 $TaskPath = '\POPPYS AI\'
 $TaskName = 'Nightly backup'
 $LocalServiceSid = 'S-1-5-19'
+$WrapperName = 'nightly-backup.cmd'
 
 function Write-Step([string]$Text) { Write-Host ''; Write-Host "== $Text" -ForegroundColor Cyan }
 function Write-Ok([string]$Text) { Write-Host "   OK: $Text" -ForegroundColor Green }
@@ -71,6 +79,49 @@ function Invoke-Native([string]$FilePath, [string[]]$ArgumentList) {
   } finally { $ErrorActionPreference = $saved }
 }
 
+function ConvertTo-CommandLineArgument([string]$Value) {
+  # One argument for a Windows command line, split the way python.exe splits it (CommandLineToArgvW): quoted when
+  # it has a space or a character cmd.exe treats specially, with the backslashes before a quote doubled. Without
+  # that, -SecondCopy E:\ became --copy-to "E:\", which Python reads as E:" plus everything after it.
+  if ($Value -and $Value -notmatch '[\s"&|<>^(),;=%!]') { return $Value }
+  $escaped = [regex]::Replace($Value, '(\\*)"', { param($m) ($m.Groups[1].Value * 2) + '\"' })
+  $escaped = [regex]::Replace($escaped, '(\\+)$', { param($m) $m.Groups[1].Value * 2 })
+  return '"' + $escaped + '"'
+}
+
+function Join-CommandLine([string[]]$Arguments) {
+  return (@($Arguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join ' ')
+}
+
+function Get-CopyToOption([string]$Arguments) {
+  # The --copy-to folder of an existing task's arguments (written by this script, old or new quoting), or ''.
+  if ($Arguments -match '(?:^|\s)--copy-to\s+"([^"]*)"') {
+    $value = $Matches[1]
+    if ($value -match '(\\+)$' -and ($Matches[1].Length % 2) -eq 0) { $value = $value.Substring(0, $value.Length - [int]($Matches[1].Length / 2)) }
+    return $value
+  }
+  if ($Arguments -match '(?:^|\s)--copy-to\s+(\S+)') { return $Matches[1] }
+  return ''
+}
+
+function Write-BackupWrapper([string]$Path, [string]$App) {
+  # cmd.exe file the task runs: it chooses the active release's Python each time, then runs its backup.py with the
+  # task's arguments. Written by an administrator into the install folder, which the service account can only read.
+  $lines = @(
+    '@echo off',
+    'rem POPPYS AI nightly backup. Written by deploy\windows\backup-task.ps1: run that script again instead of editing this file.',
+    'rem It picks the Python of the active release (the "current" junction) every time it runs, so the task keeps working',
+    'rem after an upgrade, also one that changes how the release ships Python.',
+    'setlocal',
+    ('set "APP=' + $App + '"'),
+    'set "PY=%APP%\python\python.exe"',
+    'if not exist "%PY%" set "PY=%APP%\.venv\Scripts\python.exe"',
+    '"%PY%" -E -s -X utf8 "%APP%\scripts\backup.py" %*',
+    'exit /b %ERRORLEVEL%'
+  )
+  [System.IO.File]::WriteAllText($Path, (($lines -join "`r`n") + "`r`n"), [System.Text.Encoding]::ASCII)
+}
+
 function Get-PoppysTask { return (Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue) }
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -84,6 +135,23 @@ if ($Remove) {
 
 $InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 $serviceMode = (-not $AppRoot) -and (Test-Path -LiteralPath (Join-Path $InstallRoot 'current\backend\main.py'))
+
+if ($Refresh) {
+  # Same time and options as the registered task; only the program it runs is brought up to date.
+  $old = Get-PoppysTask
+  if (-not $old) { Write-Note 'The nightly backup task is not registered; nothing to refresh.'; exit 0 }
+  $oldArgs = [string](@($old.Actions)[0].Arguments)
+  if (-not $serviceMode -or $oldArgs.IndexOf($InstallRoot, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+    Write-Note "The nightly backup task backs up another folder (not $InstallRoot); it was not changed."
+    exit 0
+  }
+  if (-not $PSBoundParameters.ContainsKey('At')) {
+    try { $At = ([datetime](@($old.Triggers)[0].StartBoundary)).ToString('HH:mm') } catch { Write-Warn "Could not read the task's time; using $At." }
+  }
+  if (-not $PSBoundParameters.ContainsKey('SecondCopy')) { $SecondCopy = Get-CopyToOption $oldArgs }
+  if (-not $PSBoundParameters.ContainsKey('IncludeUploads') -and $oldArgs -match '(^|\s)--include-uploads(\s|$)') { $IncludeUploads = $true }
+}
+
 if ($serviceMode) {
   $AppRoot = Join-Path $InstallRoot 'current'          # the junction: the task follows upgrades
   $DataDir = Join-Path $InstallRoot 'data'
@@ -100,13 +168,26 @@ if (-not $python) { Stop-Task "No Python in $AppRoot (python\python.exe or .venv
 if (-not (Test-Path -LiteralPath $backupPy)) { Stop-Task "$backupPy is missing: this release is older than the backup script. Upgrade first." }
 if (-not (Test-Path -LiteralPath (Join-Path $DataDir 'poppys.sqlite3'))) { Write-Warn "There is no database in $DataDir yet; the backup will report that until POPPYS AI has been used once." }
 try { $time = [datetime]::ParseExact($At, 'HH:mm', [System.Globalization.CultureInfo]::InvariantCulture) } catch { Stop-Task "-At must look like 01:30 (24-hour clock), not '$At'." }
+if ($SecondCopy) {
+  if ($SecondCopy -match '^[A-Za-z]:$') { $SecondCopy += '\' }       # "E:" alone would mean the current folder on E:
+  $SecondCopy = [System.IO.Path]::GetFullPath($SecondCopy)
+}
 
 Write-Step '1. What the task runs'
-$argList = @('-E', '-s', '-X', 'utf8', "`"$backupPy`"", '--data-dir', "`"$DataDir`"", '--app-root', "`"$AppRoot`"", '--dest', "`"$Dest`"")
-if ($SecondCopy) { $argList += @('--copy-to', "`"$SecondCopy`"") }
-if ($IncludeUploads) { $argList += '--include-uploads' }
-$argString = $argList -join ' '
-Write-Note "Program:   $python"
+$backupArgs = @('--data-dir', $DataDir, '--app-root', $AppRoot, '--dest', $Dest)
+if ($SecondCopy) { $backupArgs += @('--copy-to', $SecondCopy) }
+if ($IncludeUploads) { $backupArgs += '--include-uploads' }
+if ($serviceMode) {
+  if ($InstallRoot -match '[%"]') { Stop-Task "The install folder $InstallRoot contains % or a quote, which a scheduled .cmd file cannot use." }
+  $program = Join-Path $InstallRoot $WrapperName
+  Write-BackupWrapper $program $AppRoot
+  $argString = Join-CommandLine $backupArgs
+  Write-Note "Program:   $program (runs the Python of the active release: $python today)"
+} else {
+  $program = $python
+  $argString = Join-CommandLine (@('-E', '-s', '-X', 'utf8', $backupPy) + $backupArgs)
+  Write-Note "Program:   $python"
+}
 Write-Note "Arguments: $argString"
 if ($serviceMode) { Write-Note 'Account:   LOCAL SERVICE (same as the PoppysAI service)' } else { Write-Note "Account:   $env:USERDOMAIN\$env:USERNAME (no password stored)" }
 
@@ -120,7 +201,7 @@ if ($SecondCopy) {
 }
 
 Write-Step "2. Registering $TaskPath$TaskName (daily at $At)"
-$action = New-ScheduledTaskAction -Execute $python -Argument $argString -WorkingDirectory $AppRoot
+$action = New-ScheduledTaskAction -Execute $program -Argument $argString -WorkingDirectory $AppRoot
 $trigger = New-ScheduledTaskTrigger -Daily -At $time
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
   -ExecutionTimeLimit (New-TimeSpan -Hours 1) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 10)

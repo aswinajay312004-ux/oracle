@@ -99,6 +99,20 @@ def render(value, code):
     return text if text != digits else None
 
 
+def fixed(value, code):
+    """The text Excel shows for a non-negative number in a fixed-decimals format (``0.00``, ``#0.000``), or None for any
+    other format. Codes stored as numbers keep their trailing zeros this way (5012.1 formatted 0.00 is 5012.10)."""
+    if not code or len(code) > MAX_CODE or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    section = first_section(str(code)).strip()
+    if not section or any(ch not in '#0.' for ch in section) or section.count('.') != 1:
+        return None
+    whole, decimals = section.split('.')
+    if not whole or set(decimals) != {'0'} or not 0 <= value < MAX_VALUE:
+        return None
+    return f'{value:.{len(decimals)}f}'
+
+
 def is_text_format(code):
     """True for Excel's Text format ('@'), which keeps typed digits as text."""
     if not code:

@@ -12,7 +12,8 @@ from functools import lru_cache
 import re
 from . import fields as F, workbooks as W
 
-SIZE = re.compile(r'^(xxs|xs|s|m|l|xl|xxl|xxxl|[2-6]xl|\d{1,3}\s*(-\s*\d{1,3})?\s*(m|mth|mths|month|months|y|yr|yrs|year|years)?'
+# Sizes: letters (S, XL, XXXXL, 2XS), US plus sizes (1X–3X), toddler (2T–5T), months and years, numbers, cm.
+SIZE = re.compile(r'^(x{0,3}s|m|x{0,4}l|[2-6]\s*xl|[2-5]\s*xs|\d\s*x|\d{1,2}\s*t|\d{1,3}\s*(-\s*\d{1,3})?\s*(m|mth|mths|month|months|y|yr|yrs|year|years)?'
                   r'|up to \d+\s*m\w*|first size|newborn|nb|one size|free size|\d+\s*lb|\d+(\.\d+)?\s*-\s*\d+(\.\d+)?\s*(y|yrs?|years?)'
                   r'|\d{1,2}\s*/\s*\d{1,2}\s*(y|yrs?|years?|m|mths?|months?)?|(xxs|xs|s|m|l|xl|xxl)\s*/\s*(xs|s|m|l|xl|xxl|xxxl)|\d{2,3}\s*cm)$', re.I)
 # Garment-file abbreviations and the usual shortenings of them ("Shp Dt", "Colr", "Ord Date", "Sz").
@@ -98,6 +99,8 @@ def value_score(kind, key, v, mi=None):
     """(score 0–1, evidence) for one value of a field kind; 0 means the value cannot be this field."""
     if v in (None, ''):
         return 0.0, 'the cell is empty'
+    if W.is_error(v):
+        return 0.0, f'“{v}” is an Excel error (a formula that failed in the file)'
     known = W.norm(v) in (mi or {}).get(MASTER_ROLES.get(key), set())
     role = {'color': 'colour'}.get(key, key)
     if kind == 'date':
@@ -166,18 +169,19 @@ def evaluate(g, key, r, c, mi=None, label_at=None):
 
 # --- tables ------------------------------------------------------------------------------------
 def _body(g, header, cols, stop_col=None):
-    """Data rows under a header: until a TOTAL row or the first row with nothing in these columns. Sub totals
-    are skipped (they add up other rows) and hidden rows are not read."""
+    """Data rows under a header: until a grand total or the first row with nothing in these columns. Other total
+    rows (a "Total" under each colour block, sub totals) are skipped — the table goes on below them — and hidden
+    rows are not read."""
     rows = []; cols = list(cols); span = range(1, max(cols + [3, stop_col or 0]) + 1)
     heads = {c: W.norm(g.v(header, c)) for c in cols if isinstance(g.v(header, c), str)}
     for r in range(header + 1, min(header + 201, g.rows + 1)):
         if r in g.hidden_rows:
             continue
-        names = [g.v(r, c) for c in span if isinstance(g.v(r, c), str)]
-        if any(W.is_total(x) for x in names):
-            if any(W.is_subtotal(x) for x in names):
-                continue
-            break
+        kinds = {W.total_kind(g.v(r, c)) for c in span if isinstance(g.v(r, c), str)}
+        if kinds & {'sub', 'total', 'grand'}:
+            if 'grand' in kinds:
+                break
+            continue
         if sum(1 for c, h in heads.items() if h and W.norm(g.v(r, c)) == h) >= 2:
             break                                      # the headings again: a second table starts here
         if all(g.v(r, c) in (None, '') for c in cols):
@@ -222,9 +226,12 @@ def matrix_at(g, r, mi):
     color = next((c for c, v in left if name_score(v, g.fields.aliases('color'))[0] >= HIGH), None)
     names = g.fields.aliases('style') + g.fields.aliases('description') + ['garment', 'garment style']
     label = next((c for c, v in left if c != color and name_score(v, names)[0] >= HIGH), None)
+    like = None                       # a heading only like "colour" ("Fabric Colour", "Body Colour"): proposed, not certain
+    if color is None:
+        like = next((c for c, v in left if c != label and name_score(v, g.fields.aliases('color'))[0] >= MEDIUM), None)
+        color = like
     right = [(c, g.head(r, c)) for c in range(last + 1, g.cols + 1) if isinstance(g.head(r, c), str)]
-    total = next((c for c, v in right if W.norm(v).startswith('total') or
-                  W.strip_units(W.norm(v)) in {W.norm(a) for a in g.fields.aliases('quantity')}), None)
+    total = next((c for c, v in right if W.total_heading(v, g.fields)), None)
     # ≥ 3 text headings, or numeric sizes (28, 30, 32) named as a table by a colour/style/total heading —
     # otherwise this is a row of quantities, not headings.
     if texts < 3 and not (color or label or total) or sum(isinstance(v, str) for _, v in filled) < 2:
@@ -237,10 +244,10 @@ def matrix_at(g, r, mi):
     evidence = [f'{len(sizes)} size headings in row {r}: {", ".join(sizes[:8])}{"…" if len(sizes) > 8 else ""}',
                 f'row{"s" if len(rows) > 1 else ""} {rows[0]}{"–" + str(rows[-1]) if len(rows) > 1 else ""} hold numbers under the sizes']
     if color:
-        evidence.append(f'“{W.text(g.head(r, color))}” heads the colour column')
+        evidence.append(f'“{W.text(g.head(r, color))}” heads the colour column' + (' (like “colour”; check it)' if like else ''))
     if total:
         evidence.append(f'“{W.text(g.head(r, total))}” heads the total column')
-    conf = 'high' if texts >= 3 else 'medium'
+    conf = 'high' if texts >= 3 and not like else 'medium'
     return dict(definition=dict(type='matrix', header_row=r, label_col=label, color_col=color, first_size_col=first,
                                 last_size_col=last, total_col=total),
                 info=dict(type='matrix', header_row=r, confidence=conf, evidence=evidence, source='matcher'),
@@ -310,14 +317,18 @@ def header_proposals(g, mi=None, skip_rows=()):
         n = W.norm(v)
         if not 2 <= len(n) <= 40 or sum(ch.isdigit() for ch in n) > len(n) // 3:
             continue
-        targets = [t for t in (g.right(r, c), g.below(r, c)) if t and t[0] not in skip_rows]
+        if g.strip(r):                       # a strip of labels with their values underneath: the value is below
+            targets = [t for t in [W.label_value(g, r, c)] if t and t[0] not in skip_rows]
+        else:
+            targets = [t for t in (g.right(r, c), g.below(r, c)) if t and t[0] not in skip_rows]
         targets = [t for t in targets if not W.looks_like_label(g.v(*t), Fv)]
         caption = _caption_under_value(g, r, c, targets, skip_rows)
         if caption:
             targets = [t for t in targets if t != caption[1]] + [caption[0]]
+        owner = Fv.owner(v)                  # a label that is another field's own alias ("PO No") is never this field's
         for key in Fv.header_keys:
             ns, _ = name_score(v, Fv.aliases(key))
-            if ns < FLOOR:
+            if ns < FLOOR or (owner and owner != key):
                 continue
             for t in targets:
                 p = evaluate(g, key, *t, mi, label_at=(r, c))
@@ -337,6 +348,19 @@ def header_proposals(g, mi=None, skip_rows=()):
         if key in chosen or p['cell'] in used or p['label_cell'] in used:
             continue
         chosen[key] = p; used |= {p['cell'], p['label_cell']}
+    # Two labels that both name a field exactly ("Item" and "Style No") with different values: shown, never pre-selected.
+    for key, p in chosen.items():
+        others = [x for _, _, _, k, x in cands if k == key and x['name_score'] == 1.0 and x['label_cell'] != p['label_cell']
+                  and x['cell'] != p['cell'] and W.canon(show(x['value'])) != W.canon(show(p['value']))]
+        master = (mi or {}).get(MASTER_ROLES.get(key)) or set()
+        if others and p['name_score'] == 1.0:
+            x = others[0]
+            if W.norm(p['value']) in master and not any(W.norm(y['value']) in master for y in others):
+                p['evidence'].append(f'{x["label_cell"]} “{x["label"]}” also names {Fv.label(key)}, but “{show(x["value"])}” is not in the '
+                                     f'{MASTER_ROLES[key].replace("color", "colour")} master')
+                continue                     # the Oracle master decides between the two
+            p['score'] = min(p['score'], 0.59); p['confidence'] = 'low'
+            p['evidence'].append(f'{x["label_cell"]} “{x["label"]}” also names {Fv.label(key)} and says “{show(x["value"])}” — pick the cell that is meant')
     # A label whose value was found (to its right) is not also reported for the other cell next to it (below).
     rejected = [x for x in rejected if (chosen.get(x['field']) or {}).get('cell') != x['cell']
                 and (chosen.get(x['field']) or {}).get('label_cell') != x['label_cell']]
@@ -389,6 +413,8 @@ def check(sheet, definition, fields=None, masters=None, source=None):
             reject(key, cell, None, f'{cell} is in a hidden row or column of the file' if (r, c) in g.hidden else f'{cell} is empty'); continue
         if cell in used:
             reject(key, cell, v, f'{cell} is already used for {Fv.label(used[cell])}'); continue
+        if g.err(r, c):
+            reject(key, cell, v, f'{cell} holds the Excel error “{v}” (a formula that failed in the file), not a value'); continue
         if isinstance(v, str) and (W.norm(v) in Fv.label_words or W.norm(v) in W.OTHER_LABELS):
             reject(key, cell, v, f'{cell} holds “{v}”, which is a field label, not a value'); continue
         kind = Fv.kind(key)
@@ -431,17 +457,28 @@ def _not_sizes(g, hr, cols, mi):
     return None
 
 
-def _size_left_out(g, hr, first, last, rows, mi):
-    """A column right next to the chosen size columns whose heading is another size with quantities under it
-    (an extra "XXL" on this file), or None. A size already inside the range starts a second block instead."""
+def _sizes_left_out(g, hr, first, last, rows, mi):
+    """Why a size table would leave quantities out, or None: a column right next to the chosen size columns whose
+    heading is another size with quantities under it (an extra "XXL" on this file), or a second set of sizes on the
+    same header row with quantities under it (Delivery 1 | Delivery 2, solid | assorted packs)."""
     inside = {W.norm(g.v(hr, c)) for c in range(first, last + 1)}
     for step, start in ((1, last + 1), (-1, first - 1)):
         c = start
         while 1 <= c <= g.cols and size_like(g.v(hr, c), mi) and not isinstance(g.v(hr, c), bool) and W.norm(g.v(hr, c)) not in inside:
             if any(W.qty_value(g.v(r, c))[0] for r in rows):
-                return c
+                return (W.address(c, hr), g.v(hr, c), f'{W.address(c, hr)} holds the size “{show(g.v(hr, c))}” right next to the size '
+                        f'columns {letter(first)}–{letter(last)}; its quantities would be left out')
             c += step
-    return None
+    found = [(c, g.v(hr, c)) for c in range(1, g.last_col(hr) + 1) if not first <= c <= last and size_like(g.v(hr, c), mi)
+             and not isinstance(g.v(hr, c), bool) and any(W.qty_value(g.v(r, c))[0] is not None for r in rows)]
+    near = {c for c, _ in found}
+    found = [(c, v) for c, v in found if isinstance(v, str) or c + 1 in near or c - 1 in near]   # not a lone number (a line no.)
+    if not found:
+        return None
+    span = W.address(found[0][0], hr) + (f':{W.address(found[-1][0], hr)}' if len(found) > 1 else '')
+    return (span, W.text(found[0][1]), f'{span} also hold{"" if len(found) > 1 else "s"} sizes ({", ".join(W.text(v) for _, v in found[:8])}) '
+            f'with quantities under them — a second size block (another delivery or pack?). This layout reads only '
+            f'{letter(first)}–{letter(last)}, so they would be left out: put each block on its own sheet and upload again')
 
 
 def _check_table(g, t, Fv, mi, reject):
@@ -493,6 +530,12 @@ def _check_table(g, t, Fv, mi, reject):
             reject('size', span, ', '.join(W.text(v) for v in heads[:6]) or None,
                    f'row {hr} columns {letter(first)}–{letter(last)} do not look like sizes ({sizey} of {len(heads)} headings are sizes)')
             return None
+        total = next((c for c in range(first, last + 1) if W.total_heading(g.v(hr, c), Fv)), None)
+        if total:                       # e.g. a saved layout's size range now ends on this file's "Total" column
+            reject('size', W.address(total, hr), g.v(hr, total),
+                   f'{W.address(total, hr)} holds “{W.text(g.v(hr, total))}”, a total or quantity column, inside the size columns '
+                   f'{letter(first)}–{letter(last)} — it would be read as a size')
+            return None
         out = dict(t)
         for k in ('label_col', 'color_col', 'total_col'):
             col = t.get(k)
@@ -514,11 +557,9 @@ def _check_table(g, t, Fv, mi, reject):
         if problem:
             reject('quantity', span, None, problem)
             return None
-        left_out = _size_left_out(g, hr, first, last, rows, mi)
+        left_out = _sizes_left_out(g, hr, first, last, rows, mi)
         if left_out:
-            reject('size', W.address(left_out, hr), g.v(hr, left_out),
-                   f'{W.address(left_out, hr)} holds the size “{show(g.v(hr, left_out))}” right next to the size columns '
-                   f'{letter(first)}–{letter(last)}; its quantities would be left out')
+            reject('size', *left_out)
             return None
         return out
     reject('table', None, t.get('type'), 'choose a table type: one row per size, or sizes across columns')
@@ -550,7 +591,13 @@ def table_rows(found):
 def unit_info(g, table):
     if not table:
         return dict(value='', pieces_per_unit=None, evidence='no size table was found yet', cell=None)
-    u = W.unit_evidence(g, table)
+    hr = table.get('header_row')
+    if table.get('type') == 'flat':
+        cols = table.get('columns') or {}
+        rows = _body(g, hr, list(cols.values()), cols.get('style')) if cols else []
+    else:
+        rows = _body(g, hr, range(table['first_size_col'], table['last_size_col'] + 1), table.get('label_col') or table.get('color_col'))
+    u = W.unit_evidence(g, table, rows=rows)          # only the rows the table reads, never a trims list further down
     return dict(value=u['qty_unit'], pieces_per_unit=u['pieces_per_unit'], evidence=u['provenance'].get('evidence'),
                 cell=u['provenance'].get('cell'))
 

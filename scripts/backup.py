@@ -10,24 +10,36 @@ it with the app's own Python without importing the app.
   python scripts/backup.py --restore FILE.zip --to DATA_DIR --force    replace a live database (app stopped)
   python scripts/backup.py --drill latest --start-app       monthly restore drill
   python scripts/backup.py --list                           show the backups and what retention keeps
+  python scripts/backup.py --db-info                        what the database holds and whether --app-root can open it
 
 How a backup is made:
-  1. sqlite3 Connection.backup(pages=1024, sleep=0.05) into a temporary file next to the destination, so the
-     app can keep running (never a plain file copy, which can catch a half-written database);
+  1. the audit chain's key and anchor (data/audit.key, data/audit.anchor: outside the database, see
+     backend/local_store.py) are read first, then sqlite3 Connection.backup(pages=-1) copies the database in one
+     step into a temporary file next to the destination, so the app can keep running (never a plain file copy,
+     which can catch a half-written database). One step, because a step-wise copy starts again after every write
+     by the app and may never finish while the app is busy. The anchor is read before the copy, so it never names
+     an entry the copy does not have;
   2. the copy must pass PRAGMA integrity_check == 'ok' and an empty PRAGMA foreign_key_check;
-  3. a zip with the copy, config/oracle_mapping.json, config/semantic_catalog.json, data/schema_discovery.json
-     (when present) and manifest.json (SHA-256 and size of every member, row counts, app version / git sha);
-     .env.poppys and anything that looks like a secret is never included;
+  3. a zip with the copy, the audit key and anchor, config/oracle_mapping.json, config/semantic_catalog.json,
+     data/schema_discovery.json (when present) and manifest.json (SHA-256 and size of every member, row counts,
+     schema version, app version / git sha); .env.poppys and anything that looks like a secret is never included
+     (the audit key is not a password: it only proves the audit history was not rewritten);
   4. fsync, os.replace() into place, a <name>.zip.sha256 file beside it, then the finished zip is verified again;
   5. retention: the newest backup of each of the last 14 days, 8 ISO weeks and 12 months that have backups.
-     Old backups are only pruned after a new backup has been written and verified.
+     Old backups are only pruned after a new backup has been written and verified (--no-prune: never).
+
+A restore never deletes: the files it replaces are moved aside, and when anything fails half-way every moved
+file is put back. It refuses a backup made by a newer POPPYS AI (a newer database schema) than the app in
+--app-root, which would refuse to start on it, and ends with the app's own audit-history check.
 
 Exit codes: 0 OK, 1 FAILED (backup or check failed), 2 usage or setup problem, 3 REFUSED (restore would overwrite
-a database or the app is running), 4 the backup is OK but the copy to the second location failed.
+a database, the app is running, or the database / backup is newer than the app), 4 the backup is OK but the copy
+to the second location failed, 5 restored, but the audit history of the restored data cannot be proven untouched.
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import datetime as dt
 import hashlib
@@ -52,6 +64,10 @@ from pathlib import Path
 FORMAT = 'poppys-backup/1'
 DB_NAME = 'poppys.sqlite3'
 DB_MEMBER = 'data/' + DB_NAME
+AUDIT_KEY = 'audit.key'          # backend/local_store.py AUDIT_KEY: the audit chain's HMAC key (hex)
+AUDIT_ANCHOR = 'audit.anchor'    # backend/local_store.py AUDIT_ANCHOR: {"id", "mac"} of the newest audit entry
+AUDIT_FILES = (AUDIT_KEY, AUDIT_ANCHOR)
+AUDIT_MEMBERS = tuple('data/' + n for n in AUDIT_FILES)
 CONFIG_FILES = ('oracle_mapping.json', 'semantic_catalog.json')
 DATA_EXTRAS = ('schema_discovery.json',)
 MANIFEST = 'manifest.json'
@@ -61,9 +77,12 @@ NAME_RE = re.compile(r'^poppys-backup-(\d{8})-(\d{6})(?:-([A-Za-z0-9._-]+))?\.zi
 LABEL_RE = re.compile(r'^[A-Za-z0-9._-]{1,60}$')
 # Defence in depth: members come from an allow-list, and anything secret-looking is refused on write and on verify.
 SECRET_RE = re.compile(r'(^|/)(\.env($|\.)|secrets?(\.bin|\.json|\.txt)?$|id_(rsa|dsa|ecdsa|ed25519))|\.(pem|key|p12|pfx|jks)$', re.I)
-OK, FAILED, USAGE, REFUSED, COPY_FAILED = 0, 1, 2, 3, 4
+OK, FAILED, USAGE, REFUSED, COPY_FAILED, AUDIT_UNPROVEN = 0, 1, 2, 3, 4, 5
 APP_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KEEP = (14, 8, 12)
+AUDIT_CHECK_CODE = ('import json\n'
+                    'from backend import local_store\n'
+                    'print("POPPYS-AUDIT " + json.dumps(local_store.verify_audit_chain(), default=str))\n')
 
 
 class Problem(Exception):
@@ -139,6 +158,12 @@ def safe_member(name):
     return not (name.startswith(('/', '\\')) or p.is_absolute() or '..' in p.parts or ':' in name or '\\' in name)
 
 
+def looks_secret(name):
+    """A member name that looks like a password or private key. The audit key is allowed by its exact name: it is
+    an integrity key for the audit history, not a credential, and a restore needs it."""
+    return bool(SECRET_RE.search(name)) and name not in AUDIT_MEMBERS
+
+
 def quote_ident(name):
     return '"' + name.replace('"', '""') + '"'
 
@@ -175,6 +200,12 @@ def append_log(log_path, line):
         say(f'  (could not write the log {log_path}: {e.strerror or e})')
 
 
+def error_text(e):
+    if isinstance(e, OSError):
+        return f'{e.strerror or e}' + (f' ({e.filename})' if getattr(e, 'filename', None) else '')
+    return str(e) or type(e).__name__
+
+
 # --- app information -------------------------------------------------------------------------------------------------
 def app_info(app_root):
     """Version and git sha when they can be found; never fails a backup."""
@@ -198,11 +229,81 @@ def app_info(app_root):
     return info
 
 
+def _local_store_tree(app_root):
+    """The parsed backend/local_store.py of the app in app_root (never imported or run), or None when it has none."""
+    src = Path(app_root) / 'backend' / 'local_store.py'
+    try:
+        return ast.parse(src.read_text(encoding='utf-8'), str(src))
+    except FileNotFoundError:
+        return None
+    except (OSError, SyntaxError, UnicodeDecodeError, ValueError) as e:
+        raise Problem(f'Could not read {src} to find the database version that app expects ({e}).', USAGE) from None
+
+
+def app_schema_version(app_root):
+    """The local-database schema (PRAGMA user_version) the app in app_root expects: SCHEMA_VERSION in its
+    backend/local_store.py, read from the source without importing the app. An app from before numbered
+    migrations gives 0; None when app_root has no backend/local_store.py at all."""
+    tree = _local_store_tree(app_root)
+    if tree is None:
+        return None
+    values = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            values[node.targets[0].id] = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            values[node.target.id] = node.value
+    numbers = None
+    migrations = values.get('MIGRATIONS')
+    if isinstance(migrations, (ast.Tuple, ast.List)):
+        firsts = [e.elts[0] for e in migrations.elts if isinstance(e, (ast.Tuple, ast.List)) and e.elts]
+        if firsts and all(isinstance(f, ast.Constant) and type(f.value) is int for f in firsts):
+            numbers = [f.value for f in firsts]
+    node = values.get('SCHEMA_VERSION')
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    if numbers:                       # SCHEMA_VERSION = MIGRATIONS[-1][0] (or anything else derived from the list)
+        return numbers[-1] if (isinstance(node, ast.Subscript) and ast.unparse(node).replace(' ', '') == 'MIGRATIONS[-1][0]') else max(numbers)
+    if node is None and migrations is None:
+        return 0                      # an app from before numbered migrations
+    raise Problem(f'Could not tell which database version the app in {app_root} expects (SCHEMA_VERSION in '
+                  'backend/local_store.py is not a plain number).', USAGE)
+
+
+def app_has_audit_check(app_root):
+    tree = _local_store_tree(app_root)
+    return tree is not None and any(isinstance(n, ast.FunctionDef) and n.name == 'verify_audit_chain' for n in tree.body)
+
+
+def check_audit_chain(app_root, data_dir, timeout=180):
+    """The app's own verify_audit_chain() (backend/local_store.py of app_root) on the data in data_dir, run in a
+    separate Python with Oracle settings removed. Returns its result dict, or None when that app has no such check.
+    Read-only: it opens the database and reads audit.key / audit.anchor, and writes no bytecode."""
+    if not app_has_audit_check(app_root):
+        return None
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith('POPPYS_')}
+    env['POPPYS_DATA_DIR'] = str(Path(data_dir).absolute())
+    try:
+        r = subprocess.run([sys.executable, '-E', '-s', '-B', '-X', 'utf8', '-c', AUDIT_CHECK_CODE], cwd=str(app_root), env=env,
+                           capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {'ok': False, 'problem': f'The audit history check could not run ({error_text(e)}).'}
+    line = next((x for x in reversed(r.stdout.splitlines()) if x.startswith('POPPYS-AUDIT ')), None)
+    if r.returncode != 0 or line is None:
+        last = (r.stderr.strip().splitlines() or ['no output'])[-1][:300]
+        return {'ok': False, 'problem': f'The audit history check stopped with an error ({last}).'}
+    try:
+        result = json.loads(line[len('POPPYS-AUDIT '):])
+    except ValueError:
+        return {'ok': False, 'problem': 'The audit history check gave an unreadable answer.'}
+    return result if isinstance(result, dict) else {'ok': False, 'problem': 'The audit history check gave an unreadable answer.'}
+
+
 # --- database checks ---------------------------------------------------------------------------------------------------
-def inspect_db(path):
+def inspect_db(path, mode='rw'):
     """integrity_check, foreign_key_check, row counts and header facts of a database copy."""
     try:
-        with connect(path, 'rw') as c:
+        with connect(path, mode) as c:
             integrity = [str(r[0]) for r in c.execute('PRAGMA integrity_check')]
             fk = c.execute('PRAGMA foreign_key_check').fetchall()
             names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name")]
@@ -213,10 +314,13 @@ def inspect_db(path):
                 except sqlite3.Error:
                     tables[name] = None             # e.g. a virtual table whose module this Python lacks
             facts = {k: c.execute(f'PRAGMA {k}').fetchone()[0] for k in ('page_size', 'page_count', 'user_version', 'journal_mode')}
+            audit_keyed = None
+            if 'audit' in names and 'mac' in {r[1] for r in c.execute('PRAGMA table_info(audit)')}:
+                audit_keyed = c.execute('SELECT count(*) FROM audit WHERE mac IS NOT NULL').fetchone()[0]
     except sqlite3.DatabaseError as e:
         raise Problem(f'The database copy cannot be read ({e}).') from None
     return dict(integrity_check=integrity, foreign_key_violations=len(fk), foreign_key_examples=[list(r) for r in fk[:10]],
-                tables=tables, **facts)
+                tables=tables, audit_keyed_rows=audit_keyed, **facts)
 
 
 def require_healthy(report, what='The database copy'):
@@ -226,6 +330,23 @@ def require_healthy(report, what='The database copy'):
     if report['foreign_key_violations']:
         raise Problem(f'{what} failed PRAGMA foreign_key_check: {report["foreign_key_violations"]} row(s) point at '
                       f'missing parent rows (first: {report["foreign_key_examples"][:3]}).')
+
+
+def require_schema_fits(user_version, app_root, what, allow_newer=False, out=say):
+    """Refuse (exit 3) a database whose schema is newer than the app in app_root knows: that app refuses to start
+    on it (backend/local_store.py init())."""
+    known = app_schema_version(app_root)
+    if known is None or user_version is None:
+        out(f'  Note: no backend/local_store.py in {app_root}; the database version check was skipped.')
+        return
+    if user_version <= known:
+        return
+    text = (f'{what} was changed by a newer POPPYS AI (database schema {user_version}); the app in {app_root} knows schema '
+            f'{known} and would refuse to start on it.')
+    if not allow_newer:
+        raise Problem(text + ' Use the backup made before that upgrade, or restore it with the newer version (its '
+                      'scripts\\backup.py). Add --allow-newer-schema only if support asked you to.', REFUSED)
+    out(f'  WARNING: {text} Restoring anyway (--allow-newer-schema).')
 
 
 def db_locked(path):
@@ -249,6 +370,40 @@ def app_running(db_path, port):
     if Path(db_path).exists() and db_locked(db_path):
         reasons.append('another program is using the database (the exclusive lock was refused)')
     return reasons
+
+
+def db_info(data_dir, app_root=None):
+    """Print what the database in data_dir holds (read-only) and whether the app in app_root can open it.
+    Returns OK, or REFUSED when the database is newer than that app knows."""
+    db = Path(data_dir) / DB_NAME
+    if not db.is_file():
+        raise Problem(f'There is no database at {db}.', USAGE)
+    st = db.stat()
+    try:
+        with connect(db, 'ro') as c:
+            version = c.execute('PRAGMA user_version').fetchone()[0]
+            names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            counts = {t: c.execute(f'SELECT count(*) FROM {quote_ident(t)}').fetchone()[0] for t in ('users', 'drafts', 'audit') if t in names}
+            newest = c.execute('SELECT max(at) FROM audit').fetchone()[0] if 'audit' in names else None
+    except sqlite3.DatabaseError as e:
+        raise Problem(f'{db} cannot be read ({e}).') from None
+    say(f'  Database:       {db} ({human(st.st_size)})')
+    say(f'  Last changed:   {dt.datetime.fromtimestamp(st.st_mtime):%Y-%m-%d %H:%M:%S}')
+    say(f'  Schema version: {version}')
+    if counts:
+        say('  Contains:       ' + ', '.join(f'{n} {t}' for t, n in counts.items()) + (f' (newest audit entry {newest})' if newest else ''))
+    if app_root is None:
+        return OK
+    known = app_schema_version(app_root)
+    if known is None:
+        say(f'  The app in {app_root} has no backend/local_store.py: its database version is unknown.')
+        return OK
+    if version > known:
+        say(f'  NEWER: the app in {app_root} knows schema {known}. It cannot open this database, which was changed by a newer '
+            'POPPYS AI. Restore the backup made before that upgrade to use it.')
+        return REFUSED
+    say(f'  OK: the app in {app_root} (schema {known}) can open it.')
+    return OK
 
 
 # --- retention -------------------------------------------------------------------------------------------------------------
@@ -321,8 +476,24 @@ def collect_members(data_dir, app_root, include_uploads):
     if include_uploads:
         members += [('data/' + p.name, p) for p in sorted(Path(data_dir).glob('*.upload')) if p.is_file()]
     for arc, _ in members:
-        if SECRET_RE.search(arc):
+        if looks_secret(arc):
             raise Problem(f'Refusing to put {arc} in a backup: it looks like a secret.', USAGE)
+    return members
+
+
+def snapshot_audit_files(data_dir, partial):
+    """Copy audit.key and audit.anchor into the partial folder BEFORE the database is copied: the app writes the
+    anchor only after an entry is committed, so this anchor never names an entry the database copy lacks."""
+    members = []
+    for name in AUDIT_FILES:
+        src = Path(data_dir) / name
+        try:
+            data = src.read_bytes()
+        except FileNotFoundError:
+            continue
+        copy = partial / name
+        copy.write_bytes(data)
+        members.append(('data/' + name, copy))
     return members
 
 
@@ -371,11 +542,15 @@ def make_backup(data_dir, dest, app_root=APP_ROOT, label=None, include_uploads=F
     partial = dest / f'.partial-{stamp}-{os.getpid()}'
     partial.mkdir()
     try:
+        audit_members = snapshot_audit_files(data_dir, partial)
         copy = partial / DB_NAME
         say('  Copying the database with the SQLite online backup API (the app can keep running)...')
         try:
             with connect(src, 'rw') as source, connect(copy, 'rwc') as target:
-                source.backup(target, pages=1024, sleep=0.05)
+                # pages=-1: one step under one read lock. A step-wise copy restarts after every write by another
+                # connection, so it may never finish while the app is busy; one step makes the app wait instead
+                # (its busy timeout is 20 s; copying a few hundred MB takes a few seconds).
+                source.backup(target, pages=-1, sleep=0.05)
         except sqlite3.DatabaseError as e:
             raise Problem(f'SQLite could not copy the database ({e}). If it says "malformed", the live database is '
                           'damaged: follow docs/RUNBOOK.md, "A backup reports a damaged database".') from None
@@ -391,7 +566,10 @@ def make_backup(data_dir, dest, app_root=APP_ROOT, label=None, include_uploads=F
                           'The older backups were not touched.') from None
         say(f'  Checked the copy: integrity_check ok, foreign_key_check ok ({len(report["tables"])} tables, '
             f'{sum(v or 0 for v in report["tables"].values())} rows)')
-        members = [(DB_MEMBER, copy)] + collect_members(data_dir, app_root, include_uploads)
+        if report.get('audit_keyed_rows') and not any(arc == 'data/' + AUDIT_KEY for arc, _ in audit_members):
+            say(f'  WARNING: the audit history is keyed, but there is no {AUDIT_KEY} in {data_dir}. The backup is written, but '
+                'after a restore the audit history cannot be proven untouched (Setup > Audit history will say the key is missing).')
+        members = [(DB_MEMBER, copy)] + audit_members + collect_members(data_dir, app_root, include_uploads)
         created = utc_now()
         manifest = {
             'format': FORMAT,
@@ -431,7 +609,9 @@ def make_backup(data_dir, dest, app_root=APP_ROOT, label=None, include_uploads=F
                       'backups were not touched. Check the disk (chkdsk) and run the backup again.') from None
     say('  Verified: every file matches its SHA-256 and the database copy passes integrity_check.')
     kept, deleted = prune(dest, keep, protect=[final]) if prune_old else (len(list_backups(dest)), [])
-    if deleted:
+    if not prune_old:
+        say(f'  Retention: off (--no-prune): kept all {kept} backups in {dest}.')
+    elif deleted:
         say(f'  Retention ({keep[0]} daily, {keep[1]} weekly, {keep[2]} monthly): kept {kept}, deleted {len(deleted)}: {", ".join(deleted)}')
     else:
         say(f'  Retention ({keep[0]} daily, {keep[1]} weekly, {keep[2]} monthly): kept {kept}, nothing to delete.')
@@ -466,6 +646,28 @@ def resolve_zip(arg, dest):
     return p
 
 
+def check_audit_members(z, present, report):
+    """Plain checks of audit.key / audit.anchor inside a backup. Returns warnings; raises Problem when one is damaged."""
+    warnings = []
+    key_member, anchor_member = AUDIT_MEMBERS
+    if key_member in present:
+        if not re.fullmatch(r'[0-9a-fA-F]{64}', z.read(key_member).decode('ascii', 'replace').strip()):
+            raise Problem(f'{key_member} in the backup is damaged (it must be 64 hexadecimal characters).')
+    if anchor_member in present:
+        try:
+            anchor = json.loads(z.read(anchor_member))
+            readable = isinstance(int(anchor['id']), int) and isinstance(anchor['mac'], str)
+        except (ValueError, KeyError, TypeError):
+            readable = False
+        if not readable:
+            raise Problem(f'{anchor_member} in the backup is damaged (it is not the expected {{"id", "mac"}} record).')
+    if report.get('audit_keyed_rows') and key_member not in present:
+        warnings.append(f'this backup has no audit key ({AUDIT_KEY}). The data is complete, but after a restore the audit history '
+                        'cannot be proven untouched (Setup > Audit history will say the key is missing). Make a new backup with '
+                        'this version of backup.py; it includes the key.')
+    return warnings
+
+
 def verify(zip_path, quiet=False, scratch=None):
     """Check a backup end to end; returns the manifest. Raises Problem (exit 1) on any mismatch."""
     zip_path = Path(zip_path)
@@ -492,7 +694,7 @@ def verify(zip_path, quiet=False, scratch=None):
         bad = [n for n in names if not safe_member(n)]
         if bad:
             raise Problem(f'The zip contains unsafe paths: {bad[:3]}')
-        secret = [n for n in names if SECRET_RE.search(n)]
+        secret = [n for n in names if looks_secret(n)]
         if secret:
             raise Problem(f'The zip contains files that look like secrets: {secret[:3]}. Do not use or share it.')
         if MANIFEST not in names:
@@ -530,6 +732,7 @@ def verify(zip_path, quiet=False, scratch=None):
             report = inspect_db(db)
         finally:
             shutil.rmtree(work, ignore_errors=True)
+        warnings = check_audit_members(z, present, report)
     require_healthy(report, 'The database in the backup')
     out('  database integrity_check / foreign keys .. ok')
     recorded = (manifest.get('database') or {}).get('tables') or {}
@@ -538,19 +741,76 @@ def verify(zip_path, quiet=False, scratch=None):
         raise Problem(f'Row counts differ from the manifest for: {diff[:5]}')
     out(f'  row counts match the manifest ............ ok ({len(report["tables"])} tables, '
         f'{sum(v or 0 for v in report["tables"].values())} rows)')
+    if AUDIT_MEMBERS[0] in present:
+        out(f'  audit key and anchor ..................... ok ({", ".join(sorted(m.split("/")[1] for m in present & set(AUDIT_MEMBERS)))})')
+    for w in warnings:
+        out(f'  WARNING: {w}')
+    manifest['_report'] = report
+    manifest['_warnings'] = warnings
     return manifest
 
 
 # --- restore -------------------------------------------------------------------------------------------------------------------------
-def restore(zip_path, to_dir, force=False, port=8008, quiet=False, manifest=None):
-    """Restore a verified backup into `to_dir` (a data folder). Never deletes: replaced files are moved aside.
-    `manifest` is the result of an earlier verify() of the same file, to avoid checking it twice."""
+def anchor_from_db(db, anchor_path):
+    """Write audit.anchor for a restored database whose backup had none (made by an older backup.py): the newest
+    entry as it is in the restored database, like backend/local_store.py does after a migration. Returns True when
+    an anchor was written."""
+    with connect(db, 'ro') as c:
+        if 'mac' not in {r[1] for r in c.execute('PRAGMA table_info(audit)')}:
+            return False
+        last = c.execute('SELECT id, mac FROM audit ORDER BY id DESC LIMIT 1').fetchone()
+    if not last or not last[1]:
+        return False
+    tmp = anchor_path.with_name(anchor_path.name + '.restore.tmp')
+    try:
+        tmp.write_text(json.dumps(dict(id=int(last[0]), mac=str(last[1]))), encoding='utf-8')
+        os.replace(tmp, anchor_path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+    return True
+
+
+def undo_restore(moved, placed):
+    """Put every file moved aside back (newest move first) and remove what was placed where nothing was before.
+    Returns the problems; an empty list means the folder is as it was."""
+    problems = []
+    originals = {o for o, _ in moved}
+    for original, aside in reversed(moved):
+        try:
+            os.replace(aside, original)
+        except OSError as e:
+            problems.append(f'{aside.name} could not be renamed back to {original.name} ({e.strerror or e})')
+    for target in reversed(placed):
+        if target in originals:
+            continue
+        try:
+            if target.is_dir():
+                target.rmdir()                     # only a folder the restore created, and only when empty
+            else:
+                target.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            problems.append(f'the half-restored {target.name} could not be removed ({e.strerror or e})')
+    return problems
+
+
+def restore(zip_path, to_dir, force=False, port=8008, quiet=False, manifest=None, app_root=None, allow_newer_schema=False):
+    """Restore a verified backup into `to_dir` (a data folder). Never deletes: replaced files are moved aside, and
+    when anything fails half-way they are all put back. With app_root, a backup whose database is newer than that
+    app knows is refused (exit 3). `manifest` is the result of an earlier verify() of the same file."""
     out = (lambda s: None) if quiet else say
     zip_path, to_dir = Path(zip_path), Path(to_dir)
     if manifest is None:
         out(f'  Checking {zip_path.name} before restoring...')
         manifest = verify(zip_path, quiet=True)
         out('  The backup is complete and readable.')
+        for w in manifest.get('_warnings') or []:
+            out(f'  WARNING: {w}')
+    if app_root is not None:
+        require_schema_fits((manifest.get('_report') or manifest.get('database') or {}).get('user_version'), app_root,
+                            'The database in this backup', allow_newer_schema, out)
     to_dir.mkdir(parents=True, exist_ok=True)
     plan = []                                     # (member, target) for files that must be written
     with zipfile.ZipFile(zip_path) as z:
@@ -560,9 +820,12 @@ def restore(zip_path, to_dir, force=False, port=8008, quiet=False, manifest=None
                 plan.append((name, to_dir / fname))
             elif folder == 'config':
                 plan.append((name, to_dir / RESTORED_CONFIG_DIR / fname))
+        members = {m for m, _ in plan}
         db = to_dir / DB_NAME
+        journals = [db.with_name(db.name + s) for s in JOURNAL_SUFFIXES]
+        anchor, key = to_dir / AUDIT_ANCHOR, to_dir / AUDIT_KEY
         clashes = [t for m, t in plan if t.exists() and not t.name.endswith('.upload')]
-        clashes += [db.with_name(db.name + s) for s in JOURNAL_SUFFIXES if db.with_name(db.name + s).exists()]
+        clashes += [p for p in journals + [anchor, key] if p.exists() and p not in clashes]
         if clashes and not force:
             raise Problem(f'{to_dir} already has {", ".join(c.name for c in clashes[:4])}. Restore into a new, empty folder '
                           '(for example C:\\PoppysRestore\\<date>). To replace a live database, stop POPPYS AI first and '
@@ -575,6 +838,7 @@ def restore(zip_path, to_dir, force=False, port=8008, quiet=False, manifest=None
         partial = to_dir / f'.partial-restore-{os.getpid()}'
         shutil.rmtree(partial, ignore_errors=True)
         partial.mkdir()
+        moved, placed, notes = [], [], []        # moved: (original, aside)
         try:
             staged = []
             for member, target in plan:
@@ -585,32 +849,83 @@ def restore(zip_path, to_dir, force=False, port=8008, quiet=False, manifest=None
                 staged.append((tmp, target))
             require_healthy(inspect_db(partial / DB_MEMBER.replace('/', '__')), 'The restored database')
             stamp = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
-            moved = []
-            # The database first: on Windows the rename fails while any program holds it open, and then nothing
-            # has changed yet. Its journal files go with it, or SQLite would replay the old journal into the new file.
-            for old in [db] + [db.with_name(db.name + s) for s in JOURNAL_SUFFIXES] + [t for _, t in staged if t != db]:
-                if old.exists() and not old.name.endswith('.upload'):
-                    aside = old.with_name(f'{old.name}.before-restore-{stamp}')
-                    try:
-                        os.replace(old, aside)
-                    except PermissionError:
-                        raise Problem(f'{old} is in use by another program. Stop POPPYS AI and try again.', REFUSED) from None
-                    moved.append(aside)
-            for tmp, target in staged:
-                if target.name.endswith('.upload') and target.exists():
-                    continue                       # uploads are content files: an existing one is kept
-                target.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(tmp, target)
-            fsync_dir(to_dir)
+            # The database first: on Windows the rename fails while any program holds it open, and then nothing has
+            # changed yet. Its journal files go with it, or SQLite would replay the old journal into the new file. The
+            # audit anchor always goes too (it names the newest entry of the database it belongs to); the audit key only
+            # when the backup brings its own (the key never changes, so the live one still fits an older backup).
+            aside_list = [db] + journals + [anchor] + ([key] if 'data/' + AUDIT_KEY in members else [])
+            aside_list += [t for _, t in staged if t not in aside_list]
+            try:
+                for old in aside_list:
+                    if old.exists() and not old.name.endswith('.upload'):
+                        aside = old.with_name(f'{old.name}.before-restore-{stamp}')
+                        try:
+                            os.replace(old, aside)
+                        except PermissionError:
+                            raise Problem(f'{old} is in use by another program. Stop POPPYS AI and try again.', REFUSED) from None
+                        moved.append((old, aside))
+                for tmp, target in staged:
+                    if target.name.endswith('.upload') and target.exists():
+                        continue                       # uploads are content files: an existing one is kept
+                    if not target.parent.is_dir():
+                        target.parent.mkdir(parents=True)
+                        placed.append(target.parent)   # undo removes it again when it is still empty
+                    os.replace(tmp, target)
+                    placed.append(target)
+                if 'data/' + AUDIT_ANCHOR not in members and anchor_from_db(db, anchor):
+                    placed.append(anchor)
+                    notes.append(f'The backup has no {AUDIT_ANCHOR} (made by an older backup.py): a new one was written from the restored database.')
+                if 'data/' + AUDIT_KEY not in members:
+                    notes.append(f'The backup has no {AUDIT_KEY}: ' + ('the one already in the folder was kept.' if key.exists() else
+                                                                    'the audit history of the restored data cannot be proven untouched.'))
+                fsync_dir(to_dir)
+            except BaseException as exc:
+                if not moved and not placed:
+                    raise
+                problems = undo_restore(moved, placed)
+                moved = []
+                if not isinstance(exc, Exception):
+                    raise
+                why = str(exc) if isinstance(exc, Problem) else error_text(exc)
+                if problems:
+                    raise Problem(f'The restore stopped half-way ({why}) and could NOT put everything back: {"; ".join(problems)}. '
+                                  f'Do not start POPPYS AI. In {to_dir}, rename the newest *.before-restore-{stamp} files back to '
+                                  'their original names (remove the ".before-restore-..." ending), or ask support.') from None
+                code = exc.code if isinstance(exc, Problem) else FAILED
+                raise Problem(f'The restore could not finish ({why}). Nothing was changed: every file that had been moved '
+                              'aside was put back.', code) from None
         finally:
             shutil.rmtree(partial, ignore_errors=True)
-    for aside in moved:
+    for _, aside in moved:
         out(f'  Moved the previous file aside (not deleted): {aside}')
+    for note in notes:
+        out(f'  Note: {note}')
     tables = (manifest.get('database') or {}).get('tables') or {}
     out(f'  Restored {DB_NAME} ({len(tables)} tables, {sum(v or 0 for v in tables.values())} rows) into {to_dir}')
     if any(m.startswith('config/') for m, _ in plan):
         out(f'  The config files of that time are in {to_dir / RESTORED_CONFIG_DIR} (for comparison; the app uses its own config folder).')
-    return manifest, moved
+    return manifest, [aside for _, aside in moved]
+
+
+def audit_after_restore(app_root, data_dir, out=say):
+    """The app's audit-history check on restored data. Returns None (nothing to check), True or False."""
+    try:
+        with connect(Path(data_dir) / DB_NAME, 'ro') as c:
+            chained = 'hash' in {r[1] for r in c.execute('PRAGMA table_info(audit)')}
+    except sqlite3.DatabaseError:
+        chained = False
+    if not chained:
+        out('  Note: the restored database has no hash-chained audit history (older than schema 3); nothing to check.')
+        return None
+    result = check_audit_chain(app_root, data_dir)
+    if result is None:
+        out(f'  Note: the app in {app_root} has no audit-history check; skipped.')
+        return None
+    if result.get('ok'):
+        out(f'  Audit history of the restored data: ok ({result.get("rows", 0)} entries, keyed chain and anchor match).')
+        return True
+    out(f'  WARNING: the audit history of the restored data cannot be proven untouched: {result.get("problem")}')
+    return False
 
 
 # --- restore drill ----------------------------------------------------------------------------------------------------------------
@@ -635,6 +950,14 @@ def wait_ready(port, seconds, proc=None):
     raise Problem(f'The restored app did not answer {base}/readyz (or /) within {seconds} s.')
 
 
+def uvicorn_command(port):
+    """The restored app's command line: like the service, one worker, no Server header, no access log, and no
+    trust in X-Forwarded-* headers (every client is 127.0.0.1, so trusting them would let any local program pick
+    the address the sign-in throttle counts)."""
+    return [sys.executable, '-E', '-s', '-X', 'utf8', '-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', str(port),
+            '--workers', '1', '--no-access-log', '--no-server-header', '--no-proxy-headers']
+
+
 def run_restored_app(app_root, app_dir, data_dir, port, seconds, users):
     """Start a scratch copy of the app on the restored data and check that it answers. Oracle is unreachable from it:
     there is no .env.poppys in the copy and every POPPYS_* setting is removed from its environment."""
@@ -650,8 +973,7 @@ def run_restored_app(app_root, app_dir, data_dir, port, seconds, users):
     log_path = app_dir.parent / 'drill-app.log'
     say(f'  Starting the restored app on http://127.0.0.1:{port} (scratch copy, Oracle switched off)...')
     with open(log_path, 'wb') as log:
-        proc = subprocess.Popen([sys.executable, '-E', '-s', '-X', 'utf8', '-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1',
-                                 '--port', str(port), '--workers', '1', '--no-access-log'], cwd=app_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(uvicorn_command(port), cwd=app_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
         try:
             how = wait_ready(port, seconds, proc)
             say(f'  The restored app answered {how} with 200.')
@@ -688,7 +1010,7 @@ def drill(zip_path, app_root=APP_ROOT, start_app=False, port=8018, keep_files=Fa
     try:
         app_dir = scratch / 'app'
         data_dir = app_dir / 'data'
-        restore(zip_path, data_dir, force=False, port=0, quiet=True, manifest=manifest)
+        restore(zip_path, data_dir, force=False, port=0, quiet=True, manifest=manifest, app_root=app_root if start_app else None)
         say(f'  Restored into the scratch folder {scratch}')
         report = inspect_db(data_dir / DB_NAME)
         require_healthy(report, 'The restored database')
@@ -696,6 +1018,13 @@ def drill(zip_path, app_root=APP_ROOT, start_app=False, port=8018, keep_files=Fa
         if recorded and report['tables'] != recorded:
             raise Problem('The restored database has different row counts from the manifest.')
         say(f'  Restored database: integrity_check ok, foreign keys ok, row counts match ({len(report["tables"])} tables)')
+        known = app_schema_version(app_root)
+        if known is not None and report['user_version'] > known:
+            say(f'  Note: the backup is newer (schema {report["user_version"]}) than the app in {app_root} (schema {known}); '
+                'the audit-history check was skipped. Run the drill with the newer version.')
+        elif audit_after_restore(app_root, data_dir) is False:
+            raise Problem('The restored audit history did not pass the app\'s check (see the warning above). The data restores, '
+                          'but this backup cannot prove the audit history was not changed.')
         if start_app:
             run_restored_app(app_root, app_dir, data_dir, port, seconds, recorded.get('users'))
         return manifest
@@ -711,15 +1040,19 @@ def parser():
     p = argparse.ArgumentParser(
         prog='backup.py', formatter_class=argparse.RawDescriptionHelpFormatter,
         description='POPPYS AI backups: make, verify, restore and drill. See docs/RUNBOOK.md.',
-        epilog='Exit codes: 0 OK, 1 FAILED, 2 usage or setup problem, 3 REFUSED (would overwrite / app running), '
-               '4 backup OK but the second copy failed.')
+        epilog='Exit codes: 0 OK, 1 FAILED, 2 usage or setup problem, 3 REFUSED (would overwrite / app running / newer database), '
+               '4 backup OK but the second copy failed, 5 restored but the audit history cannot be proven untouched.')
     mode = p.add_mutually_exclusive_group()
     mode.add_argument('--verify', metavar='ZIP', help="check a backup end to end ('latest' = newest in --dest)")
     mode.add_argument('--restore', metavar='ZIP', help="restore a backup into --to ('latest' = newest in --dest)")
     mode.add_argument('--drill', metavar='ZIP', help="restore drill into a scratch folder ('latest' = newest in --dest)")
     mode.add_argument('--list', action='store_true', help='list the backups in --dest and what retention keeps')
+    mode.add_argument('--db-info', action='store_true', help='show what the database in --data-dir holds (read-only) and '
+                      'whether the app in --app-root can open it (exit 3 when the database is newer than that app)')
     p.add_argument('--to', metavar='DIR', help='with --restore: the data folder to restore into (new and empty unless --force)')
     p.add_argument('--force', action='store_true', help='with --restore: replace an existing database (only when the app is stopped)')
+    p.add_argument('--allow-newer-schema', action='store_true', help='with --restore: restore a backup made by a newer POPPYS AI '
+                   'than the app in --app-root (that app will refuse to start on it; only if support asks)')
     p.add_argument('--data-dir', metavar='DIR', help='folder with poppys.sqlite3 (default: $POPPYS_DATA_DIR or <app-root>/data)')
     p.add_argument('--app-root', metavar='DIR', default=str(APP_ROOT), help='the POPPYS AI folder (default: the folder above scripts/)')
     p.add_argument('--dest', metavar='DIR', help='backup folder (default: <data-dir>/backups)')
@@ -729,7 +1062,7 @@ def parser():
     p.add_argument('--keep-daily', type=int, default=DEFAULT_KEEP[0])
     p.add_argument('--keep-weekly', type=int, default=DEFAULT_KEEP[1])
     p.add_argument('--keep-monthly', type=int, default=DEFAULT_KEEP[2])
-    p.add_argument('--no-prune', action='store_true', help='do not delete old backups')
+    p.add_argument('--no-prune', action='store_true', help='do not delete old backups (upgrade.ps1 uses it for data/backups/pre-upgrade)')
     p.add_argument('--port', type=int, default=8008, help='with --restore --force: refuse while something answers on this port (0 = skip)')
     p.add_argument('--start-app', action='store_true', help='with --drill: also start the restored app on --drill-port and check it answers')
     p.add_argument('--drill-port', type=int, default=8018)
@@ -747,7 +1080,8 @@ def main(argv=None):
     dest = Path(args.dest) if args.dest else data_dir / 'backups'
     keep = (args.keep_daily, args.keep_weekly, args.keep_monthly)
     log = None if (args.log or '').lower() == 'none' else Path(args.log) if args.log else dest / 'backup.log'
-    action = 'VERIFY' if args.verify else 'RESTORE' if args.restore else 'DRILL' if args.drill else 'LIST' if args.list else 'BACKUP'
+    action = ('VERIFY' if args.verify else 'RESTORE' if args.restore else 'DRILL' if args.drill else 'LIST' if args.list
+              else 'DB-INFO' if args.db_info else 'BACKUP')
     try:
         if min(keep) < 1:
             raise Problem('--keep-daily, --keep-weekly and --keep-monthly must be at least 1.', USAGE)
@@ -761,6 +1095,8 @@ def main(argv=None):
                 state = 'keep' if p.name in keepset else 'deleted at the next backup'
                 say(f'  {p.name}  {human(p.stat().st_size):>10}  {state}')
             return OK
+        if args.db_info:
+            return db_info(data_dir, app_root)
         if args.verify:
             z = resolve_zip(args.verify, dest)
             say(f'Checking {z}')
@@ -773,7 +1109,11 @@ def main(argv=None):
                 raise Problem('--restore needs --to <folder>: a new, empty folder (or the data folder with --force).', USAGE)
             z = resolve_zip(args.restore, dest)
             say(f'Restoring {z}')
-            restore(z, args.to, force=args.force, port=args.port)
+            restore(z, args.to, force=args.force, port=args.port, app_root=app_root, allow_newer_schema=args.allow_newer_schema)
+            if audit_after_restore(app_root, args.to) is False:
+                say(f'RESTORED, but the audit history cannot be proven untouched (see the warning above). The data is restored into {args.to}.')
+                append_log(log, f'RESTORE OK-BUT-AUDIT-UNPROVEN {z.name} -> {args.to}')
+                return AUDIT_UNPROVEN
             say(f'OK: restored into {args.to}.')
             append_log(log, f'RESTORE OK {z.name} -> {args.to}')
             return OK

@@ -10,10 +10,15 @@
        administrators and SYSTEM full control; the service account (LOCAL SERVICE) read-only on the program,
        modify on data\ and logs\, read on config\; other users read-only on the program and logs and no access
        to data\ or config\.
-    3. Copies the app into releases\<version> (never .env files, local data or git metadata), links its data
-       folder to data\, and checks that the release's Python can import the app.
+    3. Copies the app into releases\<version> (never .env files, local data, git metadata or git-ignored files
+       in docs\), links its data folder to data\, and checks that the release's Python can import the app. It
+       never copies over the release that is running: when <Source> has the same version as the active release,
+       that release is repaired in place, and it stops when the files differ (use upgrade.ps1).
     4. First install only: copies the existing database from <Source>\data with scripts\backup.py (a verified
-       backup, then a restore; the original stays where it is) and copies .env.poppys into config\.
+       backup of the database with its audit key and anchor, then a restore; the original stays where it is) and
+       copies .env.poppys into config\. When both folders already have a database and the one in <Source>\data
+       was changed later (start.ps1 was used after the service was removed), it stops and asks which one to
+       keep: run again with -UseDatabase Source or -UseDatabase Installed.
     5. Points the "current" junction at the release, registers the PoppysAI service from PoppysAI.xml
        (LocalService, delayed automatic start, restart on failure) and starts it, then waits up to 60 s for
        http://127.0.0.1:8008 to answer (/readyz when the app has it, otherwise the home page).
@@ -30,7 +35,13 @@
 .PARAMETER InstallRoot
   Where the service lives (%BASE% in PoppysAI.xml). Default: C:\ProgramData\PoppysAI.
 .PARAMETER Version
-  Release name. Default: the VERSION file, else "git describe", else a hash of the app files.
+  Release name. Default: the VERSION file plus the short git commit in a checkout (0.9.0-abc1234, and a hash of
+  the app files when there are uncommitted changes), the VERSION file alone in a release zip, else
+  "git describe", else a hash of the app files.
+.PARAMETER UseDatabase
+  Only when both <Source>\data and C:\ProgramData\PoppysAI\data hold a database: 'Source' copies the one from
+  <Source>\data into the service (the service's current one is moved aside, not deleted); 'Installed' keeps the
+  service's database.
 .PARAMETER WinSW
   Path to WinSW-x64.exe 2.12.0. Default: PoppysAI.exe or WinSW-x64.exe next to this script, then the copy
   already installed in InstallRoot.
@@ -56,6 +67,7 @@ param(
   [switch]$Force,
   [switch]$StageOnly,
   [switch]$NoStart,
+  [ValidateSet('Source', 'Installed')][string]$UseDatabase,
   [int]$ReadySeconds = 60
 )
 $ErrorActionPreference = 'Stop'
@@ -235,11 +247,16 @@ function Test-ReleaseChecksum([string]$Dir) {
 }
 
 function Get-ContentHash([string]$Dir) {
+  # SHA-256 over the app files that Copy-Release copies (the same exclusions), so a release folder and the source
+  # it was copied from give the same hash. Python and docs are not part of it.
   $root = (Resolve-Path -LiteralPath $Dir).ProviderPath.TrimEnd([char[]]@('\', '/'))
   $lines = foreach ($part in @('backend', 'frontend', 'config', 'scripts', 'deploy')) {
     $sub = Join-Path $root $part
     if (Test-Path -LiteralPath $sub) {
-      Get-ChildItem -LiteralPath $sub -Recurse -File | Where-Object { $_.FullName -notmatch '[\\/]__pycache__[\\/]' } | ForEach-Object {
+      Get-ChildItem -LiteralPath $sub -Recurse -File -Force | Where-Object {
+        $_.FullName -notmatch '[\\/](__pycache__|\.pytest_cache)[\\/]' -and
+          $_.Name -notmatch '^\.env(\..*)?$|\.(sqlite3|sqlite3-journal|upload|log|exe)$'
+      } | ForEach-Object {
         ($_.FullName.Substring($root.Length + 1) -replace '\\', '/') + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
       }
     }
@@ -250,24 +267,49 @@ function Get-ContentHash([string]$Dir) {
   return -join ($digest | ForEach-Object { $_.ToString('x2') })
 }
 
+function Get-GitOutput([string]$Dir, [string[]]$GitArgs) {
+  # @{ Ok; Lines } of a git command in $Dir. Ok is $false when $Dir is no checkout, git is missing or the command
+  # fails (for example "dubious ownership" when the checkout belongs to another Windows user).
+  if (-not (Test-Path -LiteralPath (Join-Path $Dir '.git')) -or -not (Get-Command git -ErrorAction SilentlyContinue)) {
+    return @{ Ok = $false; Lines = @() }
+  }
+  $saved = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $global:LASTEXITCODE = 0
+    $lines = @(& git -C $Dir @GitArgs 2>$null)
+    return @{ Ok = ($LASTEXITCODE -eq 0); Lines = $lines }
+  } finally { $ErrorActionPreference = $saved }
+}
+
 function Get-ReleaseVersion([string]$Dir) {
   $ver = ''
   $file = Join-Path $Dir 'VERSION'
-  if (Test-Path -LiteralPath $file -PathType Leaf) { $ver = [string](Get-Content -LiteralPath $file -TotalCount 1) }
-  if (-not $ver.Trim() -and (Test-Path -LiteralPath (Join-Path $Dir '.git')) -and (Get-Command git -ErrorAction SilentlyContinue)) {
-    $saved = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try { $ver = [string](& git -C $Dir describe --tags --always --dirty 2>$null | Select-Object -First 1) } finally { $ErrorActionPreference = $saved }
-    if ($LASTEXITCODE -ne 0) { $ver = '' }
+  if (Test-Path -LiteralPath $file -PathType Leaf) { $ver = ([string](Get-Content -LiteralPath $file -TotalCount 1)).Trim() }
+  $isCheckout = Test-Path -LiteralPath (Join-Path $Dir '.git')
+  $head = Get-GitOutput $Dir @('rev-parse', '--short=7', 'HEAD')
+  if ($head.Ok -and $head.Lines.Count -gt 0 -and ([string]$head.Lines[0]).Trim() -match '^[0-9a-f]{7,40}$') {
+    # A git checkout: every commit is its own release (0.9.0-abc1234), so upgrade.ps1 installs a "git pull" even
+    # when VERSION did not change. Uncommitted changes add a hash of the app files, so each changed copy differs.
+    $commit = $Matches[0]
+    if ($ver) {
+      $ver = $ver + '-' + $commit
+    } else {
+      $describe = Get-GitOutput $Dir @('describe', '--tags', '--always')
+      $ver = $commit
+      if ($describe.Ok -and $describe.Lines.Count -gt 0) { $ver = ([string]$describe.Lines[0]).Trim() }
+    }
+    $status = Get-GitOutput $Dir @('status', '--porcelain', '--untracked-files=no')
+    if (-not $status.Ok -or $status.Lines.Count -gt 0) { $ver = $ver + '-dirty-' + (Get-ContentHash $Dir).Substring(0, 8) }
+  } elseif ($isCheckout) {
+    # A checkout git cannot read here: the hash of the app files tells each state apart.
+    Write-Note 'git could not read the checkout; the version name gets a hash of the app files instead of the commit.'
+    if (-not $ver) { $ver = 'build' }
+    $ver = $ver + '-' + (Get-ContentHash $Dir).Substring(0, 12)
   }
-  # Without VERSION or git: a hash of the app files. Uncommitted changes keep the same "<sha>-dirty" name, so the
-  # content hash is added to make each changed copy its own release.
-  if (-not $ver.Trim()) {
-    $ver = 'build-' + (Get-ContentHash $Dir).Substring(0, 12)
-  } elseif ($ver.Trim() -match '-dirty$') {
-    $ver = $ver.Trim() + '-' + (Get-ContentHash $Dir).Substring(0, 8)
-  }
-  return ($ver.Trim() -replace '[^A-Za-z0-9._-]', '-').Trim([char[]]@('-', '.'))
+  # Without VERSION or git: a hash of the app files.
+  if (-not $ver) { $ver = 'build-' + (Get-ContentHash $Dir).Substring(0, 12) }
+  return ($ver -replace '[^A-Za-z0-9._-]', '-').Trim([char[]]@('-', '.'))
 }
 
 function Get-ReleasePython([string]$Release) {
@@ -309,9 +351,39 @@ function Protect-SettingsFile([string]$Path) {
   Set-FolderAccess $Path @("${Admins}:F", "${System}:F", "${LocalService}:R")
 }
 
+function Copy-Doc([string]$From, [string]$To) {
+  # docs\ of a checkout also holds git-ignored client material (docs\workbook_analysis, live sample records):
+  # copy only the files git tracks. Without git (a release zip, built from tracked files only) the whole folder
+  # is copied, still without the known git-ignored names.
+  $src = Join-Path $From 'docs'
+  if (-not (Test-Path -LiteralPath $src -PathType Container)) { return }
+  $dest = Join-Path $To 'docs'
+  $tracked = Get-GitOutput $From @('-c', 'core.quotepath=off', 'ls-files', '--', 'docs')
+  if ($tracked.Ok -and $tracked.Lines.Count -gt 0) {
+    if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
+    $copied = 0
+    foreach ($rel in $tracked.Lines) {
+      $rel = ([string]$rel).Trim()
+      if (-not $rel -or $rel -match '(^|/)\.\.(/|$)') { continue }
+      $file = Join-Path $From ($rel -replace '/', '\')
+      if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }      # deleted but not yet committed
+      $target = Join-Path $To ($rel -replace '/', '\')
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+      Copy-Item -LiteralPath $file -Destination $target -Force
+      $copied++
+    }
+    Write-Note "docs: $copied files that git tracks (git-ignored files are not copied)."
+    return
+  }
+  $code = Invoke-Native 'robocopy.exe' @($src, $dest, '/MIR', '/XJ', '/R:2', '/W:2', '/NFL', '/NDL', '/NJH', '/NJS', '/NP',
+    '/XF', '.env', '.env.*', '*.sqlite3', '*.log', 'live_sample_records.txt', '*.xls', '*.xlsx', '*.xlsm', '/XD', 'workbook_analysis', '__pycache__')
+  if ($code -ge 8) { throw "robocopy could not copy docs (exit code $code)." }
+}
+
 function Copy-Release([string]$From, [string]$To) {
   New-Item -ItemType Directory -Force -Path $To | Out-Null
-  foreach ($part in @('backend', 'frontend', 'config', 'scripts', 'deploy', 'docs', 'python', '.venv')) {
+  Copy-Doc $From $To
+  foreach ($part in @('backend', 'frontend', 'config', 'scripts', 'deploy', 'python', '.venv')) {
     $src = Join-Path $From $part
     if (-not (Test-Path -LiteralPath $src -PathType Container)) { continue }
     $rc = @($src, (Join-Path $To $part), '/MIR', '/XJ', '/R:2', '/W:2', '/NFL', '/NDL', '/NJH', '/NJS', '/NP',
@@ -334,15 +406,28 @@ function Sync-OracleSetting([string]$Release) {
     Write-Warn "There is no $master yet. The app starts, but saving to Oracle needs it: copy .env.poppys there and run this script again."
     return
   }
+  # Made in config\ (no access for ordinary users), protected there, then moved into the release folder, which
+  # ordinary users can read: a move on the same disk keeps the file's permissions, so the copy is never readable
+  # by them, not even for a moment. Any failure removes the staged copy and stops.
   $copy = Join-Path $Release '.env.poppys'
-  Copy-Item -LiteralPath $master -Destination $copy -Force
-  Protect-SettingsFile $copy
+  $staged = Join-Path $ConfigDir ('.env.poppys.staging-' + [guid]::NewGuid().ToString('N'))
+  try {
+    Copy-Item -LiteralPath $master -Destination $staged -Force
+    Protect-SettingsFile $staged
+    if (Test-Path -LiteralPath $copy) { Remove-Item -LiteralPath $copy -Force }
+    [System.IO.File]::Move($staged, $copy)
+  } catch {
+    Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+    throw "The Oracle settings could not be copied safely into $Release ($($_.Exception.Message)). No unprotected copy was left behind."
+  }
   Write-Ok "Oracle settings copied into the release (readable by administrators and the service only)."
 }
 
 function Initialize-Release([string]$From, [string]$Release, [string]$Ver, [bool]$InPlace) {
+  # $InPlace: the release folder already holds these files (the source is that release, or it is the active one
+  # with the same files): it is repaired, never copied over.
   if ($InPlace) {
-    Write-Note "The source is the installed release $Ver itself: nothing to copy."
+    Write-Note "Release $Ver is already in $Release with these files: it is repaired in place, nothing is copied."
   } else {
     Write-Note "Copying $From to $Release ..."
     Copy-Release $From $Release
@@ -467,6 +552,47 @@ if ($service -and $ActiveVersion -and $ActiveVersion -ine $Version -and -not $Fo
   Stop-Install ("Version $ActiveVersion is installed and running from $Active. To change to $Version use upgrade.ps1 " +
     '(it makes a backup first and rolls back automatically if the new version does not start). Add -Force only to reinstall without those safeguards.')
 }
+# Never copy over the release the service runs (or ran last): a half-finished copy would break it with no way back.
+$repairOnly = $InPlace
+if (-not $InPlace -and $ActiveVersion -and $ActiveVersion -ieq $Version -and (Test-Path -LiteralPath (Join-Path $Release 'backend\main.py'))) {
+  if ((Get-ContentHash $Source) -ne (Get-ContentHash $Release)) {
+    Stop-Install ("$Source has version $Version, the same as the active release, but different files. The active release is never copied over. " +
+      'Give the new files their own version (commit them in git, or change VERSION), then run upgrade.ps1 with -Source ' + $Source + '. Nothing was changed.')
+  }
+  $repairOnly = $true
+}
+
+# Which database: on a reinstall after "Going back to start.ps1" (docs\RUNBOOK.md, section 8) both folders have one,
+# and the one in the repository may hold the newer work. Decided before anything is stopped or changed.
+$liveDb = Join-Path $DataDir 'poppys.sqlite3'
+$oldData = Join-Path $Source 'data'
+$oldDb = Join-Path $oldData 'poppys.sqlite3'
+$copyDatabase = $false
+if (-not $InPlace -and (Test-Path -LiteralPath $oldDb -PathType Leaf)) {
+  if (-not (Test-Path -LiteralPath $liveDb)) {
+    $copyDatabase = $true                                    # first install
+  } elseif ($UseDatabase -eq 'Source') {
+    $copyDatabase = $true
+  } elseif ($UseDatabase -ne 'Installed') {
+    $liveTime = (Get-Item -LiteralPath $liveDb).LastWriteTime
+    $sourceTime = (Get-Item -LiteralPath $oldDb).LastWriteTime
+    if ($sourceTime -gt $liveTime) {
+      Write-Step 'Two databases: which one should POPPYS AI use?'
+      $sourcePython = Get-ReleasePython $Source
+      $sourceBackupPy = Join-Path $Source 'scripts\backup.py'
+      foreach ($dir in @($oldData, $DataDir)) {
+        if ($sourcePython -and (Test-Path -LiteralPath $sourceBackupPy)) {
+          [void](Invoke-Native $sourcePython @('-E', '-s', '-X', 'utf8', $sourceBackupPy, '--db-info', '--data-dir', $dir, '--log', 'none'))
+        } else { Write-Note "$dir\poppys.sqlite3, last changed $((Get-Item -LiteralPath (Join-Path $dir 'poppys.sqlite3')).LastWriteTime)" }
+      }
+      Stop-Install ("The database in $oldData was changed after the one the service uses ($sourceTime, against $liveTime): POPPYS AI " +
+        "was probably used with start.ps1 after the service was removed. Nothing was changed. Choose one and run this script again:`n" +
+        "   -UseDatabase Source      use the database from $oldData (the service's current one is moved aside, not deleted)`n" +
+        "   -UseDatabase Installed   keep the service's database in $DataDir (the one in $oldData is not used)")
+    }
+  }
+}
+
 if ($service -and $service.Status -ne 'Stopped') {
   Write-Step 'Stopping the running service'
   Stop-Service -Name $ServiceName -Force
@@ -476,31 +602,42 @@ if (-not (Wait-PortFree 35)) {
 }
 
 Write-Step "3. Preparing release $Version"
-try { Initialize-Release -From $Source -Release $Release -Ver $Version -InPlace $InPlace } catch { Stop-Install "$($_.Exception.Message)" }
+try { Initialize-Release -From $Source -Release $Release -Ver $Version -InPlace $repairOnly } catch { Stop-Install "$($_.Exception.Message)" }
 
 Write-Step '4. Data and Oracle settings'
-$liveDb = Join-Path $DataDir 'poppys.sqlite3'
-$oldData = Join-Path $Source 'data'
 $python = Get-ReleasePython $Release
-if (Test-Path -LiteralPath $liveDb) {
-  Write-Ok "Using the existing database $liveDb"
-  if (-not $InPlace -and (Test-Path -LiteralPath (Join-Path $oldData 'poppys.sqlite3'))) {
-    Write-Note "(The older copy in $oldData is not used and not changed.)"
+if ($copyDatabase) {
+  # backup.py copies the database together with the audit key and anchor (data\audit.key, data\audit.anchor), so
+  # the audit history can still be proven untouched in the service's data folder.
+  $replacing = Test-Path -LiteralPath $liveDb
+  $label = 'first-install'
+  if ($replacing) {
+    $label = 'from-source'
+    Write-Note "Copying the database from $oldData into $DataDir (-UseDatabase Source). The service's current database is moved aside (poppys.sqlite3.before-restore-<time>), not deleted ..."
+  } else {
+    Write-Note "First install: copying the database from $oldData with a verified backup (the original stays as it is) ..."
   }
-} elseif (-not $InPlace -and (Test-Path -LiteralPath (Join-Path $oldData 'poppys.sqlite3'))) {
-  Write-Note "First install: copying the database from $oldData with a verified backup (the original stays as it is) ..."
-  $migration = Join-Path $DataDir 'backups\first-install'
+  $migration = Join-Path $DataDir ('backups\' + $label)
   $backupPy = Join-Path $Release 'scripts\backup.py'
   $code = Invoke-Native $python @('-E', '-s', '-X', 'utf8', $backupPy, '--data-dir', $oldData, '--app-root', $Source, '--dest', $migration,
-    '--label', 'first-install', '--no-prune', '--log', 'none')
-  if ($code -ne 0) { Stop-Install "The backup of $oldData failed (exit code $code); nothing was installed as a service yet." }
+    '--label', $label, '--no-prune', '--log', 'none')
+  if ($code -ne 0) { Stop-Install "The backup of $oldData failed (exit code $code); the service's data was not changed." }
   $zip = Get-ChildItem -LiteralPath $migration -Filter 'poppys-backup-*.zip' | Sort-Object Name -Descending | Select-Object -First 1
-  $code = Invoke-Native $python @('-E', '-s', '-X', 'utf8', $backupPy, '--restore', $zip.FullName, '--to', $DataDir, '--log', 'none')
-  if ($code -ne 0) { Stop-Install "Restoring the database into $DataDir failed (exit code $code)." }
+  $restoreArgs = @('-E', '-s', '-X', 'utf8', $backupPy, '--restore', $zip.FullName, '--to', $DataDir, '--app-root', $Release, '--port', "$Port", '--log', 'none')
+  if ($replacing) { $restoreArgs += '--force' }
+  $code = Invoke-Native $python $restoreArgs
+  if ($code -eq 5) {
+    Write-Warn 'The database was copied, but its audit history cannot be proven untouched (see the message above). Setup > Audit history shows the same; tell support.'
+  } elseif ($code -ne 0) { Stop-Install "Restoring the database into $DataDir failed (exit code $code). Read the backup.py message above." }
   $rc = @($oldData, $DataDir, '*.upload', 'schema_discovery.json', 'schema_discovery.md', '/XC', '/XN', '/XO', '/R:2', '/W:2', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
   $code = Invoke-Native 'robocopy.exe' $rc
   if ($code -ge 8) { Write-Warn "Some uploaded files could not be copied from $oldData (robocopy exit code $code)." }
-  Write-Ok "The database and uploaded files are now in $DataDir (first-install backup: $($zip.FullName))"
+  Write-Ok "The database and uploaded files are now in $DataDir (backup of the copied database: $($zip.FullName))"
+} elseif (Test-Path -LiteralPath $liveDb) {
+  Write-Ok "Using the existing database $liveDb"
+  if (-not $InPlace -and (Test-Path -LiteralPath $oldDb)) {
+    Write-Note "(The older copy in $oldData is not used and not changed.)"
+  }
 } else {
   Write-Note 'No existing database: POPPYS AI starts empty and asks for the first administrator account.'
 }

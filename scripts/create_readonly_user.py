@@ -6,7 +6,10 @@ cannot change data even in principle, because the account has no INSERT, UPDATE 
 
 As SYSDBA inside the container, like scripts/bootstrap_local.py, it:
 * creates POPPYS_RO with a generated password and CREATE SESSION only. The password is appended to .env.poppys
-  (ORACLE_RO_USER / ORACLE_RO_PASSWORD) before the account is created, and is never printed;
+  (ORACLE_RO_USER / ORACLE_RO_PASSWORD) before the account is created, and is never printed. After a Windows
+  service install the master settings file is C:\\ProgramData\\PoppysAI\\config\\.env.poppys (install, upgrade and
+  rollback copy it into the release they start): the lines go there too, and the script says where it wrote.
+  Writing there needs an administrator PowerShell;
 * grants READ on each GARMENT_DEMO table or view the main account (POPPYS_APP) can read, so both accounts see the
   same data, and on the main account's PP_IMPORT_LOG (import history), with a private synonym so the app's queries
   find it. READ is SELECT without SELECT ... FOR UPDATE and LOCK TABLE (Oracle 12.1.0.2+; SELECT before that);
@@ -42,11 +45,48 @@ def _count(sql):
     return int(out[-1]) if out and out[-1].isdigit() else -1
 
 
-def _append(lines):
-    """Adds settings to .env.poppys without touching what is there."""
-    existing = CONFIG.read_text(encoding='utf-8')
-    with CONFIG.open('a', encoding='utf-8') as f:
+def service_config():
+    """The master .env.poppys of a Windows service install (deploy/windows/install-service.ps1), or None.
+    POPPYS_INSTALL_ROOT overrides C:\\ProgramData\\PoppysAI (tests, another install folder)."""
+    root = os.environ.get('POPPYS_INSTALL_ROOT') or (str(Path(os.environ['ProgramData']) / 'PoppysAI') if os.environ.get('ProgramData') else '')
+    if not root:
+        return None
+    path = Path(root) / 'config' / '.env.poppys'
+    return path if path.is_file() else None
+
+
+def settings_files():
+    """The settings files to read and keep in step: the service's master copy first (the service and every
+    install, upgrade and rollback use it), then this folder's .env.poppys (start.ps1)."""
+    found = []
+    for path in (service_config(), CONFIG):
+        if path is not None and path.is_file() and path.resolve() not in [p.resolve() for p in found]:
+            found.append(path)
+    return found
+
+
+def _append(path, lines):
+    """Adds settings to a .env.poppys file without touching what is there."""
+    existing = path.read_text(encoding='utf-8')
+    with path.open('a', encoding='utf-8') as f:
         f.write(('\n' if existing and not existing.endswith('\n') else '') + ''.join(f'{k}={v}\n' for k, v in lines))
+
+
+def save_settings(files, values, ro, password):
+    """Write ORACLE_RO_USER / ORACLE_RO_PASSWORD into every settings file that lacks them. Returns the files written.
+    Raises SystemExit (before any Oracle change) when a file cannot be written."""
+    written = []
+    for path, known in zip(files, values):
+        missing = [(k, v) for k, v in (('ORACLE_RO_USER', ro), ('ORACLE_RO_PASSWORD', password)) if v and not known.get(k)]
+        if not missing:
+            continue
+        try:
+            _append(path, missing)
+        except PermissionError:
+            raise SystemExit(f'{path} can only be changed by an administrator. Open PowerShell with "Run as administrator" and run '
+                             'this script again. Nothing was changed in Oracle.') from None
+        written.append(path)
+    return written
 
 
 def grant_sql(app, ro):
@@ -88,9 +128,13 @@ end;
 
 
 def main():
-    if not CONFIG.exists():
+    files = settings_files()
+    if not files:
         raise SystemExit('.env.poppys does not exist yet. Run python scripts/bootstrap_local.py first.')
-    config = dotenv_values(CONFIG)
+    values = [dotenv_values(p) for p in files]
+    config = {}
+    for v in reversed(values):            # the service's master copy wins over this folder's copy
+        config.update({k: x for k, x in v.items() if x})
     app = _user(config.get('ORACLE_USER') or 'POPPYS_APP', 'ORACLE_USER')
     ro = _user(config.get('ORACLE_RO_USER') or os.environ.get('POPPYS_RO_USER') or 'POPPYS_RO', 'ORACLE_RO_USER')
     if ro == app:
@@ -102,29 +146,34 @@ def main():
     exists = _count(f"select count(*) from dba_users where username='{ro}';") == 1
     password = config.get('ORACLE_RO_PASSWORD')
     if exists and not password:
-        raise SystemExit(f'{ro} already exists, but .env.poppys has no ORACLE_RO_PASSWORD. Its password will not be reset: '
-                         'restore the .env.poppys lines that created it, or ask the DBA.')
+        raise SystemExit(f'{ro} already exists, but no .env.poppys ({", ".join(str(p) for p in files)}) has ORACLE_RO_PASSWORD. '
+                         'Its password will not be reset: restore the .env.poppys lines that created it, or ask the DBA.')
+    if not exists and not password:
+        password = 'Pp' + secrets.token_hex(24)
+    # Saved before the DDL, so a partial setup never loses the generated credential; an existing account's lines are
+    # copied into a settings file that lacks them (for example the service's master copy after an install).
+    written = save_settings(files, values, ro, password)
     if not exists:
-        missing = []
-        if not config.get('ORACLE_RO_USER'):
-            missing.append(('ORACLE_RO_USER', ro))
-        if not password:
-            password = 'Pp' + secrets.token_hex(24)
-            missing.append(('ORACLE_RO_PASSWORD', password))
-        _append(missing)   # saved before the DDL, so a partial setup never loses the generated credential
         # No default tablespace or quota: the account cannot create anything.
         sqlplus(f'create user {ro} identified by "{password}";\ngrant create session to {ro};')
     out = dict(line.split('=', 1) for line in sqlplus(grant_sql(app, ro)).splitlines() if '=' in line)
     tables = out.get('TABLES', '?')
     readonly = {'yes': ' It is a READ ONLY user (Oracle 23ai): any write is refused with ORA-28194.',
                 'no': ' (Could not make it a READ ONLY user; its grants alone keep it read-only.)'}.get(out.get('READONLY'), '')
+    where = (' Its settings (password not shown) were added to: ' + ', '.join(str(p) for p in written) + '.') if written else ''
+    master = service_config()
+    if master is not None and master in written:
+        script = master.parent.parent / 'current' / 'deploy' / 'windows' / 'install-service.ps1'
+        restart = (f'To use it in the service, run {script} in an administrator PowerShell: it copies the settings into the '
+                   'running version and restarts it.')
+    else:
+        restart = 'Restart POPPYS AI to use it for the Database screen, Ask AI, history and read-back.'
     if exists:
         print(f'{ro} already exists; its password was not changed. Its READ grants match {app}: {tables} {OWNER} tables '
-              f'and PP_IMPORT_LOG.{readonly}')
+              f'and PP_IMPORT_LOG.{readonly}{where}' + (f' {restart}' if written else ''))
     else:
         print(f'Created the read-only account {ro}: CREATE SESSION and READ on {tables} {OWNER} tables and PP_IMPORT_LOG, '
-              f'nothing else.{readonly} Its settings were added to .env.poppys (password not shown). Restart POPPYS AI to use it '
-              'for the Database screen, Ask AI, history and read-back, then run python scripts/check_oracle.py.')
+              f'nothing else.{readonly}{where} {restart} Then run python scripts/check_oracle.py.')
 
 
 if __name__ == '__main__':
