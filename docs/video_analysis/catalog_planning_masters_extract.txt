@@ -1,0 +1,849 @@
+TABLE 1106 of 11838: BUYMAS   (rows ~16)
+  Primary key: BUYMASID
+  Columns (44):
+    BUYMASID                         NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    BUYERNAME                        VARCHAR2(100)    
+    SNOTES                           VARCHAR2(10)     
+    DESCRIP                          VARCHAR2(50)     
+    EXIST                            NUMBER(10)       
+    SVCTRL                           VARCHAR2(30)     
+    NOMREQ                           VARCHAR2(10)     
+    STMUSER                          VARCHAR2(100)    
+    ACTIVE                           VARCHAR2(10)     
+    ADD1                             VARCHAR2(200)    
+    ADD2                             VARCHAR2(200)    
+    ADD3                             VARCHAR2(200)    
+    ADD4                             NUMBER(16)       
+    PINCODE                          VARCHAR2(10)     
+    COUNTRY                          NUMBER(16)       
+    PHONE                            VARCHAR2(30)     
+    MNAME                            NUMBER(15)       
+    SHIPALL                          NUMBER(10,2)     
+    REJALL                           NUMBER(10,2)     
+    DUEDAYS                          NUMBER(3)        
+    BUSPROPER                        NUMBER(10,2)     
+    SHIPID                           VARCHAR2(10)     
+    DISCPER                          NUMBER(10,2)     
+    CURR                             NUMBER(16)       
+    BBANK                            NUMBER(16)       
+    TAXTYPE                          NUMBER(16)       
+    BUYERCODE                        VARCHAR2(8)      
+    PAYTERMS                         NUMBER(16)       
+    INTERPER                         NUMBER(10,2)     
+    BUYERTYPE                        VARCHAR2(10)     
+    LABAPP                           VARCHAR2(10)     
+  Links (65):
+    BUYMAS.BUYMASID  <->  ACCIPAYREQA.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  ACCPOMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  ACCTNAUPMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  APROPOMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  BOEMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  BOEMAS.FBUYER    [client report join]
+    BUYMAS.BUYERNAME  <->  BUDGETMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  BUYBRAND.BUYMASID    [saved together by one client screen]
+    BUYMAS.BUYMASID  <->  BUYERACC.BUYMASID    [saved together by one client screen]
+    BUYMAS.BUYMASID  <->  BUYERMAIL.BUYMASID    [client report join + saved together by one client screen]
+    BUYMAS.BUYMASID  <->  BUYEXFACDT.BUYMASID    [saved together by one client screen]
+    BUYMAS.BUYMASID  <->  BUYMASDET.BUYMASID    [saved together by one client screen]
+    BUYMAS.BUYMASID  <->  BUYPOMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  BUYTEXP.BUYMASID    [saved together by one client screen]
+    BUYMAS.BUYMASID  <->  BUYTHEME.BUYMASID    [saved together by one client screen]
+    BUYMAS.BUYMASID  <->  BUYUNIT.BUYMASID    [client report join + saved together by one client screen]
+    BUYMAS.BUYMASID  <->  CADMAS.BUYERNAME    [client report join]
+    BUYMAS.BUYMASID  <->  CENQMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  CFABREQMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  COSTINGA.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  COSTMAS.BUYER    [declared key]
+    BUYMAS.COUNTRY  <->  COUNTRYMASTER.COUNTRYMASTERID    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  CRREQMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  CSTDYMAS.BUYER    [client report join]
+    BUYMAS.CURR  <->  CURMAS.CURMASID    [declared key]
+    BUYMAS.BUYMASID  <->  DOMPAYA.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  EXDISPMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  FABORDMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  FABPOMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  FORDRECMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  FPLANM.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  GRPIOMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  INVMAS.BUYERNAME    [client report join + declared key]
+    BUYMAS.EXPORTMASID  <->  INVMAS.ENAME    [client report join]
+    BUYMAS.BUYMASID  <->  INVPARTYDET.BUYERGP    [client report join]
+    BUYMAS.BUYMASID  <->  LABAPDET.BUYERID    [client report join]
+    BUYMAS.BUYMASID  <->  LCMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  LOGORDMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  MERORDMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  NEGMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  OBENTMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  ORDMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  ORDSHIPMAS.BUYERNAME    [client report join]
+    BUYMAS.PAYTERMS  <->  PAYTERM.PAYTERMID    [client report join]
+    BUYMAS.BUYMASID  <->  PIMAS.BUYERNAME    [client report join]
+    BUYMAS.BUYMASID  <->  PRECOSTMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  PROINVMAS.BUYERNAME    [declared key]
+    BUYMAS.BUYMASID  <->  PRORDMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  REALMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  SHIPINFO.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  SREGMAS.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  TAMULTMPLMAS.BUYER    [client report join + declared key]
+    BUYMAS.BUYMASID  <->  TANDAMAS.BUYER    [declared key]
+    BUYMAS.BUYERNAME  <->  TANDATASK.BUYERNAME    [client report join]
+    BUYMAS.BUYMASID  <->  TESTOPMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  TESTOPMAS.DEPT    [client report join]
+    BUYMAS.BUYMASID  <->  TESTQUOTA.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  TESTTEMPMAS.BUY    [declared key]
+    BUYMAS.BUYMASID  <->  TGBMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  TGBMAS.DEPT    [declared key]
+    BUYMAS.BUYMASID  <->  TIMEACTMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  TNAOTHMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  TNAUPMAS.BUYER    [declared key]
+    BUYMAS.BUYMASID  <->  USERBUY.BUYER    [client report join]
+    BUYMAS.BUYMASID  <->  YARNPOMAS.BUYER    [client report join]
+
+
+TABLE 1363 of 11838: COUNTMAS   (rows ~147)
+  Primary key: COUNTMASID
+  Columns (30):
+    COUNTMASID                       NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    COMPOSITION                      VARCHAR2(50)     
+    COUNTS                           VARCHAR2(150)    
+    ACTIVE                           VARCHAR2(10)     
+    LOCKED                           VARCHAR2(10)     
+    EXIST                            NUMBER(10)       
+    SVCTRL                           VARCHAR2(30)     
+    YCOUNTS                          NUMBER(16)       
+    YARNTYPE                         VARCHAR2(50)     
+    TAXGROUP                         NUMBER(16)       
+    YDESC                            VARCHAR2(15)     
+    YDESC1                           VARCHAR2(16)     
+    STAXGROUP                        NUMBER(16)       
+    HSNCODE                          NUMBER(16)       
+    HSNACTIVE                        VARCHAR2(1)      
+    LYCRA                            VARCHAR2(1)      
+    POLY                             VARCHAR2(1)      
+  Links (43):
+    COUNTMAS.COUNTS  <->  BRANDNEW_FPLAN.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  BUDYARDET.COUNTS    [client report join]
+    COUNTMAS.PROMID  <->  BUDYARDET.PRONAME    [client report join]
+    COUNTMAS.COUNTMASID  <->  COSTINGYARN.COUNTS    [client report join]
+    COUNTMAS.YCOUNTS  <->  COUNTMAST.COUNTMASTID    [client report join]
+    COUNTMAS.COUNTMASID  <->  DEFABISSDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  DEFABPOCDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  DEFABPODET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  DEFABRECDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  DEFABRETDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  FABORDYARN.YCOUNTS    [declared key]
+    COUNTMAS.COUNTS  <->  FABPROREQ.YARNFAB    [client report join]
+    COUNTMAS.COUNTMASID  <->  FREQYARN.COUNTS    [declared key]
+    COUNTMAS.COUNTMASID  <->  GARGRNYARN.COUNTS    [declared key]
+    COUNTMAS.HSNCODE  <->  HSNCODE.HSNCODEID    [client report join + declared key]
+    COUNTMAS.COUNTMASID  <->  KNITDCSTK.SCOUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  KPROISYARN.SCOUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  MRECYARN.COUNTS    [client report join + declared key]
+    COUNTMAS.COUNTMASID  <->  SALESYARN.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  SKAUDYARNDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  STKDCYARN.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  STKINYARN.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  TABSYARN.COUNT    [client report join]
+    COUNTMAS.COUNTMASID  <->  YARNGRNDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YARNOPDET.COUNTS    [client report join + declared key]
+    COUNTMAS.COUNTMASID  <->  YARNP.COUNTS    [client report join + declared key]
+    COUNTMAS.COUNTMASID  <->  YARNPODET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YARNSTKAUDDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YARNSTOCK.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YBPDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YPOCANDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YPRDERTDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YPROISDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YPROISSTK.SCOUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YPROPOCDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YPROPODET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YPRORECDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YPURRTDET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YQUOTADET.COUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YREQDET.COUNTS    [client report join + declared key]
+    COUNTMAS.COUNTMASID  <->  YTEMPLATE.COUNTS    [client report join + declared key]
+    COUNTMAS.COUNTMASID  <->  YTRANSDET.CCOUNTS    [client report join]
+    COUNTMAS.COUNTMASID  <->  YTRANSDET.COUNTS    [client report join]
+
+
+TABLE 1529 of 11838: DESIGNMAS   (rows ~3)
+  Primary key: DESIGNMASID
+  Columns (19):
+    DESIGNMASID                      NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    DESIGN                           VARCHAR2(10)     
+    ACTIVE                           VARCHAR2(10)     
+    EXIST                            NUMBER(10)       
+    SVCTRL                           VARCHAR2(30)     
+    DELCTRL                          VARCHAR2(100)    
+  Links (51):
+    DESIGNMAS.DESIGNMASID  <->  BITISSDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGN  <->  BRAND_FPLAN.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  BRISSFAB.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  BRRECFAB.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  BUDFABB.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  CFABISSDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  CFABRECDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  CFABREQDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  CFABRETDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  CPRCLDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  CUTDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  EPUPDDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABDCDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABDCMPRO.MDESIGNID    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABGRNDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABOPDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABORDDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABPOCDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABPODET.DESIGN    [client report join]
+    DESIGNMAS.DESIGN  <->  FABPROREQ.DESIGN    [client report join]
+    DESIGNMAS.DESIGN  <->  FABPROREQ_FABPROG.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABRACKDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABRECDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FABSTOCK.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FLOTDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FOLDDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FORDRECDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FPRCOMM_TEMP.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FPROISDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FPROPOCDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FPROPODET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FPRORECDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FPRORETDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FPURRTDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FREQDET.DESIGN    [client report join + declared key]
+    DESIGNMAS.DESIGNMASID  <->  FTRANSDET.CDESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  FTRANSDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  GARGRNFAB.DESIGN    [declared key]
+    DESIGNMAS.DESIGNMASID  <->  KNITDCDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  KPROISDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  KPROPOCDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  KPROPODET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  KPRORECDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  KPRORETDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  MPRORECMAS.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  MRECFAB.DESIGN    [declared key]
+    DESIGNMAS.DESIGNMASID  <->  PCSTOFABDET.DESIGN    [declared key]
+    DESIGNMAS.DESIGN  <->  TAMULTMPLDET.FTYPE    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  TAMULTMPLDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  TNAUPDET.DESIGN    [client report join]
+    DESIGNMAS.DESIGNMASID  <->  VEPLADET.DESIGN    [client report join]
+
+
+TABLE 1708 of 11838: FABMAS   (rows ~845)
+  Primary key: FABMASID
+  Columns (30):
+    FABMASID                         NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    FAB                              VARCHAR2(75)     
+    FABNAME                          VARCHAR2(105)    
+    ACTIVE                           VARCHAR2(10)     
+    EXIST                            NUMBER(10)       
+    SVCTRL                           VARCHAR2(30)     
+    COUNT                            NUMBER(16)       
+    FABTYPE                          NUMBER(16)       
+    CONTENT                          VARCHAR2(100)    
+    TAXGROUP                         NUMBER(16)       
+    FABMAS                           NUMBER(16)       
+    CONTENTMAS                       NUMBER(16)       
+    RECID                            NUMBER(15)       
+    STAXGROUP                        NUMBER(16)       
+    HSNCODE                          NUMBER(16)       
+    HSNACTIVE                        VARCHAR2(1)      
+    INDNO                            NUMBER(16)       
+  Links (76):
+    FABMAS.FABMASID  <->  BITISSDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  BITPRORETDET.FABNAME    [client report join]
+    FABMAS.FABNAME  <->  BRANDNEW_FPLAN.FABNAME    [client report join]
+    FABMAS.FABNAME  <->  BRAND_FPLAN.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  BRISSFAB.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  BRRECFAB.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  BUDFABB.FABNAME    [client report join]
+    FABMAS.PROMID  <->  BUDFABB.PRONAME    [client report join]
+    FABMAS.FABMASID  <->  CFABISSDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  CFABRECDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  CFABREQDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  CFABRETDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  CFABRETRECDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  COMINVDET.ITEM    [declared key]
+    FABMAS.FABMASID  <->  COSTINGB.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  CPRCLDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  CREQFAB.FABRIC    [client report join + declared key]
+    FABMAS.FABMASID  <->  CUTDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  DYEFQEMAS.FABNAME    [declared key]
+    FABMAS.FABMASID  <->  EPUPDDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABDCDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABDCMPRO.MFABID    [client report join]
+    FABMAS.FABMASID  <->  FABGRNDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABOPDET.FABNAME    [client report join + declared key]
+    FABMAS.FABMASID  <->  FABORDDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABPOCDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABPODET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABPROREQ.YARNFABID    [client report join]
+    FABMAS.FABNAME  <->  FABPROREQ.YARNFAB    [client report join]
+    FABMAS.FABMASID  <->  FABRACKDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABRECDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABSAUDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FABSTOCK.FABNAME    [client report join]
+    FABMAS.FABTYPE  <->  FABTYPE.FABTYPEID    [client report join]
+    FABMAS.FABMASID  <->  FBARCODEMAS.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FBPDET.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  FLOTDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FOLDDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FOLDRETDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FORDRECDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FPLANDET.FABRIC    [client report join + declared key]
+    FABMAS.FABMASID  <->  FPROISDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FPROPOCDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FPROPODET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FPRORECDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FPRORETDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FPURRTDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  FREQDET.FABNAME    [client report join + declared key]
+    FABMAS.FABMASID  <->  FTRANSDET.CFABNAME    [client report join]
+    FABMAS.FABMASID  <->  FTRANSDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  GARGRNFAB.FABRIC    [declared key]
+    FABMAS.HSNCODE  <->  HSNCODE.HSNCODEID    [client report join + declared key]
+    FABMAS.FABMASID  <->  KNITDCDET.FABNAME    [client report join]
+    FABMAS.FABNAME  <->  KNITQRCODE.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  KPROISDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  KPROPOCDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  KPROPODET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  KPRORECDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  KPRORETDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  KQRRECMAS.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  LOTPLDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  MPRORECMAS.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  MRECFAB.FABRIC    [client report join + declared key]
+    FABMAS.FABMASID  <->  ORDCMTFAB.FABRIC    [declared key]
+    FABMAS.FABMASID  <->  ORDFAB.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  REENDUPDET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  SALEFAB.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  SKAUDFABDET.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  STKDCFAB.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  STKINFAB.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  TABSFAB.FABRIC    [client report join]
+    FABMAS.FABNAME  <->  TAMULTMPLDET.FABRIC    [client report join]
+    FABMAS.TAXGROUP  <->  TAXGRMAS.TAXGRMASID    [client report join]
+    FABMAS.FABMASID  <->  TNAUPDET.FABRIC    [client report join]
+    FABMAS.FABMASID  <->  VEPLADET.FABNAME    [client report join]
+    FABMAS.FABMASID  <->  YQUOTADET.FABNAME    [client report join]
+
+
+TABLE 1857 of 11838: FPCOL   (rows ~58,454)
+  Primary key: FPCOLID
+  Columns (17):
+    FPCOLID                          NUMBER(*,0)      NOT NULL
+    FPLANMID                         NUMBER(*,0)      
+    SUB4_SUBNO                       VARCHAR2(60)     
+    SUB4_COLYES                      VARCHAR2(10)     
+    GCOMBO                           NUMBER(16)       
+    PCOL                             NUMBER(16)       
+    AOPCOL                           NUMBER(16)       
+    FPCOLROW                         NUMBER(10)       
+    COMBOPQTY                        NUMBER(15,3)     
+    CNTS                             VARCHAR2(10)     
+    CDPQTY                           NUMBER(10,3)     
+    CPSQTY                           NUMBER(10,3)     
+    DUPPORTION                       VARCHAR2(150)    
+    SAMKGS                           NUMBER(10,3)     
+    SAMGRAM                          NUMBER(10,5)     
+    CHKCOMBO                         NUMBER(10)       
+    COMBOCONC                        VARCHAR2(250)    
+  Links (5):
+    FPCOL.AOPCOL  <->  COLORMAS.COLORMASID    [client report join]
+    FPCOL.PCOL  <->  COLORMAS.COLORMASID    [client report join + declared key]
+    FPCOL.AOPCOL  <->  FABPROREQ.COLMASID    [client report join]
+    FPCOL.SUB4_SUBNO  <->  FPLANDET.SUBNO    [client report join]
+    FPCOL.FPLANMID  <->  FPLANM.FPLANMID    [client report join + saved together by one client screen]
+  Also saved together with these tables by the same client screen (no column pair known): FABP, YARNP
+
+
+TABLE 11059 of 11838: PORTIONMAS   (rows ~178)
+  Primary key: PORTIONMASID
+  Columns (20):
+    PORTIONMASID                     NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    PNAME                            VARCHAR2(80)     
+    ACTIVE                           VARCHAR2(10)     
+    EXIST                            NUMBER(10)       
+    SVCTRL                           VARCHAR2(30)     
+    MP                               VARCHAR2(10)     
+    APPLIQUE                         VARCHAR2(1)      
+  Links (35):
+    PORTIONMAS.PORTIONMASID  <->  BARCODEPLUSSTK.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  BITISSDET.PORTION    [client report join]
+    PORTIONMAS.PNAME  <->  BRANDNEW_FPLAN.PNAME    [client report join]
+    PORTIONMAS.PNAME  <->  BRAND_FPLAN.PNAME    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  BRISSPCS.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  BRRECPCS.SUBPARTS    [client report join]
+    PORTIONMAS.PNAME  <->  BUNDLEB.GPNAME    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CFABISSDET.PORTION    [client report join]
+    PORTIONMAS.PNAME  <->  CMTBPDET.PARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CMTBPDET.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CMTPLDET.PARTSS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CMTPLDET.SUBPART    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CMTPRATESUB.PARTS    [declared key]
+    PORTIONMAS.PNAME  <->  CMTREQ.PARTS    [client report join]
+    PORTIONMAS.PNAME  <->  CMTREQ.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  COSTINGWT.PORTION    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  CPRCLDET.PORTION    [client report join + declared key]
+    PORTIONMAS.PORTIONMASID  <->  CPRECDET.SUBPARTS    [client report join + declared key]
+    PORTIONMAS.PNAME  <->  CPRETDET.PARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CPRETDET.SUBPARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  CREQFAB.PARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  CUTDET.PNAME    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CUTOPDET.SUBPARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  CUTPCSSTK.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CUTQTY.QPNAME    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CUTSUB.SUBPART    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  FOLDDET.PORTION    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  FPLANDET.PORTION    [client report join + declared key]
+    PORTIONMAS.PORTIONMASID  <->  MRECGAR.SUBPARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  ORDCMTFAB.PORTION    [declared key]
+    PORTIONMAS.PNAME  <->  PROALDET.PARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  PRORDDET.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  REJDELDET.SUBPARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  STKDCPCS.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  STKINPCS.SUBPARTS    [client report join]
+
+
+TABLE 11296 of 11838: SIZE_MAS   (rows ~1,720)
+  Primary key: SIZE_MASID
+  Columns (17):
+    SIZE_MASID                       NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    SIZES                            VARCHAR2(30)     
+    ACTIVE                           VARCHAR2(10)     
+    STMUSER                          VARCHAR2(100)    
+  Links (82):
+    SIZE_MAS.SIZE_MASID  <->  ABPDET.SIZES    [client report join]
+    SIZE_MAS.PARTYMASID  <->  ABPMAS.PARTYID    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCDELDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCFTDET.ACCSIZE    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  ACCGRNDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCOPDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCPLANSUB.ACCSIZE    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCPLANSUB.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCPOCDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCPODET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCPROPLANC.GSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACCPROPLANC.OSIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  ACCRETDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ACSTOCKMAST.ACCSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  APRECDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  APROISDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  APROPOCDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  APROPODET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  APRORECDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  APRORETDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  AREQDET.SIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  ATRANSDET.CSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ATRANSDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BARCODEPLUSSTK.SIZES    [client report join]
+    SIZE_MAS.SIZES  <->  BRANDNEW_FPLAN.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BRISSACC.ACCSIZE    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BRISSACC.ASIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BRISSPCS.GSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BRRECACC.ACCSIZE    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BRRECPCS.GSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BUDACCDET.ACCSIZE    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BUDACSTK.SSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BUNDLEB.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  BUYAPISDET.SIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  CMTBPDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  CMTINWACC.ACCSIZE    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  CMTPLSUB.SIZES    [client report join]
+    SIZE_MAS.SIZES  <->  CMTREQ.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  COMPDET.SIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  COMPDET1.SIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  CPISSDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  CPRECDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  CPRETDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  CREQSIZES.SIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  CSPRCPDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  CTRANSDET.CSIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  CTRANSDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  CUTOPDET.SIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  CUTPCSSTK.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  CUTQTY.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  DUTYIMPB.SIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  EXDISPDET.SIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  EXDISPSUB.SSIZE    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  GARGRNACC.ACCSIZE    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  GARGRNGAR.GSIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  GARPOSIZE.SSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  GBPDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  GCONDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  GENDCDET.SIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  GENGRNDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  GENOPDET.SIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  GENPODET.SIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  GENRECDET.SIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  GENSTOCK.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  GRATEDET.SIZES    [client report join + declared key]
+    SIZE_MAS.SIZE_MASID  <->  GTRANSDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  INSPSIZES.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  INSPSTK.SSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  MERORDSIZE.SSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  MRECACC.ACCSIZE    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  MRECGAR.GSIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  ORDACC.ACCSIZES    [client report join]
+    SIZE_MAS.SIZES  <->  ORDERENTRY.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  ORDSIZE.GSIZE    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  PKRECDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  REJDELDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  REJENDET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  SIZETEMP_DET.SIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  STKDCACC.ACCSIZE    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  STKDCPCS.GSIZES    [client report join]
+    SIZE_MAS.SIZE_MASID  <->  TABSOTHD.SIZES    [declared key]
+    SIZE_MAS.SIZE_MASID  <->  YQUOTADET.SIZES    [client report join]
+
+
+TABLE 11368 of 11838: STYLEMAS   (rows ~1,713)
+  Primary key: STYLEMASID
+  Columns (22):
+    STYLEMASID                       NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    SDESC                            VARCHAR2(50)     
+    ACTIVE                           VARCHAR2(10)     
+    RECID                            NUMBER(15)       
+    EXIST                            NUMBER(10)       
+    SVCTRL                           VARCHAR2(30)     
+    STYLECATEGORY                    NUMBER(16)       
+    HSNCODE                          NUMBER(16)       
+    SAM                              NUMBER(10,2)     
+  Links (51):
+    STYLEMAS.STYLEMASID  <->  BARCODEPLUSSTK.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  BITPRORETDET.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  BUDCMTDET.STYLDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  BUNDLEA.STYLEDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  BUNDLEB.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CENQDET.STDESC    [client report join + declared key]
+    STYLEMAS.STYLEMASID  <->  CMTJORDDET.BSTDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CMTPLSUB.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CMTPRUPDDET.BSTDESC    [client report join]
+    STYLEMAS.SDESC  <->  CMTREQ.STYLEDESC    [client report join]
+    STYLEMAS.SDESC  <->  CMTREQPONO.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  COSTINGA.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  COSTMAS.STYLEDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  CPISSDET.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CPRCLDET.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CPRECDET.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CREQDET.SDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CTRANSDET.CSTYLEDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  CTRANSMAS.TOSTYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CUTDET.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  CUTOPDET.STDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  CUTPCSSTK.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  DLPLANMAS.STDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  FPLANDET.STYLEDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  GARPODET.STDESC    [client report join]
+    STYLEMAS.HSNCODE  <->  HSNCODE.HSNCODEID    [client report join]
+    STYLEMAS.STYLEMASID  <->  INJBPMAS.STYLEDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  INJOBCANMAS.STYLEDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  INJOBMAS.STYLEDESC    [client report join + declared key]
+    STYLEMAS.STYLEMASID  <->  INJOBPRODUPMAS.STYLEDESC    [client report join + declared key]
+    STYLEMAS.STYLEMASID  <->  INSPDET.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  INVDET.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  INVITEM.ITEMNAME    [declared key]
+    STYLEMAS.STYLEMASID  <->  JWORDDET.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  LOGORDDET.DESCRIPTION    [client report join + declared key]
+    STYLEMAS.STYLEMASID  <->  OBENTMAS.STYLDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  ORDMAS.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  ORDSHIPDET.STYLENAME    [client report join + declared key]
+    STYLEMAS.STYLEMASID  <->  ORDSTYLE.STYLENAME    [client report join + declared key]
+    STYLEMAS.STYLEMASID  <->  PKRECCOMBO.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  PLSUB.INVSTDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  PRECOSTMAS.STYLEDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  PROALDET.STDESC    [client report join + declared key]
+    STYLEMAS.STYLEMASID  <->  PRODREQMAS.STYLEDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  PROINVDET.STDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  PROINVITEM.ITEMNAME    [declared key]
+    STYLEMAS.STYLEMASID  <->  PRORDDET.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  REJDELDET.STYLEDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  REJDET.SDESC    [declared key]
+    STYLEMAS.STYLEMASID  <->  TABSCMT.STDESC    [client report join]
+    STYLEMAS.STYLEMASID  <->  YQUOTADET.STYLEDESC    [client report join]
+
+
+TABLE 11369 of 11838: STYLENUM   (rows ~5,061)
+  Columns (18):
+    STYLENUMID                       NUMBER(*,0)      
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    STYLENUMBER                      VARCHAR2(60)     
+    ACTIVE                           VARCHAR2(10)     
+    OLDSTYLENO                       VARCHAR2(100)    
+    RECID                            NUMBER(15)       
+  Links (135):
+    STYLENUM.STYLENUMID  <->  ABPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCDELMAS.STNO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCGRNDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCIPAYREQB.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCOPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCPLANMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCPOCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCPODET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCPROPLANA.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  ACCRETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  APRECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  APROISDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  APROPOCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  APROPODET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  APRORECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  APRORETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  AREQDET.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  AREQMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  ATRANSMAS.FRSTYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  ATRANSMAS.TOSTYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  BARCODEPLUSSTK.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  BITISSDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  BITPRORETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  BITPRORETMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMBER  <->  BRANDNEW_FPLAN.STYLENO    [client report join]
+    STYLENUM.STYLENUMBER  <->  BRAND_FPLAN.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  BRISSMAS.STNO    [client report join]
+    STYLENUM.STYLENUMID  <->  BRISSPCS.GSTNO    [client report join]
+    STYLENUM.STYLENUMID  <->  BUDACCMAS.STYLEID    [client report join]
+    STYLENUM.STYLENUMID  <->  BUDCMTMAS.STYLEID    [client report join]
+    STYLENUM.STYLENUMBER  <->  BUDYARNMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  BUNDLEA.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  CADMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  CENQDET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  CFABISSDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CFABRECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CFABRECMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  CFABREQDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CFABRETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CFABRETRECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CMTBPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CMTJORDMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  CMTPLMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  CMTPRUPDMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMBER  <->  CMTREQ.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  CMTREQ.STYLENUMID    [client report join]
+    STYLENUM.STYLENUMID  <->  COSTINGA.STYLE    [client report join]
+    STYLENUM.STYLENUMID  <->  CPISSDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CPISSMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  CPRCLDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CPRECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CPRECMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  CPRETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CREQMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  CRNOTEDET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  CSPRCPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CSTDYMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  CTRANSDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CTRANSMAS.TOSTYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  CUTDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CUTMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  CUTOPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  CUTPCSSTK.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  DEFABISSDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  DEFABPOCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  DEFABPODET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  DEFABRECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  DEFABRETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  DIRBPASSC.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  DLPLANMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  EPUPDMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  EXDISPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMBER  <->  EXDISPIONO.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  FABDCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FABGRNDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FABOPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FABORDDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FABPOCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FABPODET.STYNO    [client report join]
+    STYLENUM.STYLENUMBER  <->  FABPROREQ.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  FABRECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FBPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FOLDDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FOLDRETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FPLANM.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  FPROISDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FPROPOCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FPROPODET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FPRORECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FPRORETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FPURRTDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FREQDET.STNO    [client report join]
+    STYLENUM.STYLENUMID  <->  FREQMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  GARPODET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  GBPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  INSPDET.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  INSPMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  INVDET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  JWORDMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  KNITDCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  KPROISDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  KPROPOCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  KPROPODET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  KPRORECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  KPRORETDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  LOGORDDET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  MERORDDET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  MOBPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  ORDMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  ORDSHIPDET.STNO    [client report join]
+    STYLENUM.STYLENUMID  <->  ORDSTYLE.STNO    [client report join]
+    STYLENUM.STYLENUMID  <->  PKRECMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  PRORDMAS.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  REJDELDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  REJENDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  SKAUDMAS.STNO    [client report join]
+    STYLENUM.STYLENUMID  <->  SREGMAS.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  STKDCPCS.GSTNO    [client report join]
+    STYLENUM.STYLENUMID  <->  TESTOPDET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  TNAUPDET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  YARNGRNDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YARNOPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YARNPODET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YARNSTKAUDDET.STYLENO    [client report join]
+    STYLENUM.STYLENUMID  <->  YBPDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YPOCANDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YPRDERTDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YPROISDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YPROPOCDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YPROPODET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YPRORECDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YPURRTDET.STYNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YQUOTADET.STYLENOS    [client report join]
+    STYLENUM.STYLENUMID  <->  YREQDET.STNO    [client report join]
+    STYLENUM.STYLENUMID  <->  YREQMAS.STYLENO    [client report join]
+
+
+TABLE 11723 of 11838: YARNP   (rows ~28,141)
+  Primary key: YARNPID
+  Columns (24):
+    YARNPID                          NUMBER(*,0)      NOT NULL
+    FPLANMID                         NUMBER(*,0)      
+    YARNPROW                         NUMBER(*,0)      
+    SUB6_SUBNO                       VARCHAR2(60)     
+    SUB6_YARNYES                     VARCHAR2(10)     
+    COUNTS                           NUMBER(16)       
+    COLOR                            NUMBER(16)       
+    CIONO                            VARCHAR2(40)     
+    CPOR                             VARCHAR2(25)     
+    PER                              NUMBER(10,2)     
+    KGS                              NUMBER(10,3)     
+    DYE                              VARCHAR2(10)     
+    TW                               VARCHAR2(10)     
+    LF                               VARCHAR2(10)     
+    DYEKGS                           NUMBER(10,3)     
+    DPQTY                            NUMBER(10,3)     
+    PSQTY                            NUMBER(10,3)     
+    YDCNT                            NUMBER(1)        
+    YPOCHK                           NUMBER(10)       
+    YCONC                            VARCHAR2(200)    
+    CHKYBUD                          NUMBER(1)        
+    TWCOUNTS                         NUMBER(16)       
+    TWCOLOR                          NUMBER(16)       
+    TWISTPER                         NUMBER(10,2)     
+  Links (5):
+    YARNP.YARNPID  <->  BRANDNEW_FPLAN.YARNPID    [client report join]
+    YARNP.COLOR  <->  COLORMAS.COLORMASID    [client report join + declared key]
+    YARNP.COUNTS  <->  COUNTMAS.COUNTMASID    [client report join + declared key]
+    YARNP.SUB6_SUBNO  <->  FPLANDET.SUBNO    [client report join]
+    YARNP.FPLANMID  <->  FPLANM.FPLANMID    [client report join + saved together by one client screen]
+  Also saved together with these tables by the same client screen (no column pair known): FABP, FPCOL
+

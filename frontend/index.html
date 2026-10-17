@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <title>POPPYS AI · Sample orders</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Poppys AI home"><span class="brand-mark">P</span><span>POPPYS <b>AI</b><small>ORDER AUTOMATION</small></span></a>
+    <nav class="main-nav" aria-label="Main navigation">
+      <button id="nav-workspace" class="nav-item active">Sample orders</button>
+      <button id="nav-history" class="nav-item">Saved imports</button>
+    </nav>
+    <div class="header-actions">
+      <div class="connection"><span id="connection-dot" class="status-dot"></span><span id="connection-label">Checking Oracle</span><small id="connection-detail">Local workspace</small></div>
+      <div class="account"><span class="avatar" id="avatar">P</span><span id="username">Your workspace</span><button class="icon-button" id="logout" title="Sign out" aria-label="Sign out" hidden>Sign out</button></div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section id="workspace-view">
+      <div class="page-heading">
+        <div><span class="eyebrow">SAMPLE ORDER IMPORT</span><h1>Upload. Check. Save.</h1><p>Turn a buyer or merchant Excel workbook into a reviewed sample order.</p></div>
+        <button id="new-import" class="button secondary" hidden>New import</button>
+      </div>
+
+      <ol class="steps" aria-label="Import progress">
+        <li class="active" data-step="1"><span>1</span><div><strong>Upload Excel</strong><small>Add the client workbook</small></div></li>
+        <li data-step="2"><span>2</span><div><strong>Check order</strong><small>Correct only what is needed</small></div></li>
+        <li data-step="3"><span>3</span><div><strong>Preview and save</strong><small>Approve the Oracle entry</small></div></li>
+      </ol>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <section id="upload-section" class="upload-layout">
+        <div class="panel upload-panel">
+          <span class="eyebrow">STEP 1</span><h2>Add the Excel workbook</h2><p class="muted">Drop the buyer mail copy or merchant working file. We keep the original file and prepare a draft.</p>
+          <label class="dropzone" id="dropzone" for="file-input" tabindex="0">
+            <span class="upload-icon">↑</span><strong>Drag and drop the workbook here</strong><span>or choose an Excel file from this computer</span><small>.xlsx or .xlsm · one workbook at a time</small>
+            <input type="file" id="file-input" accept=".xlsx,.xlsm" class="visually-hidden">
+          </label>
+          <div class="trust-row"><span>Original workbook stays unchanged</span><span>Nothing is saved to Oracle yet</span></div>
+        </div>
+        <aside class="panel how-panel"><span class="eyebrow">HOW IT WORKS</span><h2>A simple review, before any save.</h2><ol><li><b>1</b><div><strong>We read the sheet</strong><span>Order values and size quantities are collected.</span></div></li><li><b>2</b><div><strong>You check the important values</strong><span>Choose the sample quantity source and correct anything needed.</span></div></li><li><b>3</b><div><strong>You approve the preview</strong><span>Only then are the records written to Oracle.</span></div></li></ol></aside>
+        <section class="panel recent-panel"><div class="panel-title"><div><span class="eyebrow">CONTINUE WORKING</span><h2>Recent drafts</h2></div><span class="muted">Open a previous upload</span></div><div id="recent-drafts" class="empty-state">Your uploaded workbooks will appear here.</div></section>
+      </section>
+
+      <section id="review-section" hidden>
+        <div class="file-banner"><span class="file-icon">XLS</span><div><strong id="filename"></strong><small id="file-meta"></small></div><span class="pill" id="draft-status">Draft</span></div>
+        <div class="review-grid">
+          <div class="review-main">
+            <section id="mapping-section" class="panel mapping-panel" hidden></section>
+            <div id="order-editor"></div>
+            <button id="add-order" class="button secondary">Add another order</button>
+          </div>
+          <aside class="review-aside">
+            <section class="panel summary-panel"><span class="eyebrow">THIS IMPORT</span><h2>Ready to check?</h2><div class="summary-metrics" id="summary-metrics"></div><p>Prepare the preview after you have confirmed the order reference and quantities.</p><button id="preview-button" class="button primary full">Prepare preview <span>→</span></button><small>Oracle is not changed until you accept.</small></section>
+            <section class="panel help-panel"><span class="eyebrow">WORKBOOK HELP</span><h3>Need an answer?</h3><p>Ask about values from this workbook in simple words.</p><form id="help-form"><label class="visually-hidden" for="help-question">Your question</label><textarea id="help-question" rows="3" placeholder="Which quantities were found in the sample section?" required maxlength="1000"></textarea><button class="button secondary full" type="submit">Ask workbook assistant</button></form><div id="help-answer" class="help-answer" aria-live="polite" hidden></div></section>
+          </aside>
+        </div>
+        <section id="preview-section" class="panel preview-panel" hidden></section>
+        <section id="result-section" class="panel result-panel" hidden></section>
+      </section>
+    </section>
+
+    <section id="history-view" hidden><div class="page-heading"><div><span class="eyebrow">TRACEABLE IMPORTS</span><h1>Saved imports</h1><p>Every accepted workbook and its Oracle receipt.</p></div></div><div id="history-content" class="panel"></div></section>
+  </main>
+
+  <footer>POPPYS AI <span id="breadcrumb">Sample orders</span><span>Review before every Oracle save</span></footer>
+  <div id="auth-overlay" class="auth-overlay" hidden><form id="auth-form" class="auth-card"><span class="brand-mark">P</span><span class="eyebrow">POPPYS AI WORKSPACE</span><h1 id="auth-title">Welcome back.</h1><p id="auth-description">Sign in to review and approve sample orders.</p><label>Username<input id="auth-username" name="username" autocomplete="username" required minlength="2" maxlength="50"></label><label>Password<input id="auth-password" name="password" type="password" autocomplete="current-password" required minlength="10" maxlength="200"></label><p id="auth-error" class="field-error" role="alert" hidden></p><button type="submit" class="button primary full" id="auth-submit">Sign in</button><small>Credentials stay in this local workspace.</small></form></div>
+  <div id="loading" class="loading" role="status" hidden><span class="spinner"></span><span id="loading-text">Working…</span></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

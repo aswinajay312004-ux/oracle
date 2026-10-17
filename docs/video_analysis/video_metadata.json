@@ -1,0 +1,17 @@
+{
+  "source": "C:\\Users\\ASUS2025\\Videos\\Captures\\GOPAL-PC (83082217) - UltraViewer 2026-10-09 22-24-07.mp4",
+  "duration_seconds": 2626.511633,
+  "resolution": [
+    1376,
+    776
+  ],
+  "audio": "Digital silence throughout; ffmpeg volumedetect mean/max -91.0 dB",
+  "sample_interval_seconds": 5,
+  "sample_count": 526,
+  "method": "OpenCV timestamp seeks; samples are evidence, not a transcript of every frame",
+  "source_sha256": "c6eac1cd382150d66c8b0b8d4af65e41419ee4dda439bb6ce288d50ec20e2d38",
+  "source_size_bytes": 1447746974,
+  "scene_change_count": 234,
+  "total_video_frames_reported": 63094,
+  "supplemental_images_note": "Additional 1-second and sub-second images were extracted near selected events; OCR index covers the original 526 samples."
+}

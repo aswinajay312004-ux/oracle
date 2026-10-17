@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+data/
+__pycache__/
+.pytest_cache/
+tools/rea/
+docs/workbook_analysis/
+docs/live_sample_records.txt
+*.log
+

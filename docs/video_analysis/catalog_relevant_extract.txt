@@ -1,0 +1,1127 @@
+TABLE 1722 of 11838: FABP   (rows ~165,438)
+  Primary key: FABPID
+  Columns (31):
+    FABPID                           NUMBER(*,0)      NOT NULL
+    FPLANMID                         NUMBER(*,0)      
+    FABPROW                          NUMBER(*,0)      
+    SUB5_SUBNO                       VARCHAR2(60)     
+    SUB5_GRMYES                      VARCHAR2(10)     
+    SIZES                            NUMBER(16)       
+    SQTY                             NUMBER(10)       
+    PQTY                             NUMBER(10)       
+    CADWT                            NUMBER(11,4)     
+    GRMP                             NUMBER(5,3)      
+    SCONS                            NUMBER(10,3)     
+    SUOM                             VARCHAR2(10)     
+    CONS                             NUMBER(5,3)      
+    TOTWT                            NUMBER(15,3)     
+    TOTWT1                           NUMBER(10,3)     
+    KDIA                             VARCHAR2(20)     
+    FDIA                             VARCHAR2(20)     
+    COLSIZE                          NUMBER(16)       
+    ALLOW                            NUMBER(10,2)     
+    TOTSQTY                          NUMBER(10,2)     
+    NOTES                            VARCHAR2(10)     
+    PRPER                            NUMBER(10,2)     
+    PROQTY                           NUMBER(10)       
+    DIAS                             VARCHAR2(10)     
+    DPRODQTY                         NUMBER(10)       
+    PRQTYCHK                         NUMBER(10)       
+    KYCOL                            VARCHAR2(10)     
+    SCONCAT                          VARCHAR2(100)    
+    TRQTY                            NUMBER(10)       
+    DIACONC                          VARCHAR2(30)     
+    CHKDIA                           NUMBER(10)       
+  Links (2):
+    FABP.SUB5_SUBNO  <->  FPLANDET.SUBNO    [client report join]
+    FABP.FPLANMID  <->  FPLANM.FPLANMID    [saved together by one client screen]
+  Also saved together with these tables by the same client screen (no column pair known): FPCOL, YARNP
+
+
+TABLE 1859 of 11838: FPLANDET   (rows ~36,367)
+  Primary key: FPLANDETID
+  Columns (46):
+    FPLANDETID                       NUMBER(*,0)      NOT NULL
+    FPLANMID                         NUMBER(*,0)      
+    FPLANDETROW                      NUMBER(*,0)      
+    PNO                              VARCHAR2(10)     
+    PORTION                          NUMBER(16)       
+    MP                               VARCHAR2(10)     
+    CONCAT                           VARCHAR2(100)    
+    SUBNO                            VARCHAR2(60)     
+    COLYES                           VARCHAR2(80)     
+    PCOMBO                           VARCHAR2(800)    
+    FABRIC                           NUMBER(16)       
+    DUPCHK                           VARCHAR2(250)    
+    GGSM                             VARCHAR2(10)     
+    FGSM                             VARCHAR2(10)     
+    GG                               VARCHAR2(10)     
+    LL                               VARCHAR2(10)     
+    DESIGN                           NUMBER(16)       
+    UOM                              NUMBER(16)       
+    GRMYES                           VARCHAR2(10)     
+    FINFAB                           NUMBER(10,3)     
+    YARNYES                          VARCHAR2(10)     
+    YPER                             NUMBER(10,2)     
+    YARNQTY                          NUMBER(10,3)     
+    NOTE                             VARCHAR2(10)     
+    STNO                             NUMBER(16)       
+    STYLEDESC                        NUMBER(16)       
+    COLCNT                           NUMBER(15)       
+    YDQTY                            NUMBER(10,3)     
+    GCNT                             VARCHAR2(1)      
+    UYDQTY                           NUMBER(10,3)     
+    PSEQQTY                          NUMBER(10,3)     
+    COLPER                           NUMBER(12,2)     
+    CCDWT                            NUMBER(10,3)     
+    FCOUNTS                          NUMBER(16)       
+    FFAB                             VARCHAR2(150)    
+    FCONT                            VARCHAR2(150)    
+    MPCNT                            NUMBER(10)       
+    MPCTRL                           NUMBER(10)       
+    NDIA                             NUMBER(10)       
+    FABRICID                         VARCHAR2(40)     
+    FP                               VARCHAR2(10)     
+    PREPLANMASID                     NUMBER(15)       
+    PREPLANDETID                     NUMBER(15)       
+    FCONC                            VARCHAR2(200)    
+    CHKFAB                           NUMBER(10)       
+    SPLPROCESS                       VARCHAR2(100)    
+  Links (15):
+    FPLANDET.FPLANDETID  <->  BRANDNEW_FPLAN.FPLANDETID    [client report join]
+    FPLANDET.FABRIC  <->  CUTDET.FABNAME    [client report join]
+    FPLANDET.FABRIC  <->  EPUPDDET.FABNAME    [client report join]
+    FPLANDET.FABRIC  <->  FABMAS.FABMASID    [client report join + declared key]
+    FPLANDET.SUBNO  <->  FABP.SUB5_SUBNO    [client report join]
+    FPLANDET.FABRIC  <->  FABPROREQ.YARNFABID    [client report join]
+    FPLANDET.FABRIC  <->  FABSTOCK.FABNAME    [client report join]
+    FPLANDET.SUBNO  <->  FPCOL.SUB4_SUBNO    [client report join]
+    FPLANDET.FPLANMID  <->  FPLANM.FPLANMID    [client report join + saved together by one client screen]
+    FPLANDET.STYLEDESC  <->  ORDERENTRY.STMASID    [client report join]
+    FPLANDET.STNO  <->  ORDSTYLE.STNO    [client report join]
+    FPLANDET.STYLEDESC  <->  ORDSTYLE.STYLENAME    [client report join]
+    FPLANDET.PORTION  <->  PORTIONMAS.PORTIONMASID    [client report join + declared key]
+    FPLANDET.STYLEDESC  <->  STYLEMAS.STYLEMASID    [declared key]
+    FPLANDET.SUBNO  <->  YARNP.SUB6_SUBNO    [client report join]
+
+
+TABLE 1862 of 11838: FPLANM   (rows ~8,515)
+  Primary key: FPLANMID
+  Columns (64):
+    FPLANMID                         NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    USERID                           VARCHAR2(30)     
+    DOCID                            VARCHAR2(20)     
+    DOCDATE                          DATE             
+    IONO                             NUMBER(16)       
+    ORDERQTY                         NUMBER(10)       
+    PRODQTY                          NUMBER(10)       
+    BONO                             VARCHAR2(100)    
+    STMUSER                          VARCHAR2(100)    
+    TKGS                             NUMBER(10,3)     
+    AVGWT                            NUMBER(10,3)     
+    REMARKS                          VARCHAR2(1000)   
+    LOCKR                            VARCHAR2(10)     
+    DOCMAXNO                         NUMBER(10)       
+    RECID                            VARCHAR2(25)     
+    BUYER                            NUMBER(15)       
+    SEXPER                           NUMBER(10,2)     
+    FINYEAR                          VARCHAR2(7)      
+    PREFIX                           VARCHAR2(3)      
+    BOQTY                            NUMBER(10)       
+    STYLENO                          NUMBER(16)       
+    PRALL                            NUMBER(10,2)     
+    NETALL                           NUMBER(10,2)     
+    ETYPE                            VARCHAR2(10)     
+    PREPAREDBY                       VARCHAR2(20)     
+    OTYPE                            VARCHAR2(20)     
+    TSID                             VARCHAR2(10)     
+    NBUYERNAME                       NUMBER(16)       
+    CADNO                            VARCHAR2(25)     
+    ENAME                            NUMBER(16)       
+    COPYOP                           VARCHAR2(3)      
+    COPYFROM                         VARCHAR2(20)     
+    BOMID                            NUMBER(15)       
+    OID                              NUMBER(15)       
+    STYDESC1                         NUMBER(16)       
+    SHIPDT1                          DATE             
+    DB_USERNAME                      VARCHAR2(10)     
+    DIMNAME                          VARCHAR2(1000)   
+    COSTPCSWT                        NUMBER(10,3)     
+    DIFFPCSWT                        NUMBER(10,3)     
+    DUPCHKSTYLE                      VARCHAR2(100)    
+    COPYSTNO                         NUMBER(16)       
+    AVGWTXSAM                        NUMBER(10,3)     
+    TSAMKGS                          NUMBER(10,3)     
+    BOPQTY                           NUMBER(10)       
+    TEST                             VARCHAR2(30)     
+    SPLCNT                           NUMBER(10)       
+    CLSSTK                           NUMBER(10,3)     
+    PLGRM                            NUMBER(10)       
+    ACTGRM                           NUMBER(10)       
+    PLFILL                           VARCHAR2(10)     
+  Links (13):
+    FPLANM.FPLANMID  <->  BRANDNEW_FPLAN.FPLANMID    [client report join]
+    FPLANM.BUYER  <->  BUYMAS.BUYMASID    [client report join]
+    FPLANM.IONO  <->  CUTMAS.IONOS    [client report join]
+    FPLANM.ENAME  <->  EXPORTMAS.EXPORTMASID    [client report join + declared key]
+    FPLANM.FPLANMID  <->  FABP.FPLANMID    [saved together by one client screen]
+    FPLANM.IONO  <->  FABPROREQ.OMASID    [client report join]
+    FPLANM.FPLANMID  <->  FPCOL.FPLANMID    [client report join + saved together by one client screen]
+    FPLANM.FPLANMID  <->  FPLANDET.FPLANMID    [client report join + saved together by one client screen]
+    FPLANM.IONO  <->  GRPIODET.IONO    [client report join]
+    FPLANM.IONO  <->  ORDERENTRY.ORDMASID    [client report join]
+    FPLANM.IONO  <->  ORDMAS.ORDMASID    [client report join + declared key]
+    FPLANM.STYLENO  <->  STYLENUM.STYLENUMID    [client report join]
+    FPLANM.FPLANMID  <->  YARNP.FPLANMID    [client report join + saved together by one client screen]
+
+
+TABLE 10882 of 11838: ORDERENTRY   (rows ~236,605)
+  Columns (73):
+    IONO                             VARCHAR2(30)     
+    BONO                             VARCHAR2(55)     
+    ENAME                            VARCHAR2(100)    
+    ORDCATEGORY                      VARCHAR2(30)     
+    GTYPE                            VARCHAR2(20)     
+    OTYPE                            VARCHAR2(35)     
+    ORDERDATE                        DATE             
+    DELDATE                          DATE             
+    BALDAYS                          NUMBER           
+    OQTY                             NUMBER(10)       
+    BUYERNAME                        VARCHAR2(50)     
+    MERCH                            VARCHAR2(50)     
+    FABMANAGER                       VARCHAR2(50)     
+    ASSORTED                         VARCHAR2(10)     
+    USERID                           VARCHAR2(50)     
+    BUYORDDATE                       DATE             
+    STYLENO                          VARCHAR2(60)     
+    PONUM                            VARCHAR2(50)     
+    STYLEDESC                        VARCHAR2(50)     
+    SRATE                            NUMBER(10,4)     
+    COMBO                            VARCHAR2(250)    
+    CRATIO                           NUMBER(10)       
+    COMBOQTY                         NUMBER(10)       
+    SYES                             VARCHAR2(10)     
+    SIZES                            VARCHAR2(20)     
+    RATIO                            NUMBER(7)        
+    ORDERQTY                         NUMBER(10)       
+    UOM                              VARCHAR2(30)     
+    EXPER                            NUMBER(5,2)      
+    PRODQTY                          NUMBER(10)       
+    CURRENCY                         VARCHAR2(3)      
+    PRICE                            NUMBER(10,4)     
+    CONVRATE                         NUMBER(10,2)     
+    INR                              NUMBER           
+    ORDSTYLEROW                      NUMBER(10)       
+    ORDSIZEROW                       NUMBER(*,0)      
+    TEMPLATE                         VARCHAR2(50)     
+    FABNAME                          VARCHAR2(75)     
+    GSM                              VARCHAR2(10)     
+    SHBY                             VARCHAR2(10)     
+    LOADPORT                         VARCHAR2(40)     
+    MOS                              VARCHAR2(10)     
+    DT                               VARCHAR2(10)     
+    PT                               VARCHAR2(100)    
+    REMARKS                          VARCHAR2(500)    
+    OD                               VARCHAR2(10)     
+    SEASON                           VARCHAR2(20)     
+    STYLERATE                        NUMBER(10,4)     
+    USERNAME                         VARCHAR2(50)     
+    PREPBY                           VARCHAR2(50)     
+    CITY                             VARCHAR2(40)     
+    NOCOMP                           NUMBER(10)       
+    SSEQNO                           NUMBER(10)       
+    DESCOUNTRY                       VARCHAR2(100)    
+    PODATE                           DATE             
+    SHIPDT                           DATE             
+    DELNUM                           VARCHAR2(20)     
+    ORDMASID                         NUMBER(*,0)      
+    OMAXNO                           NUMBER(*,0)      
+    BOQTY                            NUMBER(*,0)      
+    SIZEID                           NUMBER(*,0)      
+    STYLENUMID                       NUMBER(*,0)      
+    STMASID                          NUMBER(*,0)      
+    COLORID                          NUMBER(*,0)      
+    EXFACDT                          DATE             
+    PRODUNIT                         VARCHAR2(100)    
+    ORATE                            NUMBER(10,4)     
+    PACKDESC                         VARCHAR2(100)    
+    PACKCOMBO                        VARCHAR2(100)    
+    NOPKCOMP                         NUMBER(10)       
+    PACKDESCID                       NUMBER(*,0)      
+    PACKCOMBOID                      NUMBER(*,0)      
+    MERCHORDER                       VARCHAR2(3)      
+  Links (115):
+    ORDERENTRY.ORDMASID  <->  ACCGRNDET.IONO    [client report join]
+    ORDERENTRY.IONO  <->  AXPSELECTIONC.SELECTION    [client report join]
+    ORDERENTRY.ORDMASID  <->  BITISSDET.IONO    [client report join]
+    ORDERENTRY.STYLENUMID  <->  BITISSDET.STYNO    [client report join]
+    ORDERENTRY.COMBO  <->  BRANDNEW_FPLAN.COMBO    [client report join]
+    ORDERENTRY.IONO  <->  BRANDNEW_FPLAN.IONO    [client report join]
+    ORDERENTRY.SIZES  <->  BRANDNEW_FPLAN.SIZES    [client report join]
+    ORDERENTRY.STYLEDESC  <->  BRANDNEW_FPLAN.STDESC    [client report join]
+    ORDERENTRY.STYLENO  <->  BRANDNEW_FPLAN.STYLENO    [client report join]
+    ORDERENTRY.ORDMASID  <->  BRISSFAB.FIONO    [client report join]
+    ORDERENTRY.STYLENUMID  <->  BRISSFAB.FSTNO    [client report join]
+    ORDERENTRY.ORDMASID  <->  BRISSPCS.GIONO    [client report join]
+    ORDERENTRY.COLORID  <->  CFABISSDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  CFABISSDET.IONO    [client report join]
+    ORDERENTRY.STYLENUMID  <->  CFABISSDET.STYNO    [client report join]
+    ORDERENTRY.COLORID  <->  CFABRETDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  CFABRETDET.IONO    [client report join]
+    ORDERENTRY.STYLENUMID  <->  CFABRETDET.STYNO    [client report join]
+    ORDERENTRY.COMBO  <->  COLORMAS.COLOR    [client report join]
+    ORDERENTRY.COLORID  <->  CPISSDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  CPISSDET.IONO    [client report join]
+    ORDERENTRY.PONUM  <->  CPISSDET.SPONUM    [client report join]
+    ORDERENTRY.SIZEID  <->  CPISSDET.SIZES    [client report join]
+    ORDERENTRY.STMASID  <->  CPISSDET.STYLEDESC    [client report join]
+    ORDERENTRY.STYLENUMID  <->  CPISSDET.STYNO    [client report join]
+    ORDERENTRY.COLORID  <->  CPISSMAS.COMBOS    [client report join]
+    ORDERENTRY.ORDMASID  <->  CPISSMAS.IONOS    [client report join]
+    ORDERENTRY.COLORID  <->  CPRECDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  CPRECDET.IONO    [client report join]
+    ORDERENTRY.SIZEID  <->  CPRECDET.SIZES    [client report join]
+    ORDERENTRY.STMASID  <->  CPRECDET.STYLEDESC    [client report join]
+    ORDERENTRY.STYLENUMID  <->  CPRECDET.STYNO    [client report join]
+    ORDERENTRY.COLORID  <->  CPRECMAS.COMBOS    [client report join]
+    ORDERENTRY.ORDMASID  <->  CPRECMAS.IONOS    [client report join]
+    ORDERENTRY.COLORID  <->  CTRANSDET.CCOMBO    [client report join]
+    ORDERENTRY.STMASID  <->  CTRANSDET.STYLEDESC    [client report join]
+    ORDERENTRY.ORDMASID  <->  CTRANSMAS.TOIONO    [client report join]
+    ORDERENTRY.STYLENUMID  <->  CTRANSMAS.TOSTYLENO    [client report join]
+    ORDERENTRY.COLORID  <->  CUTDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  CUTDET.IONO    [client report join]
+    ORDERENTRY.STMASID  <->  CUTDET.STDESC    [client report join]
+    ORDERENTRY.STYLENUMID  <->  CUTDET.STYNO    [client report join]
+    ORDERENTRY.COLORID  <->  CUTMAS.COMBOS    [client report join]
+    ORDERENTRY.ORDMASID  <->  CUTMAS.IONOS    [client report join]
+    ORDERENTRY.COLORID  <->  CUTPCSSTK.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  CUTPCSSTK.IONO    [client report join]
+    ORDERENTRY.SIZEID  <->  CUTPCSSTK.SIZES    [client report join]
+    ORDERENTRY.COLORID  <->  CUTQTY.QCOMBO    [client report join]
+    ORDERENTRY.PONUM  <->  CUTQTY.PONUM    [client report join]
+    ORDERENTRY.SIZEID  <->  CUTQTY.SIZES    [client report join]
+    ORDERENTRY.ORDMASID  <->  EPUPDDET.IONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  EPUPDMAS.FIONO    [client report join]
+    ORDERENTRY.STYLENUMID  <->  EPUPDMAS.STYLENO    [client report join]
+    ORDERENTRY.COLORID  <->  EXDISPDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  EXDISPDET.IONO    [client report join]
+    ORDERENTRY.PONUM  <->  EXDISPDET.PONUM    [client report join]
+    ORDERENTRY.SIZEID  <->  EXDISPDET.SIZES    [client report join]
+    ORDERENTRY.ORDMASID  <->  EXDISPMAS.FRIONO    [client report join]
+    ORDERENTRY.COLORID  <->  EXDISPSUB.SCOMBO    [client report join]
+    ORDERENTRY.STMASID  <->  EXDISPSUB.SSTDESC    [client report join]
+    ORDERENTRY.STYLENUMID  <->  EXDISPSUB.SSTYLENO    [client report join]
+    ORDERENTRY.ORDMASID  <->  FABDCDET.IONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  FABDCMPRO.IONOID    [client report join]
+    ORDERENTRY.IONO  <->  FABPROREQ.IONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  FABPROREQ.OMASID    [client report join]
+    ORDERENTRY.STYLENUMID  <->  FABPROREQ.STYID    [client report join]
+    ORDERENTRY.ORDMASID  <->  FABSTOCK.IONO    [client report join]
+    ORDERENTRY.COLORID  <->  FOLDDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  FOLDDET.IONO    [client report join]
+    ORDERENTRY.STYLENUMID  <->  FOLDDET.STYNO    [client report join]
+    ORDERENTRY.STMASID  <->  FPLANDET.STYLEDESC    [client report join]
+    ORDERENTRY.ORDMASID  <->  FPLANM.IONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  FPROISDET.IONO    [client report join]
+    ORDERENTRY.COLORID  <->  GBARCODEMAS.COMBOID    [client report join]
+    ORDERENTRY.ORDMASID  <->  GBARCODEMAS.IONOID    [client report join]
+    ORDERENTRY.STMASID  <->  GBARCODEMAS.STDESCID    [client report join]
+    ORDERENTRY.STYLENUMID  <->  GBARCODEMAS.STYLENOID    [client report join]
+    ORDERENTRY.ORDMASID  <->  GRPIODET.IONO    [client report join]
+    ORDERENTRY.COLORID  <->  INSPDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  INSPMAS.IONO    [client report join]
+    ORDERENTRY.SIZEID  <->  INSPSIZES.SIZES    [client report join]
+    ORDERENTRY.ORDMASID  <->  INVDET.IONOS    [client report join]
+    ORDERENTRY.PACKCOMBOID  <->  INVDET.COMBO    [client report join]
+    ORDERENTRY.PACKDESCID  <->  INVDET.STDESC    [client report join]
+    ORDERENTRY.PONUM  <->  INVDET.ORDNO    [client report join]
+    ORDERENTRY.STYLENUMID  <->  INVDET.STYLENO    [client report join]
+    ORDERENTRY.ORDMASID  <->  KPROISDET.IONO    [client report join]
+    ORDERENTRY.COLORID  <->  MOBPGAR.GCOMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  MOBPGAR.GIONO    [client report join]
+    ORDERENTRY.SIZEID  <->  MOBPGAR.GSIZES    [client report join]
+    ORDERENTRY.IONO  <->  ORDMAS.DOCID    [client report join]
+    ORDERENTRY.ORDMASID  <->  ORDMAS.ORDMASID    [client report join]
+    ORDERENTRY.ORDMASID  <->  ORDSTYLE.ORDMASID    [client report join]
+    ORDERENTRY.PONUM  <->  ORDSTYLE.IPONUM    [client report join]
+    ORDERENTRY.ORDMASID  <->  PKRECDET.GIONO    [client report join]
+    ORDERENTRY.PONUM  <->  PKRECDET.PONUM    [client report join]
+    ORDERENTRY.ORDMASID  <->  PKRECMAS.IONOS    [client report join]
+    ORDERENTRY.STYLENUMID  <->  PKRECMAS.STYLENOS    [client report join]
+    ORDERENTRY.COLORID  <->  PKRECSTK.SCOMBO    [client report join]
+    ORDERENTRY.STMASID  <->  PKRECSTK.SSDESC    [client report join]
+    ORDERENTRY.ORDMASID  <->  PROSEQMAS.IONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  REENDUPDET.IONO    [client report join]
+    ORDERENTRY.COLORID  <->  REJENDET.COMBO    [client report join]
+    ORDERENTRY.ORDMASID  <->  REJENDET.IONO    [client report join]
+    ORDERENTRY.STMASID  <->  REJENDET.STYLEDESC    [client report join]
+    ORDERENTRY.STYLENUMID  <->  REJENDET.STYNO    [client report join]
+    ORDERENTRY.SIZES  <->  SIZE_MAS.SIZES    [client report join]
+    ORDERENTRY.ORDMASID  <->  STKDCFAB.FIONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  STKDCPCS.GIONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  YARNGRNDET.IONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  YARNPODET.PIONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  YARNSTKAUDDET.SORDMASID    [client report join]
+    ORDERENTRY.ORDMASID  <->  YARNSTOCK.IONO    [client report join]
+    ORDERENTRY.ORDMASID  <->  YTRANSDET.TOIOID    [client report join]
+    ORDERENTRY.ORDMASID  <->  YTRANSMAS.TIONO    [client report join]
+
+
+TABLE 10888 of 11838: ORDMAS   (rows ~9,549)
+  Primary key: ORDMASID
+  Columns (197):
+    ORDMASID                         NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    RECID                            NUMBER(15)       
+    TOTGRID                          NUMBER(10)       
+    USERID                           VARCHAR2(50)     
+    ENAME                            NUMBER(16)       
+    OTYPE                            VARCHAR2(35)     
+    GTYPE                            VARCHAR2(20)     
+    ORDCATEGORY                      VARCHAR2(30)     
+    REPEAT                           VARCHAR2(10)     
+    UNIORDID                         NUMBER(15)       
+    RNO                              NUMBER(10)       
+    RDOCNO                           VARCHAR2(30)     
+    BUYER                            NUMBER(16)       
+    BPR                              VARCHAR2(30)     
+    BONO                             VARCHAR2(55)     
+    FINYEAR                          VARCHAR2(10)     
+    OMAXNO                           VARCHAR2(10)     
+    BMAXNO                           VARCHAR2(10)     
+    DOCID                            VARCHAR2(30)     
+    ODATE                            DATE             
+    ENQNO                            NUMBER(16)       
+    STYLENO                          NUMBER(16)       
+    STYLEDESC                        NUMBER(16)       
+    REPERTNO                         VARCHAR2(55)     
+    BODATE                           DATE             
+    ADELDT                           DATE             
+    LEADDYS                          NUMBER(10)       
+    EXFACDAYS                        NUMBER(10)       
+    DDATE                            DATE             
+    PCUTDT                           DATE             
+    OQTY                             NUMBER(10)       
+    UOM                              NUMBER(16)       
+    SNAME                            NUMBER(16)       
+    PALLOW                           NUMBER(10,2)     
+    SIZETEMP                         NUMBER(16)       
+    AST                              VARCHAR2(10)     
+    MERCH                            NUMBER(16)       
+    FABNAME                          VARCHAR2(75)     
+    GSM                              VARCHAR2(10)     
+    PRICE                            NUMBER(11,5)     
+    CURR                             NUMBER(16)       
+    CONVRATE                         NUMBER(10,2)     
+    POL                              NUMBER(16)       
+    MOS                              VARCHAR2(10)     
+    PT                               VARCHAR2(100)    
+    DEPARTMENT                       VARCHAR2(25)     
+    SHBY                             VARCHAR2(10)     
+    LOCKDOCID                        VARCHAR2(30)     
+    DT                               VARCHAR2(10)     
+    FABMANAGER                       NUMBER(16)       
+    FABINCH                          NUMBER(16)       
+    GARDES                           VARCHAR2(80)     
+    EDITS                            VARCHAR2(10)     
+    COTYPE                           VARCHAR2(25)     
+    REMARKS                          VARCHAR2(1000)   
+    OD                               VARCHAR2(10)     
+    TSAMT                            NUMBER(15,5)     
+    TOCQTY                           NUMBER(10)       
+    TOPQTY                           NUMBER(10)       
+    PREPBY                           VARCHAR2(50)     
+    AVG                              NUMBER(11,5)     
+    STMUSER                          VARCHAR2(100)    
+    FABRICPLAN                       VARCHAR2(1)      
+    LOCKED                           VARCHAR2(10)     
+    BUYBRAND                         VARCHAR2(50)     
+    ACCPLAN                          VARCHAR2(1)      
+    BUDGET                           VARCHAR2(1)      
+    NOCOMP                           NUMBER(10)       
+    COMPTYPE                         VARCHAR2(10)     
+    BOQTY                            NUMBER(10)       
+    ESTYNO                           NUMBER(16)       
+    BIONO                            VARCHAR2(30)     
+    TEMPLATE                         NUMBER(16)       
+    LOGORD                           NUMBER(1)        
+    MERCHORDER                       VARCHAR2(1)      
+    TPACKED                          NUMBER(10)       
+    TINVOICED                        NUMBER(10)       
+    FPLID                            NUMBER(15)       
+    BALLOW                           NUMBER(10,2)     
+    TSID                             VARCHAR2(10)     
+    TAMT                             NUMBER(15,5)     
+    NC                               NUMBER(10)       
+    KNITFOLLOW                       VARCHAR2(20)     
+    DYEFOLLOW                        VARCHAR2(20)     
+    FINFOLLOW                        VARCHAR2(20)     
+    FIRSTSHIPDT                      DATE             
+    APPLEVEL                         NUMBER(10)       
+    ODUSER                           VARCHAR2(15)     
+    ODSYSTIME                        VARCHAR2(50)     
+    DOMRATE                          NUMBER(11,5)     
+    PHOIMG                           VARCHAR2(100)    
+    PREFIX                           VARCHAR2(10)     
+    CKDATE                           DATE             
+    INPUTDT                          DATE             
+    EXFACDT                          DATE             
+    PRODUNIT                         NUMBER(16)       
+    OPREFIX                          VARCHAR2(20)     
+    YARNQTY                          NUMBER(10,3)     
+    FABQTY                           NUMBER(10,3)     
+    ACCQTY                           NUMBER(10,3)     
+    CMTQTY                           NUMBER(10,3)     
+    STYLECAT                         NUMBER(16)       
+    DOCPATH                          VARCHAR2(250)    
+    FILEEXT                          VARCHAR2(10)     
+    TEMPIMG                          VARCHAR2(10)     
+    CSIMGPATH                        VARCHAR2(250)    
+    FILENO                           VARCHAR2(15)     
+    CSDR                             VARCHAR2(1)      
+    TPIMGPATH                        VARCHAR2(250)    
+    ARTIMGPATH                       VARCHAR2(250)    
+    CSTIMGPATH                       VARCHAR2(250)    
+    BOMUPD                           NUMBER(15)       
+    BOMID                            NUMBER(15)       
+    STYLEGRP                         VARCHAR2(20)     
+    CKEDATE                          DATE             
+    APLID                            NUMBER(15)       
+    ASHPCMPDT                        DATE             
+    CMTPLID                          NUMBER(15)       
+    TSAMT1                           NUMBER(15,5)     
+    OFILEPATH                        VARCHAR2(250)    
+    INVOICEDQTY                      NUMBER(10)       
+    FINHDATE                         DATE             
+    STRIMHDATE                       DATE             
+    PKTRIMHDATE                      DATE             
+    INPCKDT                          DATE             
+    APPLINHDATE                      DATE             
+    BUYERDEPT                        VARCHAR2(30)     
+    BUYERBRAND                       VARCHAR2(25)     
+    RPMGR1                           NUMBER(16)       
+    RPMGR2                           NUMBER(16)       
+    QR                               VARCHAR2(1)      
+    DUPCHK                           VARCHAR2(50)     
+    SAMTYPE                          VARCHAR2(20)     
+    SAMORDER                         NUMBER(16)       
+    SAMPLETYPE                       VARCHAR2(30)     
+    BUDAPP                           VARCHAR2(1)      
+    DB_USERNAME                      VARCHAR2(10)     
+    QTRATE                           VARCHAR2(1)      
+    BILLCLOSED                       VARCHAR2(3)      
+    BILLCLOSEDDT                     DATE             
+    OTPREFIX                         VARCHAR2(4)      
+    BTHEME                           VARCHAR2(25)     
+    EMBELLISHMENT                    VARCHAR2(35)     
+    GSDATE                           DATE             
+    DELST                            DATE             
+    DELEND                           DATE             
+    FABORD                           VARCHAR2(1)      
+    FABPONO                          NUMBER(16)       
+    ACCPONO                          NUMBER(16)       
+    FTPOVAL                          NUMBER(15,2)     
+    FTBASEVAL                        NUMBER(15,2)     
+    ATPOVAL                          NUMBER(15,2)     
+    ATBASVAL                         NUMBER(15,2)     
+    EPOST                            DATE             
+    EIMPORT                          DATE             
+    TEAM                             VARCHAR2(30)     
+    TORDQTY                          NUMBER(10)       
+    TPRODQTY                         NUMBER(10)       
+    FTYPE                            NUMBER(16)       
+    ORDNO                            NUMBER(16)       
+    OAGAINST                         VARCHAR2(10)     
+    CERT                             VARCHAR2(20)     
+    SRECDATE                         DATE             
+    IHPLDATE                         DATE             
+    SORDNO                           VARCHAR2(50)     
+    SAMORD                           NUMBER(16)       
+    REFNO                            VARCHAR2(25)     
+    ACCFOLLOW                        NUMBER(16)       
+    ACCGROUP                         VARCHAR2(1)      
+    AMAXIPONO                        NUMBER(10)       
+    IPO                              VARCHAR2(1)      
+    ENDUP                            VARCHAR2(1)      
+    FRISKCL                          VARCHAR2(15)     
+    CMTRISKCL                        VARCHAR2(15)     
+    PERISKCL                         VARCHAR2(15)     
+    SUMSENDON                        VARCHAR2(35)     
+    SUMRECON                         VARCHAR2(35)     
+    ACCSUMSENDON                     VARCHAR2(35)     
+    ACCSUMRECON                      VARCHAR2(35)     
+    SUMSENSYS                        VARCHAR2(50)     
+    SUMRECSYS                        VARCHAR2(50)     
+    ACCSUMSENSYS                     VARCHAR2(50)     
+    ACCSUMRECSYS                     VARCHAR2(50)     
+    GENDER                           VARCHAR2(25)     
+  Links (336):
+    ORDMAS.ORDMASID  <->  ABPDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  ACCDELDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ACCDELMAS.ION    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  ACCGRNDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ACCIPAYREQB.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ACCISSMAS.ION    [declared key]
+    ORDMAS.ORDMASID  <->  ACCOPDET.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  ACCOPMAS.IONO1    [declared key]
+    ORDMAS.ORDMASID  <->  ACCPLANMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ACCPOCDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ACCPODET.IONO1    [client report join]
+    ORDMAS.ORDMASID  <->  ACCPROPLANA.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  ACCRACKMAS.FIONO    [declared key]
+    ORDMAS.ORDMASID  <->  ACCRETDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ACCTNAUPDET.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  ACCTNAUPMAS.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  ACSTOCKMAST.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  AMDREQMAS.IONO    [client report join]
+    ORDMAS.COTYPE  <->  APPRMAS.OTYPE    [client report join]
+    ORDMAS.ORDMASID  <->  APRECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  APROISDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  APROPOCDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  APROPODET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  APRORECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  APRORETDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  AREQDET.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  AREQMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ATRANSMAS.FRIONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  ATRANSMAS.TOIONO    [client report join + declared key]
+    ORDMAS.DOCID  <->  AXPSELECTIONC.SELECTION    [client report join]
+    ORDMAS.ORDMASID  <->  BARCODEPLUSSTK.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  BITISSDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  BITISSMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  BITPRORETMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  BOUPDMAS.IONOS    [declared key]
+    ORDMAS.DOCID  <->  BRANDNEW_FPLAN.IONO    [client report join]
+    ORDMAS.DOCID  <->  BRAND_FPLAN.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  BRISSACC.AIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BRISSFAB.FIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BRISSMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  BRISSPCS.GIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BRRECACC.AIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BRRECFAB.FIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BRRECPCS.GIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BUDACCDET.DIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BUDACCMAS.IONO    [client report join]
+    ORDMAS.DOCID  <->  BUDACSTK.SIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BUDCMTMAS.JOBNO    [client report join]
+    ORDMAS.ORDMASID  <->  BUDFABA.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  BUDGETMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  BUDOHMAS.JOBNO    [client report join]
+    ORDMAS.ORDMASID  <->  BUDYARDET.DIONO    [client report join]
+    ORDMAS.ORDMASID  <->  BUDYARNMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  BUNDDCMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  BUNDLEA.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  BUNDLEB.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  BUYAPISDET.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  BUYAPRECDET.IONO    [client report join]
+    ORDMAS.DOCID  <->  BUYERDNC.IONOS    [client report join]
+    ORDMAS.BUYER  <->  BUYMAS.BUYMASID    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  BUYPODET.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  CADMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CFABISSDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CFABISSIO.IONO1    [declared key]
+    ORDMAS.ORDMASID  <->  CFABISSMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  CFABISSSTK.SIONO    [client report join]
+    ORDMAS.ORDMASID  <->  CFABRECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CFABRECMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  CFABREQDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CFABREQMAS.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  CFABRETDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CFABRETMAS.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  CFABRETRECMAS.IONOS    [client report join]
+    ORDMAS.POL  <->  CITYMAS.CITYMASID    [client report join]
+    ORDMAS.DOCID  <->  CKDATA.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CKDATA.OMASID    [client report join]
+    ORDMAS.ORDMASID  <->  CMTBPDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  CMTINVDET.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  CMTINVMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  CMTINWMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  CMTJOBBPMAS.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  CMTJORDMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  CMTJPBNMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  CMTOPRATEMAS.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  CMTPLMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  CMTPLMAS.OID    [client report join]
+    ORDMAS.ORDMASID  <->  CMTPRATEMAS.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  CMTPRUPDMAS.IONO    [client report join]
+    ORDMAS.DOCID  <->  CMTREQ.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CMTREQ.ORDMASID    [client report join]
+    ORDMAS.DOCID  <->  CMTREQPONO.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CMTREQPONO.ORDMASID    [client report join]
+    ORDMAS.ORDMASID  <->  CMTWAGEDET.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  CMTWAGESDET.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  CMTWAGESSBDET.IONO    [client report join]
+    ORDMAS.ENQNO  <->  COSTINGA.COSTINGAID    [client report join]
+    ORDMAS.ORDMASID  <->  CPISSDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CPISSMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  CPRCLDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CPRCLMAS.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  CPRECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CPRECMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  CPRETDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CPRETMAS.IONOS    [client report join]
+    ORDMAS.DOCID  <->  CPSAUDDET.DIONO    [client report join]
+    ORDMAS.ORDMASID  <->  CREQMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  CSPRCPDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CSTDYMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  CTRANSMAS.FRIONO    [client report join]
+    ORDMAS.ORDMASID  <->  CTRANSMAS.TOIONO    [client report join]
+    ORDMAS.CURR  <->  CURMAS.CURMASID    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  CUTDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CUTMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  CUTOPDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  CUTOPIO.IONO1    [declared key]
+    ORDMAS.ORDMASID  <->  CUTPCSSTK.IONO    [client report join]
+    ORDMAS.DOCID  <->  DBILLDET.IONO    [client report join]
+    ORDMAS.DOCID  <->  DEBTNOTEDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  DEFABISSDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  DEFABPOCDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  DEFABPODET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  DEFABRECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  DEFABRETDET.IONO    [client report join]
+    ORDMAS.DOCID  <->  DEINBUD.IONO    [client report join]
+    ORDMAS.DOCID  <->  DEINBUDA.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  DGRNEDET.IONOS    [client report join]
+    ORDMAS.DOCID  <->  DIRBPASSC.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  DIRBPASSC.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  DLPLANMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  DMSTKRTMAS.FRIONO    [declared key]
+    ORDMAS.ORDMASID  <->  DUTYIMPB.IONO1    [client report join]
+    ORDMAS.ACCFOLLOW  <->  EMPMAS.EMPMASID    [client report join]
+    ORDMAS.FABMANAGER  <->  EMPMAS.EMPMASID    [client report join]
+    ORDMAS.KNITFOLLOW  <->  EMPMAS.EMPNAME    [client report join]
+    ORDMAS.MERCH  <->  EMPMAS.EMPMASID    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  EMPMAS.IONO    [client report join]
+    ORDMAS.RPMGR1  <->  EMPMAS.EMPMASID    [client report join]
+    ORDMAS.RPMGR2  <->  EMPMAS.EMPMASID    [client report join]
+    ORDMAS.ORDMASID  <->  EPERFDET.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  EPUPDDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  EPUPDMAS.FIONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  EXDISPDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  EXDISPMAS.FRIONO    [client report join]
+    ORDMAS.ENAME  <->  EXPORTMAS.EXPORTMASID    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  FABDCDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABDCMPRO.IONOID    [client report join]
+    ORDMAS.ORDMASID  <->  FABGRNDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABOPDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABORDDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABORDIO.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  FABORDQTY.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  FABPOCDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABPODET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABPROGSUM_PARAM.ORDMASID    [client report join]
+    ORDMAS.DOCID  <->  FABPROREQ.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABPROREQ.OMASID    [client report join]
+    ORDMAS.ORDMASID  <->  FABPROREQ_FABPROG.ORDMASID    [client report join]
+    ORDMAS.ORDMASID  <->  FABRACKMAS.FIONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  FABRECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABRECMPRO.GIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABSAUDET.DIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FABSTOCK.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FBPDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FFINSPMAS.IONO    [declared key]
+    ORDMAS.DOCID  <->  FLOTDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FLOTIONO.IONO1    [declared key]
+    ORDMAS.ORDMASID  <->  FOLDDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FOLDMAS.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  FOLDRETDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FOLDRETMAS.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  FOLDSTK.SIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FORDRECIO.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  FORDRECMAS.WIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FPLANM.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  FPROISDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FPROPOCDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FPROPODET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FPRORECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FPRORETDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FPURRTDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  FREQCPRO.FIONO    [declared key]
+    ORDMAS.ORDMASID  <->  FREQDET.PIONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  FREQMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FTRANSDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  FTRANSMAS.FIONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  FTRANSMAS.TIONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  GARGRNACC.AIONO    [declared key]
+    ORDMAS.ORDMASID  <->  GARGRNFAB.FIONO    [declared key]
+    ORDMAS.ORDMASID  <->  GARGRNYARN.YIONO    [declared key]
+    ORDMAS.ORDMASID  <->  GARPODET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  GARPOMAS.IONOS    [declared key]
+    ORDMAS.DOCID  <->  GBARCODEMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  GBPDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  GRPIODET.IONO    [client report join + declared key]
+    ORDMAS.RPMGR1  <->  GRPIOMAS.SRMERCH    [client report join]
+    ORDMAS.ORDMASID  <->  GWPBPDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  INJBPDET.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  INJBPMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  INJOBCANMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  INJOBMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  INJOBPRODUPDET.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  INJOBPRODUPMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  INSPDET.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  INSPMAS.IONO    [client report join + declared key]
+    ORDMAS.BONO  <->  INVDET.ORDNO    [client report join]
+    ORDMAS.DOCID  <->  INVDET.IOCN    [client report join]
+    ORDMAS.ORDMASID  <->  INVDET.IONOS    [client report join]
+    ORDMAS.DOCID  <->  INVMAS.DOCID    [client report join]
+    ORDMAS.ORDMASID  <->  JWORDMAS.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  KNITDCDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  KNITDCSTK.SIONO    [client report join]
+    ORDMAS.ORDMASID  <->  KPROISDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  KPROISYARN.SIONO    [client report join]
+    ORDMAS.ORDMASID  <->  KPROPOCDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  KPROPODET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  KPRORECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  KPRORETDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  LOTPLMAS.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  LOTPPMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  MERCOSTMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  MERORDDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  MERORDMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  MOBPDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  MPRORECMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  MRECACC.AIONO    [declared key]
+    ORDMAS.ORDMASID  <->  MRECFAB.FIONO    [declared key]
+    ORDMAS.ORDMASID  <->  MRECGAR.GIONO    [declared key]
+    ORDMAS.DOCID  <->  MRECMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  MRECYARN.YIONO    [declared key]
+    ORDMAS.ORDMASID  <->  OCRMAS.IONO    [client report join]
+    ORDMAS.DOCID  <->  OMSORDDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ORDACC.ORDMASID    [client report join + saved together by one client screen]
+    ORDMAS.ORDMASID  <->  ORDCMTFAB.ORDMASID    [saved together by one client screen]
+    ORDMAS.ORDMASID  <->  ORDCOMP.ORDMASID    [client report join + saved together by one client screen]
+    ORDMAS.ORDMASID  <->  ORDDOC.ORDMASID    [saved together by one client screen]
+    ORDMAS.DOCID  <->  ORDERENTRY.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  ORDERENTRY.ORDMASID    [client report join]
+    ORDMAS.ORDMASID  <->  ORDFAB.ORDMASID    [client report join + saved together by one client screen]
+    ORDMAS.ORDMASID  <->  ORDHISTORYMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  ORDRATEMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  ORDSHIP.ORDMASID    [saved together by one client screen]
+    ORDMAS.ORDMASID  <->  ORDSHIPMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  ORDSIZE.ORDMASID    [client report join + saved together by one client screen]
+    ORDMAS.ORDMASID  <->  ORDSTYLE.ORDMASID    [client report join + saved together by one client screen]
+    ORDMAS.STYLENO  <->  ORDSTYLE.STNO    [client report join]
+    ORDMAS.ORDMASID  <->  ORDYARN.ORDMASID    [saved together by one client screen]
+    ORDMAS.DOCID  <->  OVERALLSTOCK.IONO    [client report join]
+    ORDMAS.CPRODUNIT  <->  PARTYMAS.PARTYMASID    [client report join]
+    ORDMAS.PRODUNIT  <->  PARTYMAS.PARTYMASID    [client report join]
+    ORDMAS.ORDMASID  <->  PKRECDET.GIONO    [client report join]
+    ORDMAS.ORDMASID  <->  PKRECMAS.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  PLDET.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  PROALDET.IONO    [client report join]
+    ORDMAS.DOCID  <->  PRODCK.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  PRODPACMAS.ION    [declared key]
+    ORDMAS.ORDMASID  <->  PRODREQMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  PRORDDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  PRORDMAS.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  PROSEQMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  REENDUPDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  REENDUPMAS.FIONO    [declared key]
+    ORDMAS.ORDMASID  <->  REJDELDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  REJDELMAS.FRIONO    [client report join]
+    ORDMAS.ORDMASID  <->  REJENMAS.FRIONO    [client report join]
+    ORDMAS.ORDMASID  <->  REJMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  SALEFAB.FIONO    [client report join]
+    ORDMAS.ORDMASID  <->  SALESYARN.YIONO    [client report join]
+    ORDMAS.DOCID  <->  SALMAS.IONO    [client report join]
+    ORDMAS.DOCID  <->  SAMPROUP.IONO    [client report join]
+    ORDMAS.SNAME  <->  SEASONMAS.SEASONMASID    [client report join + declared key]
+    ORDMAS.SIZETEMP  <->  SIZETEMP_MAS.SIZETEMP_MASID    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  SKAUDACCDET.AIONO    [client report join]
+    ORDMAS.ORDMASID  <->  SKAUDFABDET.FIONO    [client report join]
+    ORDMAS.ORDMASID  <->  SKAUDMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  SKAUDYARNDET.YIONO    [client report join]
+    ORDMAS.ORDMASID  <->  SREGMAS.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  STICHMAS.IONO    [declared key]
+    ORDMAS.ORDMASID  <->  STKDCACC.AIONO    [client report join]
+    ORDMAS.ORDMASID  <->  STKDCFAB.FIONO    [client report join]
+    ORDMAS.ORDMASID  <->  STKDCPCS.GIONO    [client report join]
+    ORDMAS.ORDMASID  <->  STKDCYARN.YIONO    [client report join]
+    ORDMAS.ORDMASID  <->  STKINACC.AIONO    [client report join]
+    ORDMAS.ORDMASID  <->  STKINFAB.FIONO    [client report join]
+    ORDMAS.ORDMASID  <->  STKINPCS.GIONO    [client report join]
+    ORDMAS.ORDMASID  <->  STKINYARN.YIONO    [client report join]
+    ORDMAS.STYLEDESC  <->  STYLEMAS.STYLEMASID    [client report join]
+    ORDMAS.STYLENO  <->  STYLENUM.STYLENUMID    [client report join]
+    ORDMAS.ORDMASID  <->  SWOPEMAS.FRIONO    [declared key]
+    ORDMAS.ORDMASID  <->  TABSMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  TAMULTMPLDET.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  TAMULTMPLMAS.IONOS    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  TANDAMAS.IONO    [client report join]
+    ORDMAS.DOCID  <->  TANDATASK.IONO    [client report join]
+    ORDMAS.DOCID  <->  TASKASTUPMAS.IONO    [client report join]
+    ORDMAS.DOCID  <->  TASKSTUPMAS.IONO    [client report join]
+    ORDMAS.DOCID  <->  TASKUPMAS.IONO    [client report join]
+    ORDMAS.DOCID  <->  TEMP_TANDA_STATUS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  TESTMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  TESTREQMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  TGBDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  TIMEACTMAS.IONO    [client report join + declared key]
+    ORDMAS.DOCID  <->  TNAAMENTMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  TNAUPDET.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  TNAUPMAS.IONOS    [declared key]
+    ORDMAS.ORDMASID  <->  TNA_TASK_DETAILS.ORDMASID    [client report join]
+    ORDMAS.UOM  <->  UNITMAS.UNITMASID    [client report join + declared key]
+    ORDMAS.ACCFOLLOW  <->  USERLOC.EMPNAME    [client report join]
+    ORDMAS.DOCID  <->  VC_AC_TABLE.IONO    [client report join]
+    ORDMAS.DOCID  <->  VC_COMMVC_TABLE.IONO    [client report join]
+    ORDMAS.DOCID  <->  VC_EMBCOST_TABLE.IONO    [client report join]
+    ORDMAS.DOCID  <->  VC_YTOF_TABLE.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  VEPLADET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YARNGRNDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YARNOPDET.IONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  YARNPODET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  YARNPOIO.IONO    [declared key]
+    ORDMAS.DOCID  <->  YARNSTKAUDDET.SIONO    [client report join]
+    ORDMAS.ORDMASID  <->  YARNSTKAUDDET.SORDMASID    [client report join]
+    ORDMAS.ORDMASID  <->  YARNSTOCK.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YBPDET.PIONO    [client report join]
+    ORDMAS.ORDMASID  <->  YPOCANDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YPRDERTDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YPROISDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YPROISSTK.SIONO    [client report join]
+    ORDMAS.ORDMASID  <->  YPROPOCDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YPROPODET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YPRORECDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YPURRTDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YQUOTADET.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  YQUOTAMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YREQCPRO.IONOF    [declared key]
+    ORDMAS.ORDMASID  <->  YREQDET.IONOS    [client report join]
+    ORDMAS.ORDMASID  <->  YREQMAS.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YTRANSDET.IONO    [client report join]
+    ORDMAS.ORDMASID  <->  YTRANSMAS.FIONO    [client report join + declared key]
+    ORDMAS.ORDMASID  <->  YTRANSMAS.TIONO    [client report join]
+
+
+TABLE 10906 of 11838: ORDSIZE   (rows ~98,885)
+  Primary key: ORDSIZEID
+  Columns (24):
+    ORDSIZEID                        NUMBER(*,0)      NOT NULL
+    ORDMASID                         NUMBER(*,0)      
+    ORDSIZEROW                       NUMBER(*,0)      
+    SUB3_SUBNO                       VARCHAR2(60)     
+    SUB3_SYES                        VARCHAR2(10)     
+    FPLAND                           VARCHAR2(1)      
+    GSIZE                            NUMBER(16)       
+    RATIO                            NUMBER(7)        
+    EXPER                            NUMBER(5,2)      
+    RQTY                             NUMBER(10)       
+    SRATES                           NUMBER(13,5)     
+    PQTY                             NUMBER(10)       
+    NT                               VARCHAR2(10)     
+    GSIZE1                           VARCHAR2(40)     
+    GSIZE2                           VARCHAR2(40)     
+    RATIO1                           NUMBER(10)       
+    CPYQTY                           VARCHAR2(10)     
+    SROWNO                           NUMBER(10)       
+    SIZECOMBOPRICE                   NUMBER(15,5)     
+    SHIPDESC                         VARCHAR2(10)     
+    SHIPID                           NUMBER(10)       
+    KYCOL                            VARCHAR2(10)     
+    CMBPR1                           NUMBER(15,5)     
+    EXPCS                            NUMBER(10)       
+  Links (3):
+    ORDSIZE.ORDMASID  <->  ORDMAS.ORDMASID    [client report join + saved together by one client screen]
+    ORDSIZE.SUB3_SUBNO  <->  ORDSTYLE.SUBNO    [client report join]
+    ORDSIZE.GSIZE  <->  SIZE_MAS.SIZE_MASID    [client report join]
+  Also saved together with these tables by the same client screen (no column pair known): ORDACC, ORDCMTFAB, ORDCOMP, ORDDOC, ORDFAB, ORDSHIP, ORDYARN
+
+
+TABLE 10909 of 11838: ORDSTYLE   (rows ~22,759)
+  Primary key: ORDSTYLEID
+  Columns (66):
+    ORDSTYLEID                       NUMBER(*,0)      NOT NULL
+    ORDMASID                         NUMBER(*,0)      
+    FPLAN                            VARCHAR2(1)      
+    STNO                             NUMBER(16)       
+    PONUM                            VARCHAR2(50)     
+    STYLENAME                        NUMBER(16)       
+    ASST                             VARCHAR2(10)     
+    SRATE                            NUMBER(11,5)     
+    PORTLD                           NUMBER(16)       
+    SHIPMD                           VARCHAR2(10)     
+    SHIPTERM                         VARCHAR2(10)     
+    COMBO                            NUMBER(16)       
+    SUBNO                            VARCHAR2(60)     
+    COMBOQTY                         NUMBER(10)       
+    SAMT                             NUMBER(15,5)     
+    CRATIO                           NUMBER(10)       
+    CAVGQTY                          NUMBER(15)       
+    SYES                             VARCHAR2(10)     
+    ORDQTY                           NUMBER(10)       
+    SHIPDT                           DATE             
+    COLOR                            VARCHAR2(300)    
+    TCQTY                            NUMBER(10)       
+    NOTES                            VARCHAR2(10)     
+    COM                              VARCHAR2(10)     
+    PODATE                           DATE             
+    ORDSTYLEROW                      NUMBER(10)       
+    SNO                              NUMBER(10)       
+    CPYQTY                           VARCHAR2(10)     
+    DESCOUNTRY                       NUMBER(16)       
+    DELNUM                           VARCHAR2(15)     
+    PACKQTY                          NUMBER(10)       
+    APPROVED                         VARCHAR2(10)     
+    REVSHIPDT                        DATE             
+    COMBOPRICE                       NUMBER(15,5)     
+    CPRALL                           NUMBER(10,2)     
+    NOSHIP                           NUMBER(10)       
+    SHIP                             VARCHAR2(10)     
+    SHIPTOT                          NUMBER(10)       
+    CQTY                             NUMBER(10)       
+    NOFPCS                           NUMBER(10)       
+    PORTDES                          NUMBER(16)       
+    SAMT1                            NUMBER(15,5)     
+    NPONUM                           VARCHAR2(50)     
+    CHNGPONUM                        VARCHAR2(4)      
+    SAMVALUE                         NUMBER(10,2)     
+    TOTSAM                           NUMBER(10,2)     
+    SAMMIN                           NUMBER(12,2)     
+    DC2_IMAGEPATH                    VARCHAR2(100)    
+    DC2_IMAGE                        VARCHAR2(1500)   
+    PUOM                             NUMBER(16)       
+    TNOCOMP                          NUMBER(10)       
+    SCOSTNO                          NUMBER(16)       
+    PRODQTY                          NUMBER(10)       
+    TPQTY                            NUMBER(10)       
+    SIZETEMPL                        NUMBER(16)       
+    PRICECHECK                       NUMBER(13,5)     
+    FABDET                           VARCHAR2(3)      
+    DESIGN                           NUMBER(16)       
+    MERCHSTYLE                       VARCHAR2(3)      
+    PRIEMP                           VARCHAR2(15)     
+    MAXIPONO                         NUMBER(10)       
+    AAMAXIPONUM                      NUMBER(10)       
+    SSUBCHK                          NUMBER(10)       
+    IPONUMBAK                        VARCHAR2(15)     
+    IPONUM                           VARCHAR2(40)     
+    CPYCMBO                          VARCHAR2(10)     
+  Links (38):
+    ORDSTYLE.ORDMASID  <->  BRISSFAB.FIONO    [client report join]
+    ORDSTYLE.ORDMASID  <->  BRRECFAB.FIONO    [client report join]
+    ORDSTYLE.COMBO  <->  COLORMAS.COLORMASID    [client report join + declared key]
+    ORDSTYLE.SCOSTNO  <->  COSTINGA.COSTINGAID    [client report join]
+    ORDSTYLE.STNO  <->  COSTINGA.STYLE    [client report join]
+    ORDSTYLE.DESCOUNTRY  <->  COUNTRYMASTER.COUNTRYMASTERID    [declared key]
+    ORDSTYLE.COMBO  <->  CPRECDET.COMBO    [client report join]
+    ORDSTYLE.STNO  <->  CPRECDET.STYNO    [client report join]
+    ORDSTYLE.COMBO  <->  CUTDET.COMBO    [client report join]
+    ORDSTYLE.STNO  <->  CUTDET.STYNO    [client report join]
+    ORDSTYLE.COMBO  <->  EPUPDDET.COLOUR    [client report join]
+    ORDSTYLE.ORDMASID  <->  EPUPDDET.IONO    [client report join]
+    ORDSTYLE.STNO  <->  EPUPDMAS.STYLENO    [client report join]
+    ORDSTYLE.COMBO  <->  EXDISPDET.COMBO    [client report join]
+    ORDSTYLE.STNO  <->  EXDISPDET.STYNO    [client report join]
+    ORDSTYLE.PONUM  <->  EXDISPIONO.POSHIPNO    [client report join]
+    ORDSTYLE.SHIPDT  <->  EXDISPIONO.DELIVDATE    [client report join]
+    ORDSTYLE.ORDMASID  <->  EXDISPMAS.FRIONO    [client report join]
+    ORDSTYLE.ORDMASID  <->  FABPROREQ.OMASID    [client report join]
+    ORDSTYLE.COMBO  <->  FABSTOCK.COLOR    [client report join]
+    ORDSTYLE.STNO  <->  FPLANDET.STNO    [client report join]
+    ORDSTYLE.STYLENAME  <->  FPLANDET.STYLEDESC    [client report join]
+    ORDSTYLE.ORDMASID  <->  INVDET.IONOS    [client report join]
+    ORDSTYLE.PONUM  <->  INVDET.ORDNO    [client report join]
+    ORDSTYLE.STNO  <->  INVDET.STYLENO    [client report join]
+    ORDSTYLE.ORDMASID  <->  ORDCOMP.ORDMASID    [client report join]
+    ORDSTYLE.SUBNO  <->  ORDCOMP.SUB5_SUBNO    [client report join]
+    ORDSTYLE.IPONUM  <->  ORDERENTRY.PONUM    [client report join]
+    ORDSTYLE.ORDMASID  <->  ORDERENTRY.ORDMASID    [client report join]
+    ORDSTYLE.ORDMASID  <->  ORDMAS.ORDMASID    [client report join + saved together by one client screen]
+    ORDSTYLE.STNO  <->  ORDMAS.STYLENO    [client report join]
+    ORDSTYLE.SUBNO  <->  ORDSIZE.SUB3_SUBNO    [client report join]
+    ORDSTYLE.SIZETEMPL  <->  SIZETEMP_MAS.SIZETEMP_MASID    [declared key]
+    ORDSTYLE.STYLENAME  <->  STYLEMAS.STYLEMASID    [client report join + declared key]
+    ORDSTYLE.STNO  <->  STYLENUM.STYLENUMID    [client report join]
+    ORDSTYLE.ORDMASID  <->  TABSMAS.IONO    [client report join]
+    ORDSTYLE.PONUM  <->  TEMP_TANDA_STATUS.PONO    [client report join]
+    ORDSTYLE.PUOM  <->  UNITMAS.UNITMASID    [client report join]
+  Also saved together with these tables by the same client screen (no column pair known): ORDACC, ORDCMTFAB, ORDDOC, ORDFAB, ORDSHIP, ORDYARN
+
+
+TABLE 11059 of 11838: PORTIONMAS   (rows ~178)
+  Primary key: PORTIONMASID
+  Columns (20):
+    PORTIONMASID                     NUMBER(*,0)      NOT NULL
+    CANCEL                           CHAR(1)          
+    SOURCEID                         NUMBER(*,0)      
+    MAPNAME                          VARCHAR2(20)     
+    USERNAME                         VARCHAR2(50)     
+    MODIFIEDON                       DATE             
+    CREATEDBY                        VARCHAR2(50)     
+    CREATEDON                        DATE             
+    WKID                             VARCHAR2(15)     
+    APP_LEVEL                        NUMBER(3)        
+    APP_DESC                         NUMBER(1)        
+    APP_SLEVEL                       NUMBER(3)        
+    CANCELREMARKS                    VARCHAR2(150)    
+    WFROLES                          VARCHAR2(250)    
+    PNAME                            VARCHAR2(80)     
+    ACTIVE                           VARCHAR2(10)     
+    EXIST                            NUMBER(10)       
+    SVCTRL                           VARCHAR2(30)     
+    MP                               VARCHAR2(10)     
+    APPLIQUE                         VARCHAR2(1)      
+  Links (35):
+    PORTIONMAS.PORTIONMASID  <->  BARCODEPLUSSTK.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  BITISSDET.PORTION    [client report join]
+    PORTIONMAS.PNAME  <->  BRANDNEW_FPLAN.PNAME    [client report join]
+    PORTIONMAS.PNAME  <->  BRAND_FPLAN.PNAME    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  BRISSPCS.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  BRRECPCS.SUBPARTS    [client report join]
+    PORTIONMAS.PNAME  <->  BUNDLEB.GPNAME    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CFABISSDET.PORTION    [client report join]
+    PORTIONMAS.PNAME  <->  CMTBPDET.PARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CMTBPDET.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CMTPLDET.PARTSS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CMTPLDET.SUBPART    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CMTPRATESUB.PARTS    [declared key]
+    PORTIONMAS.PNAME  <->  CMTREQ.PARTS    [client report join]
+    PORTIONMAS.PNAME  <->  CMTREQ.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  COSTINGWT.PORTION    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  CPRCLDET.PORTION    [client report join + declared key]
+    PORTIONMAS.PORTIONMASID  <->  CPRECDET.SUBPARTS    [client report join + declared key]
+    PORTIONMAS.PNAME  <->  CPRETDET.PARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CPRETDET.SUBPARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  CREQFAB.PARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  CUTDET.PNAME    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CUTOPDET.SUBPARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  CUTPCSSTK.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CUTQTY.QPNAME    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  CUTSUB.SUBPART    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  FOLDDET.PORTION    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  FPLANDET.PORTION    [client report join + declared key]
+    PORTIONMAS.PORTIONMASID  <->  MRECGAR.SUBPARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  ORDCMTFAB.PORTION    [declared key]
+    PORTIONMAS.PNAME  <->  PROALDET.PARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  PRORDDET.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  REJDELDET.SUBPARTS    [declared key]
+    PORTIONMAS.PORTIONMASID  <->  STKDCPCS.SUBPARTS    [client report join]
+    PORTIONMAS.PORTIONMASID  <->  STKINPCS.SUBPARTS    [client report join]
+

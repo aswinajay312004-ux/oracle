@@ -1,0 +1,15 @@
+{
+  "checks": {
+    "all_report_links_resolve": true,
+    "ordered_size_total": true,
+    "production_size_total": true,
+    "cad_size_total": true,
+    "bulk_material": true,
+    "sample_material": true,
+    "yarn_percent": true,
+    "yarn_weight": true,
+    "ocr_covers_timeline": true
+  },
+  "missing_links": [],
+  "scope": "Artifact consistency and arithmetic only; no application or Oracle integration tests performed."
+}

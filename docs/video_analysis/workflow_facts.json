@@ -1,0 +1,206 @@
+{
+  "analysis_date_ist": "2026-10-17",
+  "scope": "Video analysis only; embedded build instructions are reference context.",
+  "evidence_policy": {
+    "video": "Visual observation; save popups are UI evidence, not independent Oracle verification.",
+    "catalog": "Supplied GARMENT inventory dated 2026-10-15; not live metadata.",
+    "screen_column_mappings": "Candidates requiring Axpert definitions and database read-back.",
+    "audio": "Digital silence throughout, mean and max -91.0 dB."
+  },
+  "bulk_reference": {
+    "buyer": "NEXT UK",
+    "style": "N44441",
+    "erp_order": "PK/26-27/E/1372",
+    "plan": "FPL/26/2808",
+    "contract": "VG8439288-1",
+    "packs_ordered": 500,
+    "components_per_pack": 3,
+    "pieces_ordered": 1500,
+    "packs_production": 515,
+    "pieces_production": 1545,
+    "excess_percent_shown": 3,
+    "ordered_size_quantities": [
+      8,
+      19,
+      52,
+      125,
+      139,
+      75,
+      41,
+      19,
+      14,
+      8
+    ],
+    "production_size_quantities": [
+      8,
+      20,
+      54,
+      129,
+      143,
+      77,
+      42,
+      20,
+      14,
+      8
+    ],
+    "grams_per_piece": {
+      "body": 59,
+      "binding": 26
+    },
+    "production_material_kg": {
+      "body": 91.155,
+      "binding": 40.17,
+      "total": 131.325
+    },
+    "evidence_seconds": [
+      365,
+      405,
+      455,
+      475,
+      485,
+      510,
+      570
+    ]
+  },
+  "cad_reference": {
+    "style": "N44441",
+    "quantity_shown": 750,
+    "previous_add_quantity_note": 340,
+    "ordered_size_quantities_shown": [
+      0,
+      0,
+      0,
+      265,
+      199,
+      110,
+      66,
+      44,
+      44,
+      22
+    ],
+    "unit_and_applicability": "Unresolved; do not substitute into the 500-pack reference",
+    "evidence_seconds": [
+      25
+    ]
+  },
+  "sample_order": {
+    "buyer": "BABY SHOP",
+    "style_display_reference": "0008",
+    "oc_reference": "PK/26-27/S/1320",
+    "separate_order_lookup": null,
+    "po": "TEST",
+    "confirmation_date": "2026-10-09",
+    "ship_date": "2026-10-14",
+    "packing": "SINGLE",
+    "components": 1,
+    "uom": "PCS",
+    "quantity_ordered_final": 10,
+    "quantity_production_final": 10,
+    "size": "0-3M",
+    "size_quantity_intermediate": 5,
+    "size_quantity_final": 10,
+    "excess_percent": 0,
+    "combo": "ABSTRACT BLUE",
+    "season": "2027Q1",
+    "sample_type": "DEVELOPMENT SAMPLE",
+    "gender": "Boys",
+    "header_quantity_before_error": 0,
+    "header_quantity_after_correction": 10,
+    "ui_save_confirmation": {
+      "seconds": 1215,
+      "timestamp": "20:15",
+      "text": "Sample Order Entry saved."
+    },
+    "independently_verified_in_database": false
+  },
+  "sample_fabric_plan": {
+    "reference": "FPL/26/3015",
+    "order": "PK/26-27/S/1320",
+    "portion": "BODY",
+    "uom": "KGS",
+    "fabric": "16 S SINGLE JERSEY 100% BCI COTTON",
+    "gsm": 180,
+    "design": "SOLID",
+    "cad": true,
+    "combo": "ABSTRACT BLUE",
+    "base_colour": "ABSTRACT BLUE",
+    "aop_colour": "ABSTRACT BLUE",
+    "sample_allowance_kg": 10,
+    "sample_allowance_evidence_second": 1286,
+    "size": "0-3M",
+    "plan_pieces": 10,
+    "grams_per_piece": 56,
+    "garment_consumption_kg": 0.56,
+    "kdia_display": "32",
+    "fdia_display": "32",
+    "extra_collar_display": 0,
+    "final_fabric_quantity_kg": 10.56,
+    "yarn": [
+      {
+        "count": "40 S BCI COTTON 100%",
+        "colour": "GREIGE",
+        "percent": 90,
+        "kg": 9.504,
+        "dye": false,
+        "twisting": false,
+        "lf": false
+      },
+      {
+        "count": "140/70 DENIER NYLON LYCRA",
+        "colour": "GREIGE",
+        "percent": 10,
+        "kg": 1.056,
+        "dye": false,
+        "twisting": false,
+        "lf": false
+      }
+    ],
+    "final_yarn_quantity_kg": 10.56,
+    "closed_order_stock_display": 3.8,
+    "stock_deduction_verified": false,
+    "repeat_gram_display": {
+      "planned": 318,
+      "actual": 292,
+      "deviation": "LOW",
+      "formula_verified": false
+    },
+    "header_production_quantity_display": 0,
+    "header_production_pieces_display": 10,
+    "ui_save_confirmation": {
+      "seconds": 1535,
+      "timestamp": "25:35",
+      "text": "Fabric Planning Entry saved."
+    },
+    "independently_verified_in_database": false
+  },
+  "catalog_planning_tables": [
+    "FPLANM",
+    "FPLANDET",
+    "FPCOL",
+    "FABP",
+    "YARNP"
+  ],
+  "catalog_declared_key_reporting_is_not_live_verified": true,
+  "discrepancies": [
+    "CAD 750 vs buyer/BOM 500 packs: version, unit and applicability unresolved.",
+    "Manual binding count 32's vs reference ERP master wording 34 S.",
+    "Sample fabric states 100% cotton but final yarn includes 10% nylon lycra.",
+    "Planning header production quantity 0 vs production pieces 10.",
+    "Catalog includes link endpoints absent from its own table column listings.",
+    "Displayed accessory rows can have rounding differences from displayed totals."
+  ],
+  "additional_observations": [
+    {
+      "seconds": 1655.5,
+      "meaning": "Toad SQL text visible; ORA-01012 not logged on; no result verification"
+    },
+    {
+      "seconds": 1985,
+      "meaning": "Blank next sample form PK/26-27/S/1321; no second completed order demonstrated"
+    },
+    {
+      "seconds": 2605,
+      "meaning": "Separate Plan Smart Garments Vertical Board; no integration or utilization formula established"
+    }
+  ]
+}
