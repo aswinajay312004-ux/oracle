@@ -30,10 +30,22 @@ def schema(conn, mapping=None):
     return OracleCatalog(conn).columns(registry.referenced_tables(mapping or current_mapping()))
 
 
-def masters(conn, mapping=None):
+def masters(conn, mapping=None, roles=None):
+    """{role: [{id, label, cancelled}]} for the visible masters. With roles, only those masters, and one that
+    cannot be listed (larger than the lookup limit, no grant) is left out instead of failing the others."""
     mapping = mapping or current_mapping(); cat = OracleCatalog(conn)
     visible = cat.columns(registry.referenced_tables(mapping))
-    return {role: cat.masters(spec) for role, spec in mapping['masters'].items() if spec['table'] in visible}
+    if roles is None:
+        return {role: cat.masters(spec) for role, spec in mapping['masters'].items() if spec['table'] in visible}
+    out = {}
+    for role in roles:
+        spec = mapping['masters'].get(role)
+        if spec and spec['table'] in visible:
+            try:
+                out[role] = cat.masters(spec)
+            except (ValueError, oracledb.Error):
+                continue
+    return out
 
 
 def plan(conn, orders, filehash, mapping=None, required=()):

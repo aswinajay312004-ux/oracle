@@ -42,7 +42,8 @@ def build():
                           ('SIZE_MAS', 'SIZE_MASID', 'SIZES'), ('COLORMAS', 'COLORMASID', 'COLOR'), ('UNITMAS', 'UNITMASID', 'UOM'), ('MERCHMAS', 'MERCHMASID', 'NAME')]:
         masters[t] = [dict(id=k, label=v, cancelled=c == 'T') for k, v, c in conn.execute(f'SELECT {key},{label},CANCEL FROM {t}')]
     fake = FakeOracle(masters=masters).install(Patch())
-    oracle_store.masters = lambda c, mapping=None: {role: [dict(x) for x in masters.get(spec['table'], [])] for role, spec in registry.effective()['masters'].items()}
+    oracle_store.masters = lambda c, mapping=None, roles=None: {role: [dict(x) for x in masters.get(spec['table'], [])]
+                                                                for role, spec in registry.effective()['masters'].items() if roles is None or role in roles}
     commit = fake.commit
 
     def commit_and_copy(draft, expected_hash, approver, mapping=None):

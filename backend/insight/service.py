@@ -25,6 +25,7 @@ SNAPSHOT = ROOT / 'docs' / 'live_schema_columns.json'
 CACHE = 'knowledge_physical.json'
 VALUE_META = 'value_index_meta.json'
 VALUE_CAP = 20000          # distinct values indexed per column (the newest ones when a column has more)
+CLOSED_LIST = 1000         # a fully indexed column with at most this many values is a category list (sample type…)
 BIG_TABLE = 2_000_000      # detail tables bigger than this are looked up live instead of indexed
 SCAN_ROWS = 100_000        # above this, live lookups use index-friendly col = :v only (no UPPER/TRIM full scans)
 TIMEOUT_MS = _ms('QUERY_TIMEOUT_S', 20)   # any one read-only query (QUERY_TIMEOUT_S=30 in .env.poppys to allow more)
@@ -39,8 +40,9 @@ class TimedOut(QueryError):
     """A read that hit its time limit. The message is shown as-is (Ask AI 'refused', explorer 409)."""
 
     def __init__(self, seconds):
-        super().__init__(f'The database needed more than {seconds:g} seconds for this, so POPPYS AI stopped the query to keep '
-                         'the app responsive. Narrow it down (an order reference, a buyer, a date range or an exact match) and try again.')
+        super().__init__(f'The database needed more than {seconds:g} seconds for this, so POPPYS AI stopped the query to keep the app '
+                         'responsive. Try a narrower question (one buyer, one order or a shorter date range). If this keeps happening, '
+                         'an administrator can allow more time (QUERY_TIMEOUT_S in .env.poppys).')
 
 
 def timed_out(exc):
@@ -263,9 +265,9 @@ def indexable(kb):
 
 def refresh_values(kb, execute, dialect):
     """Distinct values of searchable columns, at most VALUE_CAP per column. A column with more distinct values is
-    'partial': it keeps the values of its newest rows (read through the record-ID index, so cheap on any size),
-    and only partial columns are looked up live for codes the index has not seen (see lookup_plan)."""
-    rows = []; done = []; skipped = []; partial = []; started = time.time()
+    'partial': it keeps the values of its newest rows (read through the record-ID index, so cheap on any size).
+    The value counts saved beside the index tell lookup_plan which columns are short, closed category lists."""
+    rows = []; done = []; skipped = []; partial = []; counts = {}; started = time.time()
     for t, c in indexable(kb):
         meta = kb.table(t); key = meta.get('key')
         try:
@@ -280,12 +282,12 @@ def refresh_values(kb, execute, dialect):
                 v = str(value).strip()
                 if v and len(v) <= 120:
                     rows.append((t, c, v, norm(v), int(n)))
-            done.append(f'{t}.{c}')
+            done.append(f'{t}.{c}'); counts[f'{t}.{c}'] = len(found)
         except Exception as exc:
             skipped.append(f'{t}.{c}: {str(exc)[:80]}')
     store.replace_values(rows)
     meta = dict(refreshed_at=datetime.now(timezone.utc).isoformat(timespec='seconds'), complete=sorted(set(done) - set(partial)),
-                partial=partial, seconds=round(time.time() - started, 1))
+                partial=partial, counts=counts, seconds=round(time.time() - started, 1))
     try:
         (store.DATA / VALUE_META).write_text(json.dumps(meta), encoding='utf-8')   # beside the value index itself
     except OSError:
@@ -293,12 +295,16 @@ def refresh_values(kb, execute, dialect):
     return dict(columns=len(done), values=len(rows), skipped=skipped, partial=partial, seconds=meta['seconds'])
 
 
-def complete_values():
-    """Columns whose every distinct value is in the value index (set at the last refresh)."""
+def closed_lists():
+    """Columns that are a short list of categories (sample type, order category…) held completely in the value
+    index at the last refresh. Code columns such as order references are never 'closed': they grow with every
+    order saved in Axpert, and the value index does not see those until the next refresh."""
     try:
-        return set(json.loads((store.DATA / VALUE_META).read_text(encoding='utf-8')).get('complete', []))
+        meta = json.loads((store.DATA / VALUE_META).read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return set()
+    counts = meta.get('counts') or {}
+    return {c for c in meta.get('complete', []) if counts.get(c, CLOSED_LIST + 1) <= CLOSED_LIST}
 
 
 def finder(kb):
@@ -327,13 +333,13 @@ def finder(kb):
     return find
 
 
-def lookup_plan(kb, complete=None):
+def lookup_plan(kb, closed=None):
     """Live lookups in three tiers, cheapest first; a tier runs only when the ones before it found nothing.
     1 small tables: tolerant UPPER(TRIM(col)) = :v (cheap, forgives case and spaces)
     2 big tables, indexed columns: exact col = :v (an index probe)
-    3 big tables, other columns: exact col = :v (a full scan, kept short by the time limit)
-    Big-table columns whose values are all in the value index are skipped: a new code cannot hide there."""
-    complete = complete_values() if complete is None else complete
+    3 big tables, other columns: exact col = :v (a full scan, kept short by the time limit), except closed
+      category lists, which the value index already holds completely."""
+    closed = closed_lists() if closed is None else closed
     indexed = getattr(kb, 'indexed', None)
     tiers = ([], [], [])
     for t, tb in kb.tables.items():
@@ -346,8 +352,10 @@ def lookup_plan(kb, complete=None):
                 continue
             if small:
                 tiers[0].append((t, c, m))
-            elif f'{t}.{c}' not in complete:
-                tiers[1 if indexed is None or f'{t}.{c}' in indexed else 2].append((t, c, m))
+            elif indexed is None or f'{t}.{c}' in indexed:
+                tiers[1].append((t, c, m))
+            elif f'{t}.{c}' not in closed:
+                tiers[2].append((t, c, m))
     return tiers
 
 

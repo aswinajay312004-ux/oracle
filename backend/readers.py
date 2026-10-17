@@ -33,6 +33,9 @@ sensitivity-label files, and other Office documents (Word, PowerPoint, Outlook e
 Safety: cell contents are data only - nothing is evaluated or executed. Sizes are capped before any
 parser runs (bytes, real decompressed zip sizes, cells, sheets, merged areas, nesting), and read()
 parses in a separate worker process with a time limit and a memory cap (backend/isolation.py).
+Environment: POPPYS_PARSE_TIMEOUT (seconds, default 60), POPPYS_PARSE_MEMORY_MB (default 1536),
+POPPYS_PARSE_WORKERS (parallel uploads, default 2), POPPYS_INLINE_PARSE=1 (no worker: tests only).
+selfcheck() reports the parser platform (Python, Expat, packages, isolation) for the health page.
 """
 from __future__ import annotations
 import bisect
@@ -70,8 +73,18 @@ MAX_MERGE_AREA = 10_000        # cells in one merged range; larger ranges are ig
 MAX_MERGES = 20_000            # merged ranges kept per sheet
 MAX_SPAN_CELLS = 1_000_000     # cells covered by row-spans in one HTML page
 EXCEL_ROWS, EXCEL_COLS = 1_048_576, 16_384
-PARSE_TIMEOUT = 60             # seconds per upload (worker process)
-PARSE_MEMORY = 1536 * 1024 * 1024
+
+
+def _env_int(name, default, low, high):
+    try:
+        return max(low, min(int(os.environ.get(name) or default), high))
+    except ValueError:
+        return default
+
+
+# Worker limits per upload; an administrator can raise them for a laptop that reads very large workbooks.
+PARSE_TIMEOUT = _env_int('POPPYS_PARSE_TIMEOUT', 60, 10, 600)                          # seconds
+PARSE_MEMORY = _env_int('POPPYS_PARSE_MEMORY_MB', 1536, 256, 16384) * 1024 * 1024        # bytes
 INLINE_ENV = 'POPPYS_INLINE_PARSE'     # '1': parse in this process (tests, debugging)
 
 OLE2 = b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'
@@ -727,8 +740,10 @@ def _read_inline(content, filename=''):
         raise Unreadable(WORKER_MESSAGES['memory']) from None
     except RecursionError:
         raise Unreadable(f'This {NOUNS[kind]} is nested too deeply to read. Save it again from the program that made it and upload.') from None
-    except Exception as exc:   # library errors of every kind (zip, compound document, assertions, csv, XML)
-        log.warning('%s reader failed: %s: %s', kind, type(exc).__name__, str(exc)[:300])
+    except INTERRUPTS:
+        raise
+    except BaseException as exc:   # library errors of every kind (zip, compound document, assertions, csv, XML)
+        log.warning('%s reader failed: %s: %s', kind, type(exc).__name__, str(exc)[:300])   # and native panics
         raise Unreadable(f'This {NOUNS[kind]} could not be read. Open it in Excel, save it again as an Excel Workbook (.xlsx) and upload.') from exc
     sheets = [s for s in sheets if s['cells'] or not s['hidden']]
     if not sheets:
@@ -977,7 +992,24 @@ def _xls_value(book, cell, xlrd):
 
 
 # --- .xlsb .ods (calamine) ---------------------------------------------------------------------------
+INTERRUPTS = (KeyboardInterrupt, SystemExit, GeneratorExit)
+
+
 def _calamine_builders(content, note=None):
+    """Builders for every worksheet calamine reads. A panic inside the Rust library (pyo3's
+    PanicException derives from BaseException, not Exception) becomes a plain refusal."""
+    try:
+        return _calamine_sheets(content, note)
+    except INTERRUPTS:
+        raise
+    except Exception:
+        raise
+    except BaseException as exc:
+        log.warning('calamine panicked: %s', str(exc)[:200])
+        raise Unreadable(MSG_CANNOT_OPEN) from exc
+
+
+def _calamine_sheets(content, note):
     import python_calamine as pc
     try:
         book = pc.CalamineWorkbook.from_filelike(BytesIO(content))
@@ -1026,8 +1058,8 @@ def read_zip_calamine(content):
 
 
 def read_ods(content):
-    """calamine for values; a capped pass over content.xml for merges and hidden rows/columns, which
-    calamine does not give for ODS."""
+    """calamine for values; a capped pass over styles.xml and content.xml for merges, hidden rows and
+    columns and digits-only number styles (codes such as 0008), which calamine does not give for ODS."""
     _zip_guard(content)
     builders = _calamine_builders(content)
     try:
@@ -1038,7 +1070,8 @@ def read_ods(content):
         log.info('ODS layout pass failed (%s: %s)', type(exc).__name__, str(exc)[:200])
         return [b.sheet() for b in builders]
     for b in builders:
-        b.capabilities.update(merged=True, hidden_rows=True, hidden_cols=True); b.reader = 'calamine+layout'
+        b.capabilities.update(merged=True, hidden_rows=True, hidden_cols=True, number_formats=True)
+        b.reader = 'calamine+layout'
         info = layout.get(b.name)
         if not info:
             continue
@@ -1048,6 +1081,11 @@ def read_ods(content):
             b.hidden_rows.add(first, last)
         for first, last in info['cols']:
             b.hidden_cols.add(first, last)
+        for key, code in info['formats'].items():
+            cell = b.cells.get(key)
+            if cell is not None and isinstance(cell['value'], (int, float)) and not isinstance(cell['value'], bool):
+                value, extras = _formatted(cell['value'], code)
+                cell['value'] = value; cell.update(extras)
     return [b.sheet() for b in builders]
 
 
@@ -1058,19 +1096,89 @@ def _repeat(value, limit):
         return 1
 
 
+ODF_TABLE = '{urn:oasis:names:tc:opendocument:xmlns:table:1.0}'
+ODF_STYLE = '{urn:oasis:names:tc:opendocument:xmlns:style:1.0}'
+ODF_NUMBER = '{urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0}'
+ODF_OFFICE = '{urn:oasis:names:tc:opendocument:xmlns:office:1.0}'
+MAX_STYLES = 10_000
+
+
+def _ods_code(style):
+    """An Excel-style format code for a digits-only ODS number style (min-integer-digits, embedded
+    and leading/trailing text), or None for anything else (decimals, grouping, conditions, ...)."""
+    parts, numbers = [], 0
+    for child in style:
+        if child.tag == ODF_NUMBER + 'text':
+            text = ''.join(child.itertext()).replace('"', '')
+            if text:
+                parts.append(f'"{text}"')
+        elif child.tag == ODF_NUMBER + 'number':
+            if child.get(ODF_NUMBER + 'grouping') == 'true' or (child.get(ODF_NUMBER + 'decimal-places') or '0') != '0':
+                return None
+            numbers += 1
+            digits = _repeat(child.get(ODF_NUMBER + 'min-integer-digits'), 30)
+            texts = {}
+            for embedded in child.findall(ODF_NUMBER + 'embedded-text'):
+                position = _repeat(embedded.get(ODF_NUMBER + 'position'), 30)
+                texts[min(position, digits)] = ''.join(embedded.itertext()).replace('"', '')
+            body = [f'"{texts[digits]}"'] if texts.get(digits) else []
+            for i in range(digits):
+                body.append('0')
+                right = digits - i - 1
+                if right and texts.get(right):
+                    body.append(f'"{texts[right]}"')
+            parts.append(''.join(body))
+        elif child.tag in (ODF_NUMBER + 'scientific-number', ODF_NUMBER + 'fraction', ODF_STYLE + 'map'):
+            return None
+    return ''.join(parts) if numbers == 1 else None
+
+
+def _ods_style_event(el, numbers, cells):
+    """Record a finished number style or table-cell style element; True when it was one."""
+    if el.tag == ODF_NUMBER + 'number-style' and len(numbers) < MAX_STYLES:
+        numbers[el.get(ODF_STYLE + 'name')] = _ods_code(el)
+    elif el.tag == ODF_STYLE + 'style' and el.get(ODF_STYLE + 'family') == 'table-cell' and len(cells) < MAX_STYLES:
+        cells[el.get(ODF_STYLE + 'name')] = (el.get(ODF_STYLE + 'data-style-name'), el.get(ODF_STYLE + 'parent-style-name'))
+    else:
+        return False
+    return True
+
+
 def _ods_layout(content):
-    """{sheet name: {'merges': [(r0, c0, r1, c1)], 'rows': [(first, last)], 'cols': [(first, last)]}} from
-    a streaming defusedxml pass; repeated rows and columns are counted, never expanded."""
+    """{sheet name: {'merges': [(r0, c0, r1, c1)], 'rows': [(first, last)], 'cols': [(first, last)],
+    'formats': {(row, col): code}}} from streaming defusedxml passes; repeated rows and columns are
+    counted, never expanded."""
     from defusedxml.ElementTree import iterparse
-    T = '{urn:oasis:names:tc:opendocument:xmlns:table:1.0}'
+    T = ODF_TABLE
     TABLE, COLUMN, ROW, CELL, COVERED = T + 'table', T + 'table-column', T + 'table-row', T + 'table-cell', T + 'covered-table-cell'
     HIDDEN = ('collapse', 'filter')
-    layouts = {}; current = None; depth = 0; row = 0; repeat_rows = 1; col = 0; colpos = 0; stack = []
+    numbers, cell_styles, resolved = {}, {}, {}
+
+    def code_for(style):
+        """The digits-only code of a cell style, following parent styles to the first data style."""
+        if style not in resolved:
+            code, name, seen = None, style, set()
+            while name and name not in seen and len(seen) < 20:
+                seen.add(name)
+                data_style, parent = cell_styles.get(name, (None, None))
+                if data_style:
+                    code = numbers.get(data_style)
+                    break
+                name = parent
+            resolved[style] = code
+        return resolved[style]
+
+    layouts = {}; current = None; depth = 0; row = 0; repeat_rows = 1; row_style = None; col = 0; colpos = 0; stack = []
     with zipfile.ZipFile(BytesIO(content)) as archive:
-        info = next((i for i in archive.infolist() if _zname(i.filename) == 'content.xml'), None)
-        if info is None:
+        members = {_zname(i.filename): i for i in archive.infolist()}
+        if 'styles.xml' in members:
+            with archive.open(members['styles.xml']) as stream:
+                for _, el in iterparse(stream, events=('end',), forbid_dtd=True):
+                    if _ods_style_event(el, numbers, cell_styles):
+                        el.clear()
+        if 'content.xml' not in members:
             return {}
-        with archive.open(info) as stream:
+        with archive.open(members['content.xml']) as stream:
             for event, el in iterparse(stream, events=('start', 'end'), forbid_dtd=True):
                 tag = el.tag
                 if event == 'start':
@@ -1079,7 +1187,7 @@ def _ods_layout(content):
                         depth += 1
                         if depth == 1:
                             name = (el.get(T + 'name') or 'Sheet1')[:120]
-                            current = layouts.setdefault(name, {'merges': [], 'rows': [], 'cols': []})
+                            current = layouts.setdefault(name, {'merges': [], 'rows': [], 'cols': [], 'formats': {}, 'colstyles': [], 'colstarts': []})
                             row = 0; colpos = 0
                         continue
                     if current is None or depth != 1:
@@ -1088,18 +1196,32 @@ def _ods_layout(content):
                         n = _repeat(el.get(T + 'number-columns-repeated'), EXCEL_COLS)
                         if el.get(T + 'visibility') in HIDDEN and colpos < EXCEL_COLS:
                             current['cols'].append((colpos + 1, min(colpos + n, EXCEL_COLS)))
+                        if el.get(T + 'default-cell-style-name') and len(current['colstyles']) < MAX_STYLES and colpos < EXCEL_COLS:
+                            current['colstarts'].append(colpos + 1)       # increasing: columns come in order
+                            current['colstyles'].append((min(colpos + n, EXCEL_COLS), el.get(T + 'default-cell-style-name')))
                         colpos = min(colpos + n, EXCEL_COLS)
                     elif tag == ROW:
                         repeat_rows = _repeat(el.get(T + 'number-rows-repeated'), EXCEL_ROWS); col = 0
+                        row_style = el.get(T + 'default-cell-style-name')
                         if el.get(T + 'visibility') in HIDDEN and row < EXCEL_ROWS:
                             current['rows'].append((row + 1, min(row + repeat_rows, EXCEL_ROWS)))
                     elif tag in (CELL, COVERED):
                         n = _repeat(el.get(T + 'number-columns-repeated'), EXCEL_COLS)
-                        if tag == CELL and row < EXCEL_ROWS and col < EXCEL_COLS and len(current['merges']) < MAX_MERGES * 2:
+                        if tag == CELL and row < EXCEL_ROWS and col < EXCEL_COLS:
                             across = _repeat(el.get(T + 'number-columns-spanned'), EXCEL_COLS)
                             down = _repeat(el.get(T + 'number-rows-spanned'), EXCEL_ROWS)
-                            if across > 1 or down > 1:
+                            if (across > 1 or down > 1) and len(current['merges']) < MAX_MERGES * 2:
                                 current['merges'].append((row + 1, col + 1, min(row + down, EXCEL_ROWS), min(col + across, EXCEL_COLS)))
+                            if el.get(ODF_OFFICE + 'value-type') == 'float' and len(current['formats']) < MAX_CELLS:
+                                style = el.get(T + 'style-name') or row_style
+                                if not style:
+                                    i = bisect.bisect_right(current['colstarts'], col + 1) - 1
+                                    if i >= 0 and col + 1 <= current['colstyles'][i][0]:
+                                        style = current['colstyles'][i][1]
+                                code = code_for(style) if style else None
+                                if code:
+                                    for k in range(min(n, EXCEL_COLS - col, MAX_CELLS - len(current['formats']))):
+                                        current['formats'][(row + 1, col + 1 + k)] = code
                         col = min(col + n, EXCEL_COLS)
                 else:
                     stack.pop()
@@ -1109,6 +1231,8 @@ def _ods_layout(content):
                             current = None
                     elif tag == ROW and depth == 1 and current is not None:
                         row = min(row + repeat_rows, EXCEL_ROWS)
+                    elif depth == 0 and _ods_style_event(el, numbers, cell_styles):
+                        resolved.clear()                # automatic styles come before the tables
                     if tag in (TABLE, ROW):
                         el.clear()
                         if stack:

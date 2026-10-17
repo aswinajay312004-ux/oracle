@@ -3,6 +3,7 @@ index that keeps the newest values of big columns, time-limited counts, explorer
 answer, plain-English timeouts and sampled discovery. The fast tests use SQLite and fakes; the last section
 runs on the local Oracle when POPPYS_TEST_ORACLE=1."""
 from contextlib import contextmanager
+import json
 import os
 import time
 import pytest
@@ -45,12 +46,12 @@ def on(sql, *tables):
 
 
 # --- live lookups -----------------------------------------------------------------------------------
-def test_lookup_plan_puts_cheap_lookups_first_and_skips_fully_indexed_big_columns():
-    small, indexed, scan = ({(t, c) for t, c, _ in tier} for tier in service.lookup_plan(big_kb(), complete={'ORDMAS.SAMPLETYPE'}))
+def test_lookup_plan_puts_cheap_lookups_first_and_skips_closed_category_lists():
+    small, indexed, scan = ({(t, c) for t, c, _ in tier} for tier in service.lookup_plan(big_kb(), closed={'ORDMAS.SAMPLETYPE', 'ORDMAS.DOCID'}))
     assert ('BUYMAS', 'BUYERNAME') in small and ('STYLENUM', 'STYLENUMBER') in small
-    assert indexed == {('ORDMAS', 'DOCID')}
+    assert indexed == {('ORDMAS', 'DOCID')}                          # an index probe is cheap: never skipped
     assert ('ORDMAS', 'BONO') in scan and ('ORDMAS', 'SAMPLETYPE') not in scan | indexed | small
-    unknown = service.lookup_plan(big_kb(indexed=None), complete=set())   # harvested before index info: try every big column as indexed
+    unknown = service.lookup_plan(big_kb(indexed=None), closed=set())   # harvested before index info: try every big column as indexed
     assert ('ORDMAS', 'BONO') in {(t, c) for t, c, _ in unknown[1]} and not unknown[2]
 
 
@@ -69,7 +70,9 @@ def test_live_finder_uses_the_index_and_never_upper_trim_on_big_tables(tmp_path,
 
 def test_unknown_word_scans_only_partial_columns_and_numbers_only_for_digits(tmp_path, monkeypatch):
     monkeypatch.setattr(local_store, 'DATA', tmp_path)
-    (tmp_path / service.VALUE_META).write_text('{"complete": ["ORDMAS.SAMPLETYPE", "ORDMAS.ORDCATEGORY"]}', encoding='utf-8')
+    (tmp_path / service.VALUE_META).write_text(json.dumps(dict(   # BONO is complete too, but a growing code column: still probed
+        complete=['ORDMAS.SAMPLETYPE', 'ORDMAS.ORDCATEGORY', 'ORDMAS.BONO'], counts={'ORDMAS.SAMPLETYPE': 2, 'ORDMAS.ORDCATEGORY': 3, 'ORDMAS.BONO': 15000})))
+    assert service.closed_lists() == {'ORDMAS.SAMPLETYPE', 'ORDMAS.ORDCATEGORY'}
     spy = Spy(answer=lambda *a: [])
     assert service.live_finder(big_kb(), spy, ORACLE)('PK/26-27/S/9999') == []
     probed = {c for s in spy.sql if on(s, 'ORDMAS', 'ORDSTYLE') for c in ('DOCID', 'BONO', 'SAMPLETYPE', 'ORDCATEGORY', 'COMBO') if f'WHERE {c} ' in s}
@@ -151,8 +154,8 @@ def test_value_index_keeps_newest_values_of_partial_columns_and_indexes_big_head
         types = {x[0] for x in c.execute("SELECT value FROM value_index WHERE tbl='ORDMAS' AND col='SAMPLETYPE'")}
     assert docids == {'NEW/1', 'NEW/2', 'NEW/3', 'NEW/4'}             # the newest orders, not an arbitrary 4
     assert types == {'DEVELOPMENT SAMPLE', 'BULK'}                    # a 3M-row order header is still indexed
-    complete = service.complete_values()
-    assert 'ORDMAS.SAMPLETYPE' in complete and 'BUYMAS.BUYERNAME' in complete and 'ORDMAS.DOCID' not in complete
+    closed = service.closed_lists()
+    assert 'ORDMAS.SAMPLETYPE' in closed and 'BUYMAS.BUYERNAME' in closed and 'ORDMAS.DOCID' not in closed
 
 
 # --- explorer and counts ----------------------------------------------------------------------------
@@ -224,7 +227,7 @@ def test_contains_filter_on_a_very_large_table_skips_the_count_and_explains_a_ti
         return inner(sql, binds, n)
     s['spy'].answer = slow_like
     r = c.get('/api/explorer/tables/ORDSIZE', params=dict(column='SUB3_SUBNO', value='1012'))
-    assert r.status_code == 409 and '“is exactly”' in r.json()['detail'] and '24,000,000' in r.json()['detail']
+    assert r.status_code == 409 and '“is exactly”' in r.json()['detail'] and 'every row of Size quantity' in r.json()['detail']
     assert c.get('/api/explorer/tables/ORDSIZE', params=dict(after='abc')).status_code == 422
 
 

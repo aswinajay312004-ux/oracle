@@ -11,7 +11,7 @@ Keep this file ASCII-only: Windows PowerShell 5.1 reads scripts without a BOM as
 #>
 # No param block on purpose: pytest flags such as -s or -k would be taken for PowerShell parameters.
 $Step = if ($args.Count) { [string]$args[0] } else { 'all' }
-$PytestArgs = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] } else { @() }
+$PytestArgs = @($args | Select-Object -Skip 1)   # always an array, even for one argument
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
@@ -57,6 +57,8 @@ function Test-Secrets {
   try {
     [System.IO.File]::WriteAllText($list, ($SecretPatterns -join "`n") + "`n")   # LF: one pattern per line
     $hits = @(git grep --untracked -n -I -E -f $list -- .)
+    # git grep exits 1 when nothing matches; anything above 1 is a broken scan, which must not pass as clean.
+    if ($LASTEXITCODE -gt 1) { Write-Host '  the scan itself failed (git grep)'; $bad = $true }
   } finally { Remove-Item $list -Force }
   foreach ($h in $hits) { $where = ($h -split ':')[0..1] -join ':'; Write-Host "  possible password or key at $where"; $bad = $true }
   if ($bad) { return (Write-Fail 'remove the file or value above (passwords belong in .env.poppys, which git ignores).') }

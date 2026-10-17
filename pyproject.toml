@@ -43,15 +43,16 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# backend/workbooks.py ignores B023 (below): its small readers defined inside a loop run in the same iteration.
 "tests/**" = [
     "B017",   # pytest.raises(Exception) is used where the Oracle driver error type does not matter
     "S307",   # tests/fixtures.py evaluates its own arithmetic formulas when building workbooks
 ]
-# Known findings, listed in the CI report for the owners of these files to fix. Remove each line once fixed
-# so the rule protects that file again (`ruff check --fix` removes the unused imports safely).
+# B023: the small readers defined inside a loop run in the same iteration, so they never see a later value.
+# F401: a known finding (below).
+"backend/workbooks.py" = ["B023", "F401"]
+# Known findings, reported to the owners of these files: unused imports (F401) and unused variables (F841).
+# Remove each entry once fixed so the rule protects that file again; `ruff check --fix` removes the imports safely.
 "backend/insight/engine.py" = ["F401", "F841"]
 "backend/insight/service.py" = ["F401"]
 "backend/insight/understand.py" = ["F401"]
 "backend/main.py" = ["F841"]
-"backend/workbooks.py" = ["B023", "F401"]   # F401 is a known finding; B023 as explained above

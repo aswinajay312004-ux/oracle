@@ -1,4 +1,5 @@
-# POPPYS AI continuous integration. Every job runs the same scripts/check.sh step a laptop can run.
+# POPPYS AI continuous integration. The checks run through scripts/check.sh (Linux) and scripts/check.ps1
+# (Windows), the same scripts a laptop runs before pushing, so CI and local results agree.
 #   secrets  - no settings files, local data or passwords committed (own rules + gitleaks over all history)
 #   lint     - ruff with the bug-catching rules in pyproject.toml
 #   js       - frontend ES modules parse, and keep to the strict content-security rules
@@ -21,6 +22,10 @@ permissions:
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}   # a newer push replaces an older run, except on main
+
+defaults:
+  run:
+    shell: bash   # bash --noprofile --norc -eo pipefail: a failing command anywhere in a pipe fails the step
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: '1'

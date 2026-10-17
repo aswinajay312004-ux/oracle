@@ -290,10 +290,11 @@ def current_fields():
 
 def master_labels():
     """Known buyer / colour / size names from the Oracle masters, so the matcher can recognise values.
-    Empty when Oracle is not reachable: matching then relies on labels and value shapes only."""
+    Empty when Oracle is not reachable: matching then relies on labels and value shapes only. Only these three
+    masters are read, each on its own, so a large style or party master never hides the buyer names."""
     try:
         with oracle.connect() as conn:
-            found = oracle.masters(conn) or {}
+            found = oracle.masters(conn, roles=('buyer', 'color', 'size')) or {}
     except Exception:
         return {}
     return {role: [m.get('label') for m in found.get(role) or [] if not m.get('cancelled')] for role in ('buyer', 'color', 'size')}
@@ -1192,8 +1193,8 @@ def explorer_rows(table: str, column: str | None = None, value: str | None = Que
             rows = _rows(execute, sql, page_binds, names, limit)
         except QueryError as exc:
             if where and not exact and big:
-                raise HTTPException(409, f'Looking for “{value}” anywhere inside {meta["columns"][column]["business"]} means reading all '
-                                         f'≈ {meta["rows"]:,} rows of {meta["business"]}, which took too long. Choose “is exactly” to look up a '
+                raise HTTPException(409, f'Looking for “{value}” anywhere inside {meta["columns"][column]["business"]} means reading every row '
+                                         f'of {meta["business"]} (a very large table), which took too long. Choose “is exactly” to look up a '
                                          'whole value (an order reference or record ID), or filter a smaller linked table.')
             raise HTTPException(409, str(exc))
         if not paging and not offset and len(rows) < limit:

@@ -116,7 +116,7 @@ def git(repo, *args):
 
 def check(repo, step, ps=False):
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_') and k != 'CI'}
-    cmd = [PWSH, '-NoProfile', '-File', 'scripts/check.ps1', step] if ps else [BASH, 'scripts/check.sh', step]
+    cmd = [PWSH, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/check.ps1', step] if ps else [BASH, 'scripts/check.sh', step]
     r = subprocess.run(cmd, cwd=repo, env=env, capture_output=True, text=True, timeout=120)
     return r.returncode, r.stdout + r.stderr
 

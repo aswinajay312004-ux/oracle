@@ -263,14 +263,10 @@ def test_libreoffice_layout_workbook_gives_merges_hidden_rows_columns_and_sheets
     assert hidden == {'E1', 'A3'}                                 # column E and row 3 are hidden
     values = cells_of(po)
     assert values['B5'] == 1500 and values['B6'] == 'NAVY'
-    if ext == 'ods':                                              # calamine has no number formats for ODS
-        assert (values['B2'], po['capabilities']['number_formats']) == (8, False)
-        assert any('number formats' in n for n in readers.limitations(po))
-    else:
-        assert (values['B2'], values['C2'], values['D2']) == ('0008', '000-123', 'ST-0008')
-        b2 = next(c for c in po['cells'] if c['cell'] == 'B2')
-        assert (b2['raw'], b2['fmt']) == (8, '0000')
-        assert readers.limitations(po) == []
+    assert (values['B2'], values['C2'], values['D2']) == ('0008', '000-123', 'ST-0008')   # ODS: from its number styles
+    b2 = next(c for c in po['cells'] if c['cell'] == 'B2')
+    assert (b2['raw'], b2['fmt']) == (8, '0000')
+    assert readers.limitations(po) == [] and po['capabilities']['number_formats'] is True
 
 
 def test_number_format_renderer_handles_only_digit_codes():
@@ -882,3 +878,61 @@ def test_isolated_worker_answer_of_the_wrong_shape_is_refused(monkeypatch):
         with pytest.raises(readers.Unreadable) as err:
             readers.read(b'a,b\r\n', 'x.csv')
         assert str(err.value) == readers.WORKER_MESSAGES['crashed']
+
+
+def test_ods_number_styles_become_excel_codes():
+    from xml.etree.ElementTree import fromstring
+    N = 'xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"'
+    def code(body):
+        return readers._ods_code(fromstring(f'<number:number-style {N}>{body}</number:number-style>'))
+    assert code('<number:number number:decimal-places="0" number:min-integer-digits="4"/>') == '0000'
+    assert code('<number:text>ST-</number:text><number:number number:min-integer-digits="4"/>') == '"ST-"0000'
+    assert code('<number:number number:min-integer-digits="6"><number:embedded-text number:position="3">-</number:embedded-text></number:number>') == '000"-"000'
+    assert code('<number:number number:decimal-places="0" number:min-integer-digits="1" number:grouping="true"/>') is None
+    assert code('<number:number number:decimal-places="2" number:min-integer-digits="1"/>') is None
+    assert code('<number:text>no digits</number:text>') is None
+    assert numfmt.render(123, '000"-"000') == '000-123'
+
+
+def test_isolated_worker_that_cannot_start_falls_back_to_inline():
+    """A server started from a script on stdin has a __main__ that spawn cannot re-import: uploads must
+    still be read (in-process, logged), not all fail as "damaged"."""
+    import os
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    script = ('import sys; sys.path.insert(0, %r)\n'
+              'from backend import readers\n'
+              'kind, sheets = readers.read(b"Style,Qty\\r\\nA,1\\r\\n", "x.csv")\n'
+              'print(kind, sheets[0]["cells"][3]["value"], readers.stats["inline_fallback"])\n') % str(root)
+    env = {k: v for k, v in os.environ.items() if k != readers.INLINE_ENV}
+    out = subprocess.run([sys.executable, '-'], input=script, capture_output=True, text=True, timeout=120, env=env, cwd=root)
+    assert out.stdout.split() == ['csv', '1', '1'], out.stderr[-2000:]
+    assert 'Could not start an upload worker' in out.stderr
+
+
+def test_worker_limits_can_be_tuned_within_bounds(monkeypatch):
+    monkeypatch.setenv('POPPYS_PARSE_TIMEOUT', '5'); monkeypatch.setenv('POPPYS_PARSE_MEMORY_MB', 'lots')
+    assert readers._env_int('POPPYS_PARSE_TIMEOUT', 60, 10, 600) == 10           # never below 10 s
+    assert readers._env_int('POPPYS_PARSE_MEMORY_MB', 1536, 256, 16384) == 1536  # garbage keeps the default
+    monkeypatch.setenv('POPPYS_PARSE_TIMEOUT', '120')
+    assert readers._env_int('POPPYS_PARSE_TIMEOUT', 60, 10, 600) == 120
+
+
+def test_native_reader_panics_become_plain_messages(monkeypatch):
+    """pyo3's PanicException (raised when the Rust calamine library panics on a damaged file) derives
+    from BaseException, so `except Exception` alone would turn it into a server error."""
+    import python_calamine as pc
+    import xlrd
+
+    class PanicException(BaseException):
+        pass
+
+    def panic(*a, **k):
+        raise PanicException('range end index 2337 out of range for slice of length 66')
+    monkeypatch.setattr(pc.CalamineWorkbook, 'from_filelike', panic)
+    with pytest.raises(readers.Unreadable, match='could not be opened'):
+        readers.read((FORMATS / 'calamine_issues.xlsb').read_bytes(), 'x.xlsb')
+    monkeypatch.setattr(xlrd, 'open_workbook', lambda **kw: (_ for _ in ()).throw(AssertionError('xlrd')))
+    with pytest.raises(readers.Unreadable) as err:                 # xlrd fails, then calamine panics
+        readers.read(LAYOUT['xls'], 'x.xls')
+    assert str(err.value) == readers.MSG_XLS_DAMAGED

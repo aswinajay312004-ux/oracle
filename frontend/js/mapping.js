@@ -28,6 +28,7 @@ export function renderMapping(container, draft, apply) {
     if (!ctx.def.table) ctx.def.table = { type: 'matrix' };
   }
   Object.assign(ctx, { draft, apply, container, fields: state.fields || [] });
+  if (!ctx.unit.touched) ctx.unit = unitFrom(ctx.sug, draft);
   shell();
   if (!state.fields) orderFields().then(f => { state.fields = f; ctx.fields = f; if (ctx.container.isConnected) drawForm(); }).catch(() => {});
   if (!ctx.templates) api('/api/templates').then(t => { ctx.templates = t; if (ctx.container.isConnected) drawSave(); }).catch(() => { ctx.templates = []; });
@@ -99,7 +100,7 @@ function bind() {
   root.oninput = e => {
     const el = e.target;
     if (el.dataset.mf) { setField(el.dataset.mf, el.value); refreshRow(`field:${el.dataset.mf}`); drawGrid(); drawSave(); }
-    else if (el.dataset.mt) { ctx.def.table.header_row = Number(el.value) || null; clearBad(t => t === 'row'); refreshTable(); drawGrid(); }
+    else if (el.dataset.mt) { ctx.def.table.header_row = Number(el.value) || null; clearBad(t => t === 'row'); refreshTableValues(); drawGrid(); }
     else if (el.dataset.mc) { setCol(el.dataset.mc, colnum(el.value)); refreshRow(`col:${el.dataset.mc}`); drawGrid(); }
     else if (el.id === 'map-ppu') { ctx.unit.pieces_per_unit = el.value === '' ? null : Number(el.value); ctx.unit.touched = true; clearBad(t => t === 'unit'); refreshUnitMsg(); }
     else if (el.id === 'map-name') { ctx.name = el.value; ctx.nameTouched = true; drawVersion(); }
@@ -189,7 +190,7 @@ function picked(r, c) {
 }
 function focusTarget(target) {
   const row = $(`[data-target="${CSS.escape(target)}"]`, ctx.container);
-  if (!row) return;
+  if (!row) { if (target.startsWith('col:') && !ctx.moreCols) { ctx.moreCols = true; refreshTable(); focusTarget(target); } return; }
   if (row.closest('.mf-more[hidden]')) { ctx.more = true; drawForm(); return focusTarget(target); }
   row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   $('input', row)?.focus({ preventScroll: true });
@@ -275,7 +276,8 @@ function refreshRow(target) {
   const row = $(`[data-target="${CSS.escape(target)}"]`, ctx.container); if (!row) return;
   const [kind, key] = target.split(':');
   const bad = badFor(target).length;
-  row.classList.toggle('err', !!bad); $('input', row)?.toggleAttribute('aria-invalid', !!bad);
+  row.classList.toggle('err', !!bad); const input = $('input', row);
+  if (input) { if (bad) input.setAttribute('aria-invalid', 'true'); else input.removeAttribute('aria-invalid'); }
   if (kind === 'field') {
     $('.mf-conf', row).innerHTML = rowConf(key); $('.mf-val', row).innerHTML = rowVal(key); $('.mf-notes', row).innerHTML = rowNotes(key);
   } else if (kind === 'col') {
@@ -304,7 +306,6 @@ function refreshTable() {
   const t = ctx.def.table || { type: 'matrix' }; const type = t.type === 'flat' ? 'flat' : 'matrix';
   const st = ctx.sug?.table; const fromSug = st && ctx.sug.definition?.table && ctx.sug.definition.table.type === type && ctx.sug.definition.table.header_row === t.header_row;
   const rowBad = badFor('row');
-  const hdrText = t.header_row ? rowText(t.header_row) : '';
   const all = type === 'flat' ? flatKeys().map(k => [k, labelOf(k), ['size', 'quantity'].includes(k)]) : MATRIX;
   // flat tables: size, quantity, colour and style always; other columns only when used (or asked for)
   const shown = ([k]) => type !== 'flat' || ['size', 'quantity', 'color', 'style'].includes(k) || colOf(k) || badFor(`col:${k}`).length || ctx.moreCols;
@@ -313,7 +314,7 @@ function refreshTable() {
     <div class="segmented" role="radiogroup" aria-label="How the sizes are laid out"><button type="button" role="radio" aria-checked="${type === 'matrix'}" class="${type === 'matrix' ? 'on' : ''}" data-ttype="matrix">Sizes across columns</button><button type="button" role="radio" aria-checked="${type === 'flat'}" class="${type === 'flat' ? 'on' : ''}" data-ttype="flat">One row per size</button></div>
     <div class="mf-row ${rowBad.length ? 'err' : ''} ${ctx.pick === 'row' ? 'picking' : ''}" data-target="row"><label class="mf-label" for="mf-hr">Header row<span class="req" aria-hidden="true">*</span></label>
       <input id="mf-hr" class="mf-cell" type="number" min="1" data-mt="header_row" value="${esc(t.header_row || '')}" placeholder="row" ${rowBad.length ? 'aria-invalid="true"' : ''}>
-      <span class="mf-val wide">${hdrText ? `<span title="${esc(hdrText)}">${esc(clip(hdrText, 44))}</span>` : '<span class="muted">not set</span>'}</span>
+      <span class="mf-val wide">${hdrVal()}</span>
       <button type="button" class="ghost tiny" data-pick="row" aria-pressed="${ctx.pick === 'row'}" aria-label="Pick the header row in the sheet">Pick</button>
       <div class="mf-notes">${rowBad.map(b => `<div class="f-msg"><span>${esc(sentence(b.reason))}</span></div>`).join('')}</div></div>
     ${cols.map(([k, l, req]) => { const target = `col:${k}`; const bad = badFor(target); const c = colOf(k); return `<div class="mf-row ${bad.length ? 'err' : ''} ${ctx.pick === target ? 'picking' : ''}" data-target="${esc(target)}">
@@ -323,6 +324,17 @@ function refreshTable() {
       <button type="button" class="ghost tiny" data-pick="${esc(target)}" aria-pressed="${ctx.pick === target}" aria-label="Pick the ${esc(l)} in the sheet">Pick</button>
       <div class="mf-notes">${colNotes(target)}</div></div>`; }).join('')}
     ${type === 'flat' && (hiddenCols || ctx.moreCols) ? `<button type="button" class="link mf-more-btn" data-m="morecols" aria-expanded="${!!ctx.moreCols}">${ctx.moreCols ? 'Fewer columns' : `More columns (${hiddenCols})`}</button>` : ''}`;
+}
+function hdrVal() {
+  const hr = ctx.def.table?.header_row; const text = hr ? rowText(hr) : '';
+  return text ? `<span title="${esc(text)}">${esc(clip(text, 44))}</span>` : '<span class="muted">not set</span>';
+}
+// While a number is typed into Header row: update what it points at without re-rendering the inputs.
+function refreshTableValues() {
+  const row = $('[data-target="row"]', ctx.container); if (!row) return;
+  row.classList.toggle('err', !!badFor('row').length); $('.mf-val', row).innerHTML = hdrVal();
+  $('.mf-notes', row).innerHTML = colNotes('row');
+  $$('[data-target^="col:"]', ctx.container).forEach(r => { $('.mf-val', r).innerHTML = colVal(r.dataset.target.slice(4)); });
 }
 function rowText(r) {
   const s = sheet(); const out = [];

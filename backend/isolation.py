@@ -6,7 +6,10 @@ only the worker, never the web server or the Oracle session it holds.
 * The worker is started with multiprocessing's 'spawn' method on every platform, so it behaves the
   same on the Windows laptop as on Linux: a fresh interpreter that imports only what the parse needs.
   The application must therefore be started from a guarded or module entry point (``python -m uvicorn
-  backend.main:app`` is); multiprocessing re-imports the main module in the worker.
+  backend.main:app`` is); multiprocessing re-imports the main module in the worker. The worker's first
+  message says it started; if it dies or stalls before that (for example when the main module is a
+  script read from stdin), ``WorkerFailed('spawn')`` is raised - a problem of the environment, never of
+  the uploaded file - and backend/readers.py then parses in-process and logs an error.
 * Wall-clock limit: the parent waits ``timeout`` seconds for an answer and then terminates the worker.
 * Memory limit, applied by the worker to itself before it reads anything:
     - Linux and other POSIX systems: ``resource.setrlimit(RLIMIT_AS)`` (address space) plus
@@ -37,6 +40,7 @@ MAX_RESULT = 512 * 1024 * 1024       # bytes of JSON the parent accepts from a w
 WORKERS = max(1, int(os.environ.get('POPPYS_PARSE_WORKERS', '2') or 2))
 _slots = threading.BoundedSemaphore(WORKERS)
 _job = None                          # the worker's Windows Job Object handle, kept open for its life
+STARTED = b'started'
 stats = {'started': 0, 'timeouts': 0, 'crashes': 0, 'last_failure': None}
 
 
@@ -81,7 +85,17 @@ def _run(target, args, timeout, memory, passthrough):
         finally:
             writer.close()            # the worker holds its own end; EOF here means it has gone
         stats['started'] += 1
-        if not reader.poll(timeout):
+        # The worker first says it is running our code. Dying or stalling before that is a problem of the
+        # environment (for example a __main__ module that cannot be re-imported), never of the file.
+        try:
+            started_ok = reader.poll(timeout) and reader.recv_bytes(16) == STARTED
+        except (EOFError, OSError):
+            started_ok = False
+        if not started_ok:
+            stuck = worker.is_alive(); worker.join(0 if stuck else 2)
+            stats['last_failure'] = f'worker did not start (exit code {worker.exitcode})'
+            raise WorkerFailed('spawn', stats['last_failure'])
+        if not reader.poll(max(0.0, timeout - (time.monotonic() - started))):
             stats['timeouts'] += 1; stats['last_failure'] = 'timeout'; stuck = True
             raise WorkerFailed('timeout', f'no answer after {timeout:.0f} s')
         try:
@@ -134,6 +148,7 @@ def _reap(worker, wait=2):
 def _child(conn, target, args, memory, cpu, passthrough):
     notes = []
     try:
+        conn.send_bytes(STARTED)
         notes.extend(limit_self(memory, cpu))
         try:
             payload = {'ok': target(*args)}

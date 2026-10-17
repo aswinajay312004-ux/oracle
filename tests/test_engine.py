@@ -405,3 +405,28 @@ def test_matcher_is_fast_on_a_large_sheet():
     sheet = sheet_of(save(wb))
     start = time.perf_counter(); matcher.suggest(sheet)
     assert time.perf_counter() - start < 3
+
+
+def test_master_names_for_matching_survive_one_oversized_master(monkeypatch):
+    """§3 rule 4: the matcher reads only the buyer, colour and size masters, each on its own, so one master
+    too large to list never hides the others (and the style / party masters are never loaded for it)."""
+    from backend import oracle_store
+    asked = []
+
+    class Catalog:
+        def __init__(self, conn): pass
+        def columns(self, tables): return {t: {} for t in tables}
+        def masters(self, spec):
+            asked.append(spec['table'])
+            if spec['table'] == 'COLORMAS':
+                raise ValueError('COLORMAS: master catalogue exceeds 5000 rows; configure a scoped lookup.')
+            return [dict(id=1, label=f'{spec["table"]} NAME', cancelled=False), dict(id=2, label='OLD', cancelled=True)]
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(oracle_store, 'OracleCatalog', Catalog)
+    monkeypatch.setattr(oracle_store, 'connect', lambda: Conn())
+    monkeypatch.setattr(oracle_store, 'current_mapping', lambda: mapping.effective())
+    assert main.master_labels() == {'buyer': ['BUYMAS NAME'], 'color': [], 'size': ['SIZE_MAS NAME']}
+    assert sorted(asked) == ['BUYMAS', 'COLORMAS', 'SIZE_MAS']

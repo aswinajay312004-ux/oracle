@@ -42,8 +42,10 @@ secrets() {
   if [ -n "$files" ]; then printf '%s\n' "$files" | sed 's/^/  must not be committed: /'; bad=1; fi
   if ! git check-ignore -q .env.poppys; then echo '  .gitignore no longer ignores .env.poppys'; bad=1; fi
   for pattern in "${SECRET_PATTERNS[@]}"; do
-    hits=$(git grep --untracked -n -I -E -e "$pattern" -- . | cut -d: -f1,2 || true)
-    if [ -n "$hits" ]; then printf '%s\n' "$hits" | sed 's/^/  possible password or key at /'; bad=1; fi
+    # git grep exits 1 when nothing matches; anything above 1 is a broken scan, which must not pass as clean.
+    if hits=$(git grep --untracked -n -I -E -e "$pattern" -- .); then
+      printf '%s\n' "$hits" | cut -d: -f1,2 | sed 's/^/  possible password or key at /'; bad=1
+    elif [ $? -gt 1 ]; then echo "  the scan itself failed for pattern: $pattern"; bad=1; fi
   done
   if [ "$bad" = 1 ]; then
     echo 'FAILED: remove the file or value above (passwords belong in .env.poppys, which git ignores).' >&2; return 1
@@ -92,9 +94,10 @@ oracle() {
 }
 
 case "${1:-all}" in
-  all)  # run every step, then report, so one run shows every problem
-    failed=()
-    for s in secrets lint js tests; do "$s" || failed+=("$s"); done
+  all)  # run every step, then report, so one run shows every problem; extra arguments go to pytest
+    shift || true; failed=()
+    for s in secrets lint js; do "$s" || failed+=("$s"); done
+    tests "$@" || failed+=(tests)
     if [ ${#failed[@]} -gt 0 ]; then printf '\nFAILED: %s\n' "${failed[*]}" >&2; exit 1; fi
     printf '\nAll checks passed.\n' ;;
   secrets|lint|js) "$1" ;;

@@ -78,6 +78,6 @@ class FakeOracle:
         monkeypatch.setattr(oracle_store, 'connect', lambda: FakeConn())
         for name in ('plan', 'read_result', 'commit', 'live_rows', 'history'):
             monkeypatch.setattr(oracle_store, name, getattr(self, name))
-        monkeypatch.setattr(oracle_store, 'masters', lambda conn, mapping=None: {})
+        monkeypatch.setattr(oracle_store, 'masters', lambda conn, mapping=None, roles=None: {})
         monkeypatch.setattr(main, 'OracleCatalog', lambda conn: self.catalog())
         return self
