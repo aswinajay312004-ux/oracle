@@ -1,3 +1,7 @@
 # Gitleaks findings reviewed and accepted. One fingerprint per line; never add a real password here.
 # A made-up wrong password in a logging test (now built at runtime; this entry covers the older commit).
 064a52864db884aa0663b540de10eb59e9673f8a:tests/test_ops.py:generic-api-key:136
+# Made-up passwords in a browser test (now built at runtime; these entries cover the older commit).
+4176636c6aad33dfd28789571e9dbfaf3d1dff9b:tests/test_ui_browser.py:generic-api-key:574
+4176636c6aad33dfd28789571e9dbfaf3d1dff9b:tests/test_ui_browser.py:generic-api-key:575
+4176636c6aad33dfd28789571e9dbfaf3d1dff9b:tests/test_ui_browser.py:generic-api-key:587

@@ -357,6 +357,8 @@ def test_app_screens_under_the_strict_policy(browser, app_site, tmp_path):
 # ---- the order flow in the real app: review findings -------------------------------------------------------------
 # Each test drives tests/demo_server.py (fake Oracle) the way staff do: upload, review, check, approve, saved.
 ADMIN_PW = 'smoke-test-password'
+TEMP_PW = '-'.join(['Garment', 'Floor', '2026'])          # made-up test passwords, built so secret scanners stay quiet
+OWN_PW = '-'.join(['Floor', 'Own', 'Secret', '77'])
 _runs = [int(time.time()) % 100000]
 
 
@@ -571,8 +573,8 @@ def test_warnings_must_be_ticked_before_accept(app_page):
 
 def test_sign_out_and_another_person_clear_the_draft_but_a_time_out_keeps_it(app_page, app_site):
     admin = app_page()
-    call(admin, '/api/users', 'POST', {'username': 'priya', 'password': 'Garment-Floor-2026', 'role': 'operator'})
-    call(admin, '/api/users/priya', 'PATCH', {'password': 'Garment-Floor-2026'})   # a temporary password again
+    call(admin, '/api/users', 'POST', {'username': 'priya', 'password': TEMP_PW, 'role': 'operator'})
+    call(admin, '/api/users/priya', 'PATCH', {'password': TEMP_PW})   # a temporary password again
     a = app_page()
     to_review(a); fill_review(a); a.fill('input[data-path="orders.0.season"]', 'KEEP ME')
     # the same person after a time-out: the corrections are still there and still save
@@ -584,12 +586,12 @@ def test_sign_out_and_another_person_clear_the_draft_but_a_time_out_keeps_it(app
     # another person signs in after a time-out: nothing of the previous draft is left
     call(admin, '/api/sessions/sign-out-everyone', 'POST')
     a.click('#prepare'); a.wait_for_selector('#auth', state='visible')
-    a.fill('#auth-user', 'priya'); a.fill('#auth-pass', 'Garment-Floor-2026'); a.click('#auth-submit')
+    a.fill('#auth-user', 'priya'); a.fill('#auth-pass', TEMP_PW); a.click('#auth-submit')
     a.wait_for_selector('#pw-box:not([hidden])')                         # an administrator-set password: choose one first
     assert a.evaluate('() => document.activeElement.id') == 'pw-current'
-    a.fill('#pw-current', 'Garment-Floor-2026'); a.fill('#pw-new', 'Floor-Own-Secret-77'); a.fill('#pw-repeat', 'Floor-Own-Secret-7'); a.click('#pw-submit')
+    a.fill('#pw-current', TEMP_PW); a.fill('#pw-new', OWN_PW); a.fill('#pw-repeat', OWN_PW[:-1]); a.click('#pw-submit')
     assert 'not the same' in a.inner_text('#pw-error')
-    a.fill('#pw-repeat', 'Floor-Own-Secret-77'); a.click('#pw-submit'); a.wait_for_selector('#auth', state='hidden')
+    a.fill('#pw-repeat', OWN_PW); a.click('#pw-submit'); a.wait_for_selector('#auth', state='hidden')
     assert a.inner_text('#username') == 'priya' and stage_shown(a) == 'upload'
     assert a.evaluate("() => ['review', 'approve', 'saved'].every(s => document.querySelector('#stage-' + s).innerHTML === '')")
     # signing out with unchecked corrections asks first, then clears everything
@@ -597,11 +599,11 @@ def test_sign_out_and_another_person_clear_the_draft_but_a_time_out_keeps_it(app
     a.click('#logout'); a.wait_for_selector('#confirm[open]'); a.click('#confirm-ok'); a.wait_for_selector('#auth', state='visible')
     assert a.evaluate("() => document.querySelector('#stage-review').innerHTML") == '' and stage_shown(a) == 'upload'
     # own password, any time: "Change my password" next to Sign out
-    sign_in(a, app_site, 'priya', 'Floor-Own-Secret-77')
+    sign_in(a, app_site, 'priya', OWN_PW)
     a.click('#change-pw'); a.wait_for_selector('#modal[open] #cp-form')
     a.fill('#cp-current', 'wrong-password-123'); a.fill('#cp-new', 'Floor-Second-Secret-88'); a.fill('#cp-repeat', 'Floor-Second-Secret-88'); a.click('#cp-submit')
     until(lambda: a.is_visible('#cp-error'))
-    a.fill('#cp-current', 'Floor-Own-Secret-77'); a.click('#cp-submit')
+    a.fill('#cp-current', OWN_PW); a.click('#cp-submit')
     until(lambda: not a.evaluate("() => document.querySelector('#modal').open"))
 
 

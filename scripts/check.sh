@@ -56,6 +56,12 @@ secrets() {
       if [ -n "$hits" ]; then printf '%s\n' "$hits" | cut -d: -f1,2 | sed 's/^/  possible password or key at /'; bad=1; fi
     elif [ $? -gt 1 ]; then echo "  the scan itself failed for pattern: $pattern"; bad=1; fi
   done
+  # The same Gitleaks scan CI runs, when it is installed here (CI runs it from its pinned image in the secrets job).
+  if command -v gitleaks >/dev/null && [ "${CI:-}" != "true" ]; then
+    if ! gitleaks git . --redact --no-banner --exit-code 1 >/dev/null 2>&1; then
+      echo '  gitleaks found a possible secret in the git history (run: gitleaks git . --redact)'; bad=1
+    fi
+  fi
   if [ "$bad" = 1 ]; then
     echo 'FAILED: remove the file or value above (passwords belong in .env.poppys, which git ignores).' >&2; return 1
   fi
