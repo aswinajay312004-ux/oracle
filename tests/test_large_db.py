@@ -257,7 +257,7 @@ def test_value_index_keeps_newest_values_of_partial_columns_and_indexes_big_head
     conn = demo_db.create()
     for i in range(5):
         conn.execute('INSERT INTO ORDMAS (ORDMASID, DOCID, BONO, SAMPLETYPE) VALUES (?, ?, ?, ?)', (900 + i, f'NEW/{i}', f'PO-N{i}', 'BULK'))
-    r = service.refresh_values(big_kb(), service.SqliteExecutor(conn), Dialect('sqlite'))
+    r = service.refresh_values(big_kb(), service.SqliteExecutor(conn), Dialect('sqlite')); conn.close()
     assert not r['skipped'] and {'ORDMAS.DOCID', 'ORDMAS.BONO'} <= set(r['partial'])
     with local_store.db() as c:
         docids = {x[0] for x in c.execute("SELECT value FROM value_index WHERE tbl='ORDMAS' AND col='DOCID'")}
@@ -290,6 +290,7 @@ def explorer(tmp_path, monkeypatch):
         assert c.post('/api/setup', json={'username': 'admin', 'password': PW}).status_code == 200
         state['spy'].sql.clear()
         yield c, state
+    conn.close()
 
 
 def rows(c, table, **params):
@@ -415,7 +416,8 @@ def values_state(tmp_path, monkeypatch):
     def sources():
         yield {'db': (spy, Dialect('sqlite')), 'local': (spy, Dialect('sqlite'))}
     monkeypatch.setattr(main, 'query_sources', sources); monkeypatch.setattr(main, 'knowledge_base', lambda: kb)
-    return kb, spy, sources
+    yield kb, spy, sources
+    conn.close()
 
 
 def test_value_index_is_built_in_the_background_at_startup(values_state, monkeypatch):
