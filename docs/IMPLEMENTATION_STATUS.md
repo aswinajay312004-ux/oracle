@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-17 (session 2, batch 8) | **421 passed, 0 failed, 18 skipped**; ruff clean | Ask AI accuracy benchmark (golden questions + hand-written SQL). It found and fixed: lines/sizes of cancelled orders were counted (241 instead of 240) |
 | 2026-10-17 (session 2, batch 7) | **413 passed, 0 failed, 18 skipped**; ruff clean | Expert data team, part 1: independent SQL safety review (SQLGlot), join check, total cross-check, check trace in the UI. Found and fixed a wrong "All groups together" figure when one record sits in several groups |
 | 2026-10-17 (session 2, batch 6) | 388 passed, 0 failed, 18 skipped | Offline release builder |
 | 2026-10-17 (session 2, batch 5) | **388 passed, 0 failed, 18 skipped** | Undo/redo in the review screen |
@@ -45,6 +46,8 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | B7 | Independent SQL safety review on **every** executor statement: parsed with SQLGlot, fail-closed; one SELECT only, no DML/DDL/PL/SQL, FOR UPDATE, CONNECT BY, db links, other schemas (DUAL, SYS, POPPYS_APP) or non-allowlisted functions (DBMS_*, UTL_*, user functions); answers also need catalog tables + row limit | Implemented, Cloud-tested (16 hostile statements refused) | `backend/insight/policy.py`, `tests/test_policy.py` |
 | B8 | Answer verification: join check (Oracle PK/unique key, else bounded duplicate probe, cached 1 h; a repeating parent stops a total) and total cross-check (breakdown re-asked without groups as a separate query); confidence lowered on problems | Implemented, Cloud-tested | `backend/insight/verify.py`, `tests/test_verify.py`; harvest now reads PK/unique constraints and unique indexes |
 | B9 | "Expert data team" trace on every answer: analyst → SQL engineer → security reviewer → data quality → Oracle → data quality, shown as a check strip + ordered list | Implemented, browser-tested on demo server | `backend/insight/engine.py` `run()`, `frontend/js/chat.js` |
+| B11 | Accuracy benchmark: golden questions asked as a user would, compared with hand-written SQL on the same DB (rows / ordered / scalar / values); params pick real values so the shipped set fits any ERP copy; runs saved + audited; Overview shows the last score; Setup → Answer accuracy; `scripts/run_benchmark.py` | Implemented, Cloud-tested (demo 15/15, shipped 12/12). **Needs a run on the laptop** | `backend/insight/benchmark.py`, `config/golden_questions.json`, `tests/golden/demo.json`, `tests/test_benchmark.py` |
+| B12 | Detail rows (order lines, sizes) of cancelled orders are excluded through their order's CANCEL flag (many-to-one links only); "cancelled" questions on lines filter the order's flag | Fixed (found by B11) | `query.cancel_owner()` |
 | B10 | Oracle sessions named MODULE='POPPYS AI', ACTION='read-only questions' / 'writer account' (visible in V$SESSION) | Implemented | `backend/oracle_store.py` `_tag()`; needs Local Oracle check |
 | C1 | Explorer: search, rows, keyset paging, linked records | Implemented, Cloud-tested | `/api/explorer/*`, `frontend/js/explorer.js` |
 | C2 | Relationship graph / flowchart (no CDN, SVG) | Implemented | `frontend/js/graph.js`, `flow.js` |
@@ -62,7 +65,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 4. Produce exact local Oracle verification commands and record results here.
 5. Expert data team (master prompt addendum), plan:
    - ~~SQL safety review, join check, total cross-check, check trace~~ (batch 7).
-   - Accuracy benchmark: golden questions with independently written SQL, run in the cloud on the demo copy and on the laptop against Oracle.
+   - ~~Accuracy benchmark~~ (batch 8). On the laptop: `python scripts\run_benchmark.py`, then add the company's own questions to `data\golden_questions.json`.
    - Local read-only MCP server (stdio) for development agents: catalog, relationship paths, evidence, governed questions.
    - Adopt/adapt/reject table for the researched repositories in `docs/OPEN_SOURCE_RESEARCH.md`.
    - Optional next: M-Schema-style catalog cards for the local model; candidate agreement (rules vs. model) as in XiYan-SQL.
@@ -80,6 +83,7 @@ git fetch origin; git checkout claude/fervent-babbage-jqo8r4; git pull
 python scripts\check_oracle.py         # expect: Connected ... / Read-only account for Ask AI: POPPYS_RO, no write privileges
 python scripts\discover_schema.py      # asks the GARMENT_DEMO password (typed, never saved); writes data\schema_discovery.*
 $env:POPPYS_TEST_ORACLE='1'; python -m pytest -q    # runs the 18 local Oracle tests too (TEST-labelled rows only)
+python scripts\run_benchmark.py       # Ask AI accuracy on the real data: expect "12 of 12 correct"
 .\start.ps1                            # then open http://127.0.0.1:8008
 ```
 
@@ -89,4 +93,5 @@ Demo A (Excel → Oracle) and Demo B (Ask AI) are then run in the browser; recor
 |---|---|---|
 | — | `check_oracle.py` | not run yet |
 | — | `POPPYS_TEST_ORACLE=1 pytest` | not run yet |
+| — | `run_benchmark.py` | not run yet |
 | — | Demo A / Demo B | not run yet |

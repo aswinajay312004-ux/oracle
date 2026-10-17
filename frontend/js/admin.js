@@ -25,7 +25,7 @@ export function bindAdmin() {
 export async function loadAdmin() {
   $$('.subnav [data-admin]').forEach(b => { b.classList.toggle('active', b.dataset.admin === section); b.hidden = b.dataset.permission && !can(b.dataset.permission); });
   const body = $('#admin-body'); body.innerHTML = ''; body.onclick = body.onchange = body.oninput = body.onkeydown = null;
-  await busy('Loading…', async () => ({ mapping, dictionary, fields, templates, users, audit, settings })[section](body));
+  await busy('Loading…', async () => ({ mapping, dictionary, fields, templates, accuracy, users, audit, settings })[section](body));
 }
 
 function toggle(attrs, status, enabled) {
@@ -229,6 +229,32 @@ const ACTIONS = { upload: 'Uploaded a file', edit: 'Corrected values', preview: 
   user_created: 'Added a person', user_changed: 'Changed a person', settings_changed: 'Changed settings', setup: 'Created the workspace', template_active: 'Changed a template',
   field_changed: 'Changed an order field', template_unit_learned: 'A layout template learned its quantity unit',
   knowledge_edit: 'Edited the data dictionary', knowledge_refresh: 'Refreshed the data dictionary', chat_feedback: 'Rated an AI answer', example_deleted: 'Removed a confirmed answer' };
+
+// Ask AI accuracy: golden questions with hand-written SQL (backend/insight/benchmark.py), run on the live database.
+const BENCH_PILL = { correct: 'ok', wrong: 'err', refused: 'warn', 'not understood': 'warn', error: 'err', skipped: '' };
+
+async function accuracy(body) {
+  const h = await api('/api/benchmark');
+  const last = h.runs[0]; const rep = last?.report;
+  body.innerHTML = `<section class="card"><div class="card-head"><div><h2>Is Ask AI answering correctly?</h2>
+      <div class="sub">Each golden question is asked exactly as a person would ask it. Its correct answer is worked out separately by
+      hand-written SQL on the same database, and the two results are compared. Run it after changing the data dictionary, links or the local AI model.</div></div>
+      ${can('mapping') ? '<button class="primary" id="bench-run">Run the check</button>' : ''}</div>
+    <div class="card-body">
+    <p class="muted small-text" style="margin:0">${h.files.map(f => `${esc(f.label)}: <code>${esc(f.path)}</code> (${f.exists ? `${f.questions} questions` : 'not created yet'})`).join(' · ')}.
+      Add this company’s own questions to the second file in the same format.</p>
+    ${rep ? `<div class="bench-score ${last.correct === last.total ? 'ok' : 'err'}"><b>${last.correct} of ${last.total}</b> correct
+        <span class="muted">· ${esc(new Date(last.at).toLocaleString())} · ${esc(last.actor || '')} · ${rep.seconds} s${last.live ? '' : ' · offline snapshot'}</span></div>`
+      : '<p class="empty">Not run yet.</p>'}</div>
+    ${rep ? `<div class="tbl-wrap flush"><table><thead><tr><th>Question</th><th>Result</th><th>Why</th></tr></thead><tbody>
+      ${rep.items.map(i => `<tr><td><b>${esc(i.question)}</b>${i.understood ? `<div class="muted small-text">Understood as: ${esc(i.understood)}</div>` : ''}</td>
+        <td><span class="pill ${BENCH_PILL[i.status] ?? ''}">${esc(i.status)}</span></td><td class="small-text">${esc(i.detail || '')}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${h.runs.length > 1 ? `<div class="card-body"><h3 style="margin:0">Earlier runs</h3><ul class="plain">${h.runs.slice(1, 10).map(r => `<li>${esc(new Date(r.at).toLocaleString())} — ${r.correct} of ${r.total} correct (${esc(r.actor || '')})</li>`).join('')}</ul></div>` : ''}</section>`;
+  $('#bench-run')?.addEventListener('click', async () => {
+    const done = await busy('Asking every golden question and checking the answers…', () => api('/api/benchmark/run', { method: 'POST' }));
+    if (done) accuracy(body);
+  });
+}
 
 async function audit(body) {
   const list = await api('/api/audit');

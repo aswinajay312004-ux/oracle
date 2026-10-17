@@ -235,3 +235,19 @@ def test_explorer_counts_are_approximate_only_for_very_large_unfiltered_tables(a
     assert page['approx'] is True and page['total'] == 5_000_000                       # statistics, marked ≈ on screen
     page = api.get('/api/explorer/tables/ORDSIZE?column=ORDMASID&value=101&exact=true').json()
     assert page['approx'] is False and page['total'] == 5                                # a filter is always counted
+
+
+def test_accuracy_benchmark_api_runs_saves_and_reports_on_the_overview(api, tmp_path):
+    (tmp_path / 'golden_questions.json').write_text(
+        '[{"id": "site-1", "question": "How many orders for ZARA?", "compare": "scalar",'
+        ' "sql": "SELECT COUNT(*) FROM {ORDMAS} o JOIN {BUYMAS} b ON b.BUYMASID = o.BUYER WHERE b.BUYERNAME = \'ZARA\' AND o.CANCEL <> \'T\'"}]',
+        encoding='utf-8')
+    r = api.post('/api/benchmark/run').json()
+    assert r['total'] >= 9 and r['correct'] == r['total'], [i for i in r['items'] if i['status'] != 'correct']
+    assert any(i['id'] == 'site-1' and i['source'] == 'golden_questions.json' for i in r['items'])   # this site's own questions
+    h = api.get('/api/benchmark').json()
+    assert h['runs'][0]['correct'] == r['correct'] and h['runs'][0]['report']['items']
+    assert api.get('/api/overview').json()['accuracy']['total'] == r['total']
+    assert any(e['action'] == 'benchmark' for e in api.get('/api/audit').json())
+    (tmp_path / 'golden_questions.json').write_text('[{"question": "x"}]', encoding='utf-8')
+    assert api.post('/api/benchmark/run').status_code == 422

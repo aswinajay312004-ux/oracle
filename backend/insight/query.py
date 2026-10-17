@@ -38,6 +38,21 @@ def forgiving(table):
     return rows is not None and rows <= FORGIVING_ROWS
 
 
+def cancel_owner(kb, table):
+    """The table whose CANCEL flag decides whether rows of `table` count: the table itself when it has one,
+    else the header it belongs to (an order line or size row of a cancelled order is cancelled too), reached
+    through many-to-one links only (so the rule cannot repeat rows). None when nothing decides it."""
+    T = kb.table(table)
+    if not T or 'CANCEL' in T['columns'] or T.get('source') == 'local':
+        return table if T and 'CANCEL' in T['columns'] else None
+    for name, H in kb.tables.items():
+        if H.get('kind') == 'header' and 'CANCEL' in H['columns'] and name != table:
+            steps = kb.path(table, name)
+            if steps and all(d == 'up' and j['status'] in ('verified', 'declared') for j, d in steps):
+                return name
+    return None
+
+
 class QueryError(ValueError):
     """A question that cannot be answered safely; the message is shown to the user."""
 
@@ -280,6 +295,11 @@ def compile_intent(intent, kb, dialect, display_references=True, stored=None):
     if 'CANCEL' in T['columns'] and not intent.get('include_cancelled'):
         where.append("(t0.CANCEL IS NULL OR t0.CANCEL <> 'T')")
         notes.append(f'Cancelled {T["plural"]} are excluded.')
+    elif not intent.get('include_cancelled') and (owner := cancel_owner(kb, base)) and owner != base \
+            and not any(str(f.get('column')) == f'{owner}.CANCEL' for f in filters):
+        alias = join_chain(kb.path(base, owner))   # many-to-one links only: no repeated rows
+        where.append(f"({alias}.CANCEL IS NULL OR {alias}.CANCEL <> 'T')")
+        notes.append(f'{T["plural"].capitalize()} of cancelled {kb.table(owner)["plural"]} are excluded.')
 
     # --- order --------------------------------------------------------------------------------------
     order = []

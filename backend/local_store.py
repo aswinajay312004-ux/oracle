@@ -49,6 +49,8 @@ def init():
             actor TEXT,at TEXT,uses INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS chat_log(id TEXT PRIMARY KEY,username TEXT,at TEXT,question TEXT,payload TEXT,feedback TEXT);
         CREATE TABLE IF NOT EXISTS field_settings(key TEXT PRIMARY KEY,required INTEGER,aliases TEXT,actor TEXT,at TEXT);
+        CREATE TABLE IF NOT EXISTS benchmark_runs(id INTEGER PRIMARY KEY,at TEXT NOT NULL,actor TEXT,total INTEGER,correct INTEGER,
+            accuracy REAL,live INTEGER,payload TEXT NOT NULL);
         ''')
         tcols = {r['name'] for r in c.execute('PRAGMA table_info(templates)')}
         # Additive migration: versioned buyer templates (docs/EXCEL_UNDERSTANDING.md §6).
@@ -424,6 +426,25 @@ def chat_entry(cid):
         if not r:
             raise KeyError(cid)
         return dict(id=r['id'], username=r['username'], at=r['at'], question=r['question'], payload=json.loads(r['payload']), feedback=r['feedback'])
+
+
+def save_benchmark(report, actor, live):
+    with db() as c:
+        cur = c.execute('INSERT INTO benchmark_runs(at,actor,total,correct,accuracy,live,payload) VALUES (?,?,?,?,?,?,?)',
+                        (now(), actor, report['total'], report['correct'], report['accuracy'], int(bool(live)),
+                         json.dumps(report, ensure_ascii=False, default=str)))
+        return cur.lastrowid
+
+
+def benchmark_runs(limit=20, full_latest=True):
+    """Newest first; the newest run carries its per-question items."""
+    with db() as c:
+        rows = c.execute('SELECT * FROM benchmark_runs ORDER BY id DESC LIMIT ?', (limit,)).fetchall()
+    out = [dict(id=r['id'], at=r['at'], actor=r['actor'], total=r['total'], correct=r['correct'], accuracy=r['accuracy'], live=bool(r['live']))
+           for r in rows]
+    if out and full_latest:
+        out[0]['report'] = json.loads(rows[0]['payload'])
+    return out
 
 
 def chat_feedback(cid, value):

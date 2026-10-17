@@ -13,7 +13,7 @@ from datetime import date, timedelta
 import json
 import re
 from .knowledge import norm
-from .query import compile_intent, Dialect
+from .query import cancel_owner, compile_intent, Dialect
 
 STOP = set('''a an the of for in on at to by with and or is are was were be been what which who whom whose how many much
 show list display give get find me all any each every per wise please do does did there their this that these those from
@@ -414,8 +414,8 @@ def interpret(question, kb, finder, live_finder=None, today=None, lex=None):
     include_cancelled = bool(re.search(r'\bcancel+ed\b', t))
     if include_cancelled:
         p.unknown = [w for w in p.unknown if not re.fullmatch(r'cancel+ed', w.lower())]
-    if include_cancelled and 'CANCEL' in kb.table(base)['columns']:
-        filters.append(dict(column=f'{base}.CANCEL', op='eq', value='T'))
+    if include_cancelled and (owner := cancel_owner(kb, base)):   # the base's own flag, or its order's
+        filters.append(dict(column=f'{owner}.CANCEL', op='eq', value='T'))
     if compare:
         target = (measure_mentions and measure_mentions[0][1][1]) or next((f'{base}.{c}' for c, m in kb.table(base)['columns'].items() if m['role'] == 'measure'), None)
         if target and not (measures and measures[0].get('agg') != 'count' and group):

@@ -22,7 +22,7 @@ from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
 from .erp import planner
 from . import insight_api as insight
-from .insight import engine, understand
+from .insight import benchmark, engine, understand
 from .insight.query import Dialect, QueryError, compile_intent
 
 LOCK = threading.RLock()
@@ -608,7 +608,8 @@ def overview(user=Depends(authenticated)):
         saved.update(available=True, total=len(records), capped=len(records) >= 100, last_7_days=len(week),
                      recent=[dict(r, filename=names.get(r['job_id'], {}).get('filename'),
                                   orders=names.get(r['job_id'], {}).get('order_refs') or []) for r in records[:6]])
-    return dict(queue=queue[:25], counts=counts, open=len(open_), saved=saved)
+    last = store.benchmark_runs(1, full_latest=False)
+    return dict(queue=queue[:25], counts=counts, open=len(open_), saved=saved, accuracy=last[0] if last else None)
 
 
 # --- history, read-back graph ---------------------------------------------------------
@@ -1139,17 +1140,54 @@ def _answer(fn, question, user):
     return result
 
 
+def _ask(q, kb, sources):
+    """One question through the governed pipeline, exactly as Ask AI answers it."""
+    db = sources.get('db')
+    safe = dict(sources, db=db or (_offline, Dialect('oracle', OWNER)))
+    live = insight.live_finder(kb, *db) if db else None
+    return engine.ask(q, kb, safe, finder=insight.finder(kb), live_finder=live, examples=store.examples(),
+                      ai_chat=ai.json_chat if ai.available() else None, lex=lexicon(kb))
+
+
 @app.post('/api/chat/ask')
 def chat_ask(data: Ask, user=Depends(require('view'))):
     q = data.question.strip()
+    return _answer(lambda kb, sources: _ask(q, kb, sources), q, user)
 
-    def go(kb, sources):
-        db = sources.get('db')
-        safe = dict(sources, db=db or (_offline, Dialect('oracle', OWNER)))
-        live = insight.live_finder(kb, *db) if db else None
-        return engine.ask(q, kb, safe, finder=insight.finder(kb), live_finder=live, examples=store.examples(),
-                          ai_chat=ai.json_chat if ai.available() else None, lex=lexicon(kb))
-    return _answer(go, q, user)
+
+# --- accuracy benchmark: golden questions with hand-written SQL (backend/insight/benchmark.py) ---------------
+GOLDEN_FILES = (ROOT / 'config' / 'golden_questions.json',)   # + data/golden_questions.json: this site's own questions
+
+
+def run_benchmark(actor):
+    kb = knowledge_base()
+    questions = benchmark.load(*GOLDEN_FILES, DATA / 'golden_questions.json')
+    with query_sources() as sources:
+        execute, dialect = _require_db(sources)
+        _ensure_values(kb, sources)
+        report = benchmark.run(questions, lambda q: _ask(q, kb, sources), execute, dialect)
+    report['live'] = kb.live
+    report['run_id'] = store.save_benchmark(report, actor, kb.live)
+    store.audit(actor, 'benchmark', 'ask_ai', total=report['total'], correct=report['correct'], accuracy=report['accuracy'])
+    return report
+
+
+@app.post('/api/benchmark/run')
+def benchmark_run(user=Depends(require('mapping'))):
+    try:
+        return run_benchmark(user['username'])
+    except QueryError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:   # a malformed golden file
+        raise HTTPException(422, str(exc))
+
+
+@app.get('/api/benchmark')
+def benchmark_history(user=Depends(require('view'))):
+    files = [dict(label=label, path=str(p.relative_to(ROOT)) if p.is_relative_to(ROOT) else str(p),
+                  questions=len(benchmark.load(p)) if p.exists() else 0, exists=p.exists())
+             for label, p in (('Shipped with the app', GOLDEN_FILES[0]), ("This company's own", DATA / 'golden_questions.json'))]
+    return dict(runs=store.benchmark_runs(), files=files)
 
 
 def _offline(sql, binds, n):

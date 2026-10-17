@@ -777,3 +777,11 @@ details.ex-more > summary { cursor: pointer; font-weight: 600; font-size: 12.5px
 .check-steps li.failed .check-icon { background: var(--err-soft); color: var(--err); }
 .check-steps li.skipped .check-icon { background: var(--line-2); color: var(--muted); }
 @media (max-width: 640px) { .check { white-space: normal; } }
+
+/* Answer accuracy (Setup) */
+.bench-score { margin: 10px 0 12px; padding: 10px 14px; border-radius: var(--r-sm); border: 1px solid var(--line); font-size: 15px; }
+.bench-score.ok { background: var(--ok-soft); border-color: #b7e3c5; }
+.bench-score.ok b { color: var(--ok); }
+.bench-score.err { background: var(--err-soft); border-color: var(--err-line); }
+.bench-score.err b { color: var(--err); }
+ul.plain { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
