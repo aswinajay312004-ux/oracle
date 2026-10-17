@@ -52,14 +52,20 @@ file's bytes (OLE2, ZIP parts, XML namespaces, HTML/MHTML markers, JSON, text), 
 | `.json` | json with duplicate-key, NaN/Infinity, depth and digit-count checks | records, row arrays, sheet maps, NDJSON, envelopes such as `{"data": [...]}`, nested documents (an object of plain values becomes columns; one inner list of records becomes one row per inner record, with the outer values repeated) |
 
 Cell model: `{cell, row, col, value, formula, hidden, error}` plus, only when they say something, `fmt` (number
-format), `raw` (the stored number when `value` is the text Excel shows, `8` formatted `0000` → `'0008'`) and
-`flag`:
+format), `raw` (the stored number when `value` is the text Excel shows, `8` formatted `0000` → `'0008'`), `text` (the
+characters the file shows for a number when the number alone loses them: `5012.10` typed in a CSV/HTML export, or
+`5012.1` formatted `0.00`; code fields keep this text) and `flag`:
 - `decimal_comma`: text such as `1.234,56`, or in a decimal-comma file `2.000`. It is kept as text, never read as a number.
 - `scientific`: a code Excel already turned into `1.23457E+11`.
 - `big_number`: 16 or more digits, kept as text so no digit is lost.
 
+Dot-grouped text such as `2.000` or `12.500` is kept as text by every text reader (CSV, HTML, JSON strings, text
+cells), whatever the delimiter: it is 2000 in a file from a decimal-comma country and 2 elsewhere (§7b).
+
 Each sheet also carries `capabilities`, saying whether its reader could see merges, hidden rows and columns,
-number formats and formulas, so a note can say what a format cannot show.
+number formats and formulas, so a note can say what a format cannot show, and `date1904: true` for a workbook that
+counts dates from 1904 (Mac Excel; openpyxl `epoch`, xlrd `datemode`). Error cells (`#REF!`, `#N/A`, `#DIV/0!`) have
+`error: true`; text that spells an Excel error is treated the same way (§4, §7a).
 
 Refused with what to do, never guessed:
 - password-protected or IRM workbooks;
@@ -116,12 +122,18 @@ API:
 spreadsheet-schema-matching; no code copied):
 
 1. **Label candidates**: short text cells near the top or left of the sheet that are not numbers or
-   dates. **Value** of a label = first non-empty cell to the right (up to 3 cells) or below (up to 2).
+   dates. **Value** of a label = first non-empty cell to the right (up to 3 cells) or below (up to 2). In a
+   **strip of labels** — a row whose every filled cell reads like a label ("PO No | Buyer Ref | Style | Ex-Fty"),
+   two or more with a value right under them — the value is the cell below, never the next label. A label that is
+   exactly another field's alias ("PO No") is never proposed for a different field.
 2. **Table candidates**: header rows followed by rows containing numbers. A *matrix* header has a run
-   of ≥ 3 size-like cells (text sizes; numeric sizes such as 28, 30, 32 only when a colour, style or
-   total heading names the row as a table); a *flat* header has size + quantity headings (a quantity
-   heading may carry its unit, "Qty (pcs)"). The numbers under the sizes / quantity must pass the
-   quantity rule of §4.
+   of ≥ 3 size-like cells (text sizes — S…XXXXL, 2XS, US plus 1X–3X, toddler 2T–5T, months, years, cm; numeric
+   sizes such as 28, 30, 32 only when a colour, style or total heading names the row as a table — the heuristic
+   fallback follows the same rule, so a row of quantities is never taken for the sizes); a *flat* header has size +
+   quantity headings (a quantity heading may carry its unit, "Qty (pcs)"). A total column is any total or quantity
+   heading right of the sizes ("Total", "TTL", "Pcs"). A heading only *like* "colour" ("Fabric Colour") is proposed
+   as the colour column with medium confidence. The numbers under the sizes / quantity must pass the
+   quantity rule of §4. The table body runs past block totals and sub totals to a grand total or an empty row.
 3. **Name score** for (label, field): 1.0 for an exact alias after normalisation; otherwise the best of
    token Jaccard and character-trigram Dice against every alias, after expanding abbreviations
    (`qty→quantity`, `no/num/#→number`, `dt→date`, `col/clr→colour`, `ref→reference`, `desc→description`,
@@ -133,7 +145,9 @@ spreadsheet-schema-matching; no code copied):
 5. **Score** = 0.6 × name + 0.4 × value (value 0 → rejected for that field; when the label is a strong
    match, name ≥ 0.85, the rejection is listed in `rejected` with its reason). Name matches below 0.5
    are not shown. Confidence: high ≥ 0.85, medium ≥ 0.6, else low (shown, never pre-selected).
-6. **One-to-one assignment**: best scores first; a cell or column is used once.
+6. **One-to-one assignment**: best scores first; a cell or column is used once. When two labels both name a
+   field exactly ("Item" and "Style No", "Order No" and "PO No") with different values, the proposal is `low`
+   (shown with both cells, never pre-selected) — unless exactly one of the values is in the Oracle master.
 
 Output (also stored as `draft.suggestion`):
 
@@ -163,10 +177,12 @@ does not hide the others.
 matcher's own output, every AI proposal, the heuristic, saved templates when applied, and mappings a
 person submits (`POST /api/drafts/{id}/map` answers 409 listing each wrong field).
 
-Rejection rules: empty cell; cell is itself a known label; date field value not a date; quantity
-column not numeric in ≥ 80 % of filled rows or any negative; size header row with < 60 % size-like
-cells (matrix); buyer/description that is a pure number or a date; the same cell used for two fields;
-a column outside the sheet.
+Rejection rules: empty cell; cell is itself a known label; a cell holding an Excel error value (`#REF!`, `#N/A`);
+date field value not a date; quantity column not numeric in ≥ 80 % of filled rows or any negative; size header row
+with < 60 % size-like cells (matrix); a total or quantity heading inside the size columns (a saved layout's size
+range that now ends on this file's "Total" column); a size heading right next to the size columns, or a second set
+of sizes on the same header row (Delivery 1 | Delivery 2), with quantities under it — they would be left out;
+buyer/description that is a pure number or a date; the same cell used for two fields; a column outside the sheet.
 
 ## 5. Quantity unit (acceptance test C)
 
@@ -174,7 +190,8 @@ Each order has `qty_unit` = `PCS`, `PACK` or empty, plus `pieces_per_unit`.
 
 * Evidence from the file: quantity header or nearby label containing `pcs/pieces/pc` → `PCS`;
   `pack/packs/pk/set/sets/ratio` → `PACK`; a unit label (`UOM | PCS`); a note just above the table;
-  quantities written with their unit (`1,500 pcs`, `20 packs`; the number is kept, the unit is evidence);
+  quantities written with their unit (`1,500 pcs`, `20 packs`; the number is kept, the unit is evidence) — only in
+  the rows the table read, never a trims list further down the same columns;
   a merch BOM whose size table total equals its `QTY(IN PIECES)` → `PCS`. Provenance records the
   evidence text and cell.
 * No evidence → empty. The review screen shows **Quantity unit** (Pieces | Packs) outlined red:
@@ -221,10 +238,12 @@ colour, style and total headings).
 
 `workbooks.iso_date` turns `2027-01-15`, `2027-01-15 0:00:00`, `20/12/2026`, `20-Dec-26`,
 `5 Mar 2027`, `2026/12/20` and Excel serial numbers into `YYYY-MM-DD`. Numbers are read day-first
-(Indian convention); `12/20/2026` is unmistakably month-first.
+(Indian convention); `12/20/2026` is unmistakably month-first. A date typed as a plain number in a 1904 workbook
+(`date1904`) is counted from 1904-01-01, and its source says so.
 
 An ambiguous date such as `03/04/2026` depends on the rest of the file:
-* **Day-first by default.** It is converted day-first, and the notes and the field's source chip say so.
+* **Day-first by default.** It is converted day-first; the field's source chip says so and a review item on that date
+  field (§7a) puts it under "Please read before approving".
 * **Not when the file writes month first.** If another date in the same file can only be month-first
   (`12/20/2026`) and none can only be day-first, the date is *not* converted. The field is left empty
   with the question "“03/04/2026” could be 3 April 2026 or 4 March 2026 — enter the ship date."
@@ -240,21 +259,52 @@ field (`orders.N.<field>`, or `orders.N.lines` for the size table), so it appear
 
 | Finding | Field | Example message |
 |---------|-------|-----------------|
-| A total row that disagrees with the sizes read | `lines` | “the size table says the total is 310, but the rows read add up to 300” |
+| A total row that disagrees with the rows it adds up (its block, or the whole table) | `lines` | “Row 9 (“Total”) … says the total is 20, but row 8 above it adds up to 18” |
+| Lines after the last total row with no total of their own | `lines` | “Rows 11–12 … come after the total in row 10 and have no total of their own” |
+| An unlabelled row equal to the one line above it (read as a total); a “TOTAL …” colour equal to it (read as a colour) | `lines` | “Row 7 … has no colour and repeats the quantities of row 6, so it was read as a total row” |
 | A second date label for the same field | that date field | “F1 “Revised Ship Date” says 2027-02-01, but the ship date was read from B3 …” |
+| Two labels of one field with different values (the field is left empty and asked) | that field | “A1 “Order No” says “SO-889” and A2 “PO No” says “PO-4471” …” |
+| A date read day-first that could be month-first | that date field | “Ship date: "05/06/2026" read as day/month/year (2026-06-05) — check it.” |
+| An Excel error value where a value should be (the field or colour is left empty and asked) | that field / `lines` | “B2 on “PO” holds the Excel error “#N/A” …” |
 | Hidden rows or columns that hold data (never read) | `lines` | names the hidden rows / columns |
-| Quantities left below the table end | `lines` | names the cells |
+| What the reader could not see (backup reader, .xlsb): codes that may have lost leading zeros, hidden rows, merged cells | code field / `lines` | “The style number “123” was read … without its cell format, so leading zeros (such as “00123”) may be missing” |
+| Formula cells without a calculated value | `lines` | names the cells |
+| Quantities left below the table end or below its grand total | `lines` | names the cells |
+| A heading right next to the size columns with numbers under it (not a known size, total or price) | `lines` | “E5 “Extra”, right next to the size columns B–D …, has numbers under it but was not read as a size” |
+| A ratio / assortment row or a pack / carton count row in a size matrix (not read as a line) | `qty_unit` | “Row 6 (“Ratio”) … is a size ratio (how a pack is made up), not quantities …” |
+| Dot-grouped or split quantities kept as text (§7b) | `lines` | names the cells |
+| A visible sheet with data that gave no order | `lines` (every order) | “No order was read from sheet “PO 1002”, which holds data …” |
 | The same order on two sheets | `style` | names both sheets |
+| A style column whose rows sometimes have no style (that order's style is asked) | `style` | “Row 7 … has no style in column A, while other rows have one” |
 
-Totals, subtotal and grand-total rows (`Total`, `TOTAL PCS`, `Sub-Total`, `G.Total`; not a colour such as
-“TOTAL ECLIPSE”) are never read as sizes or colours. Cells in hidden rows or columns are never read.
+Totals, subtotal and grand-total rows are never read as sizes or colours: any label with a total word — `Total`,
+`TOTAL PCS`, `Sub-Total`, `G.Total`, `G. TTL`, `TTL`, `SUM`, `Colour Total`, `Order Total`, `ZK-100 Total`,
+`Total for RED` — and, in a size matrix, an unlabelled row whose quantities are the sums of the block above. A total
+word followed by other words (“TOTAL ECLIPSE”) is a colour unless its quantities are the sums of two or more rows
+above it. A block total (“Total” under each colour) is checked against its block and the table goes on below it;
+a grand total (`Grand`, `G.`, `Overall`, `Order Total`) ends the table. Cells in hidden rows or columns are never read.
+
+Size matrices (`workbooks.matrix_orders`) also skip empty rows right under the headings (headings merged over two
+rows), read a style or colour merged down over several rows on each of them, and give **one order per style** when
+the label column is a style column. A layout that reads no line at all is refused with “No order lines were found
+under the headings in row N …” (a 409 on `/map`), never saved as an empty order.
+
+Every way of reading a sheet — automatic, a saved layout, a layout mapped with `/map` — ends with the same checks
+(`workbooks.read_checks`, then `workbooks.finish_orders` across the draft), so mapping a layout never drops a
+finding the upload would have raised. Each order remembers its `sheet`.
 
 ## 7b. Quantities the reader will not guess
 
 * Text quantities with thousands separators or units (`1,500`, `1,500 pcs`) become the number.
-* In a file that writes decimals with a comma (semicolon CSV, `sep=;`), `2.000` is two thousand, not 2. Such
-  cells keep the file's text. The planner marks each one as an **error** ("“2.000” could mean 2000 …"), and
-  the size table says why, until a person types the whole number.
+* A quantity written with a dot between groups of three digits (`2.000`, `12.500 pcs`) is two thousand in a file
+  from a decimal-comma country and 2 elsewhere. In **every** format (semicolon or comma CSV, Unicode text, HTML
+  export, JSON strings, text cells of a workbook; the merch BOM and buyer contract readers too, and a line's source
+  total) such cells keep the file's text and are marked unclear. The planner marks each one as an **error**
+  ("“2.000” could mean 2000 …"), and the size table says why, until a person types the whole number.
+* A row of a text file with more values than headings (an unquoted `1,200` splits into `1` and `200`): in a flat
+  table its quantity is kept as the joined text (`1,200`, when the quantity is the last heading) and marked unclear,
+  and the size table names the extra cells; a size matrix with such a row is refused (which size was split is unknown).
+* A number no float can hold (`1E+400`) is not a number; it stays text and the planner names it.
 * Anything else that is not a whole, non-negative number stays as the file wrote it, and the planner names it.
 
 ## 8. Acceptance tests (`tests/test_acceptance.py`)
@@ -273,8 +323,11 @@ Totals, subtotal and grand-total rows (`Total`, `TOTAL PCS`, `Sub-Total`, `G.Tot
 Shapes the endpoints above settle (the frontend and `tests/test_acceptance.py` rely on them).
 
 * `POST /api/uploads` → the draft, which also carries `notes` (draft-level reasons such as a refused
-  template), `templates_refused: [{id, name, version, sheet, reasons}]`, `template: {id, name, version}`
-  or `null`, and `suggestion` (§3 shape; set when no order was read or a template was refused). Each
+  template, hidden data, what the reader could not see, sheets with data that gave no order),
+  `templates_refused: [{id, name, version, sheet, reasons}]`, `template: {id, name, version}`
+  or `null`, and `suggestion` (§3 shape; set when no order was read, a template was refused, or a visible sheet with
+  data gave no order — the suggestion is then for that sheet). Each order carries `sheet` (the sheet it was read
+  from). Each
   order carries `qty_unit` (`PCS`, `PACK` or empty), `pieces_per_unit` (1 for `PCS`; ≥ 2 or `null` for
   `PACK`; `null` while undecided), `quantity_basis` and `provenance.qty_unit` (§5). A draft read with a
   template has `format` = `Template: <name>`.
@@ -291,8 +344,14 @@ Shapes the endpoints above settle (the frontend and `tests/test_acceptance.py` r
   `order_demo`). `header_row` + `columns` instead of `definition` still map a flat table. The validator
   runs first: 409 `{detail, rejected: [{field, cell, value, reason, source: "person"}]}` names each wrong
   field and changes nothing (same version, no template). 409 for `PACK` with fewer than 2 pieces per pack.
-  On success → the draft; with `save_template`, the template is saved (§6) with the buyer, anchors, unit
-  and basis, and `draft.template` names it. The draft's notes about the layout question are cleared.
+  On success → the draft. The orders of **that sheet** are added or replaced; orders read from the file's other
+  sheets stay. The mapped orders go through the same checks as an upload (§7a): hidden data, second dates, Excel
+  errors, what the reader could not see, sheets still unread. The draft's notes about that sheet's layout question
+  are cleared; the other sheets' notes and the checks' findings stay. With `save_template`, the template is saved
+  (§6) with the buyer, anchors, unit and basis, and `draft.template` names it. Someone without the `templates`
+  permission saving a new version of an existing layout gets it switched off, with the note “Saved as version N of
+  “<name>”. An administrator must switch it on in Setup → Layout templates before it is used for new files.” (the
+  draft itself is read with the layout applied). 409 when the layout reads no line.
 * `PUT /api/drafts/{id}` accepts `qty_unit` / `pieces_per_unit` / `quantity_basis` on each order; the
   preview (`POST /api/drafts/{id}/preview`) reports unit questions on `orders.N.qty_unit` and
   `orders.N.pieces_per_unit`, and fields an administrator made required on `orders.N.<key>`.

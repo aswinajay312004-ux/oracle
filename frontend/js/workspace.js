@@ -114,7 +114,9 @@ function showReading() {
   if (!d.orders.length) {
     items.push(['warn', 'This layout is new to POPPYS AI', d.suggestion ? 'A layout was proposed from the labels and values in the file. Check it once — it is saved as a template so next time it is automatic.' : 'Show us once where the order details are; it is saved as a template for next time.']);
   } else {
-    items.push(['ok', d.template ? `Read with your saved layout “${d.template.name}” (version ${d.template.version})` : `Layout recognised: ${d.format}`, `${plural(d.orders.length, 'order')} found`]);
+    const sheets = [...new Set(d.orders.map(x => x.sheet).filter(Boolean))];
+    items.push(['ok', d.template ? `Read with your saved layout “${d.template.name}” (version ${d.template.version})` : `Layout recognised: ${d.format}`,
+      `${plural(d.orders.length, 'order')} found${d.sheets.length > 1 && sheets.length ? ` on ${sheets.map(n => `“${n}”`).join(', ')}` : ''}`]);
     const found = ['buyer', 'style', 'description', 'po_number', 'ship_date', 'season', 'merch'].filter(k => o[k]);
     items.push(['ok', `Order details found (${found.length} of 7)`, found.map(k => `${LABEL[k] || k}: ${o[k]}`).join(' · ') || 'none']);
     const pcs = l => l.reduce((n, x) => n + x.sizes.reduce((m, s) => m + num(s.quantity), 0), 0);
@@ -127,7 +129,13 @@ function showReading() {
     const need = [...new Set(d.orders.flatMap(x => requiredKeys().filter(k => !x[k]).map(k => LABEL[k])))];
     items.push([need.length ? 'warn' : 'ok', need.length ? `${plural(need.length, 'field')} not in the file: ${need.join(', ')}` : 'All required order details present',
       need.length ? 'They are outlined in red on the next screen — type them there.' : 'Review the quantities and approve.']);
+    if (d.suggestion?.sheet && !sheets.includes(d.suggestion.sheet))
+      items.push(['warn', `Sheet “${d.suggestion.sheet}” was not read`, 'It has data but no order was found on it. Use “Read this file differently” to show where its order is, or check it is not needed.']);
   }
+  // What the reader could not see or decide (other sheets, formats without hidden rows or number formats, refused layouts)
+  const notes = (d.notes || []).filter(n => typeof n === 'string' && n.trim());
+  notes.slice(0, 4).forEach(n => items.push(['warn', 'Please note', n]));
+  if (notes.length > 4) items.push(['warn', `${plural(notes.length - 4, 'more note')}`, 'They are listed with the order on the next screen.']);
   $('#read-title').textContent = d.orders.length ? 'Here is what we found' : 'We need one quick hint';
   $('#read-steps').innerHTML = items.map(([k, t, s]) => `<li class="${k === 'ok' ? '' : k}"><span class="ic">${k === 'ok' ? '✓' : k === 'warn' ? '!' : '–'}</span><div><strong>${esc(t)}</strong><small>${esc(s)}</small></div></li>`).join('');
   $$('#read-steps li').forEach((li, i) => li.style.setProperty('--step', i));   // one after another, 80ms apart (CSSOM, CSP-safe)
