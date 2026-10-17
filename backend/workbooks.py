@@ -830,6 +830,7 @@ def parse_sheets(sheets, templates=(), fields=None):
             if found is not None:
                 formats.append('Buyer contract')
         if not found:
+            refused_tables = []
             for row, cols in flat_headers(g):
                 d = dict(fields={}, table=dict(type='flat', header_row=row, columns=cols))
                 if 'style' not in cols:
@@ -839,13 +840,15 @@ def parse_sheets(sheets, templates=(), fields=None):
                     d['fields']['style'] = address(at[1], at[0])
                 _, rejected = matcher.check(sheet, d, Fv)
                 if rejected:
-                    mine.append(f'The size/quantity table on “{sheet["name"]}” row {row} was not read automatically: '
-                                + '; '.join(r['reason'] for r in rejected) + '.')
+                    refused_tables.append(f'The size/quantity table on “{sheet["name"]}” row {row} was not read automatically: '
+                                          + '; '.join(r['reason'] for r in rejected) + '.')
                     continue
                 found = apply_template(sheets, sheet, d, Fv); formats.append('Tabular orders')
                 for o in found:
                     header_fields(g, o, row, only_missing=True)
                 break
+            if not found:
+                mine += refused_tables
         notes += mine
         if found:
             for o in found:

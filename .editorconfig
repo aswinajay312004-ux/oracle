@@ -1,0 +1,32 @@
+# Editor settings that match the existing code (https://editorconfig.org). Editors apply them only to lines you edit.
+# Keep .ps1 files ASCII-only: Windows PowerShell 5.1 reads a script without a BOM as ANSI.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.py]
+indent_size = 4
+
+# Two trailing spaces are a Markdown line break.
+[*.md]
+trim_trailing_whitespace = false
+
+# Test workbooks and exports are byte-exact copies of real files: never touch them.
+[tests/fixtures/**]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+indent_style = unset
+indent_size = unset
+
+# Recorded schema and analysis data.
+[docs/**.{json,jsonl,txt}]
+insert_final_newline = unset
+trim_trailing_whitespace = unset

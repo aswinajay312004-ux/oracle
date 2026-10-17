@@ -1,24 +1,37 @@
 """READ-ONLY discovery of the local GARMENT_DEMO schema. Run on the Windows laptop:
 
-    python scripts/discover_schema.py
+    python scripts/discover_schema.py [--out DIR] [--sample-rows N] [--timeout SECONDS]
 
 Connects as GARMENT_DEMO (password asked with getpass, or POPPYS_DISCOVERY_PASSWORD), runs only
 SELECT statements against the data dictionary and the order tables, and writes the evidence to
 data/schema_discovery.json + data/schema_discovery.md (git-ignored, may contain sample values).
 The Database mapping screen shows this evidence next to every proposed column.
+
+Safe on a big database (17 GB+): row counts of big tables come from Oracle statistics; a table with
+more than --sample-rows rows is profiled on a block sample (SAMPLE BLOCK, about that many rows), and all
+its columns are profiled together in two passes instead of two full scans per column; distinct counts
+of sampled tables come from the optimizer statistics when Oracle has them. Every statement has a time
+limit: one that runs out is skipped and reported, so the run always finishes. Figures that came from a
+sample say so (sampled_pct). Timings per table are saved in the 'profile' section.
 """
 from __future__ import annotations
 from datetime import datetime
+import argparse
 import getpass
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 OUT = ROOT / 'data'
 OWNER = 'GARMENT_DEMO'
+SAMPLE_ROWS = 200_000      # profile about this many rows per table at most
+STATEMENT_S = 120          # time limit per statement
+CHUNK = 60                 # columns profiled per statement
+SKIP_TYPES = ('BLOB', 'CLOB', 'NCLOB', 'LONG', 'RAW', 'LONG RAW', 'BFILE')
 FOCUS = ('ORDMAS', 'ORDSTYLE', 'ORDSIZE', 'ORDFAB', 'ORDYARN', 'ORDACC', 'ORDCOMP', 'ORDSHIP', 'ORDCMTFAB', 'ORDERENTRY', 'ORDDOC')
 # (child table, child column, parent table, parent column) — tested within the same ORDMASID.
 LINKS = [
@@ -66,11 +79,104 @@ def text(v):
     return v if isinstance(v, (int, float)) else str(v)[:120]
 
 
-def main():
-    conn = connect(); c = conn.cursor()
-    tables = rows(c, 'select table_name, num_rows from all_tables where owner=:o order by table_name', o=OWNER)
+def q(name):
+    return f'"{name}"'
+
+
+def source(table, total, sample_rows):
+    """FROM clause and sample percentage: the whole table, or a block sample of about sample_rows rows."""
+    if not total or total <= sample_rows:
+        return f'{OWNER}.{q(table)}', None
+    pct = max(0.000001, min(99.0, 100 * sample_rows / total))
+    return f'{OWNER}.{q(table)} SAMPLE BLOCK ({pct:.6f}) SEED (42)', round(pct, 4)
+
+
+def as_text(col):
+    """One VARCHAR2 per column so every column can be grouped in one UNPIVOT pass; dates as ISO text."""
+    name = q(col['column_name'])
+    if col['data_type'] == 'DATE' or col['data_type'].startswith('TIMESTAMP'):
+        expr = f"TO_CHAR({name}, 'YYYY-MM-DD\"T\"HH24:MI:SS')"
+    else:
+        expr = f'TO_CHAR({name})'
+    return f'CAST(SUBSTR({expr}, 1, 120) AS VARCHAR2(480))'
+
+
+def typed(value, col):
+    if value is not None and col['data_type'] == 'NUMBER':
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                return float(value)
+            except ValueError:
+                return value
+    return value
+
+
+class Run:
+    """Statements with a time limit; a slow or failing one is recorded and skipped instead of stopping the run."""
+
+    def __init__(self, conn, timeout_s):
+        self.conn = conn; self.c = conn.cursor(); conn.call_timeout = int(timeout_s * 1000)
+        self.timeout_s = timeout_s; self.statements = 0; self.errors = []
+
+    def __call__(self, what, sql, **binds):
+        self.statements += 1
+        try:
+            self.c.execute(sql, binds)
+            return self.c.fetchall()
+        except Exception as exc:
+            code = getattr(exc.args[0], 'full_code', '') if exc.args else ''
+            self.errors.append(f'{what}: ' + (f'took longer than {self.timeout_s:g} s, skipped' if code == 'DPY-4024' else str(exc)[:160]))
+            return None
+
+
+def profile(run, table, cols, total, colstats, sample_rows):
+    """Fill rate, distinct values and the five most common values of every column of one table."""
+    frm, pct = source(table, total, sample_rows)
+    out = {}
+    for i in range(0, len(cols), CHUNK):
+        part = cols[i:i + CHUNK]
+        got = run(f'{table} fill/distinct', f'SELECT COUNT(*), {", ".join(f"COUNT({q(c["column_name"])}), COUNT(DISTINCT {q(c["column_name"])})" for c in part)} FROM {frm}')
+        if not got:
+            continue
+        n, *vals = got[0]
+        for j, col in enumerate(part):
+            filled, distinct = vals[2 * j], vals[2 * j + 1]
+            name = col['column_name']; st = colstats.get((table, name)) or {}
+            if pct and st.get('num_distinct') is not None:
+                distinct, from_ = st['num_distinct'], 'statistics'
+            else:
+                from_ = 'sample' if pct else 'count'
+            out[name] = dict(rows=total, filled=round(total * filled / n) if (pct and n) else filled,
+                             fill_pct=round(100 * filled / n, 1) if n else None, distinct=distinct, samples=[],
+                             **(dict(sampled_pct=pct, distinct_from=from_) if pct else {}))
+        top = run(f'{table} common values', f'''SELECT k, v FROM (
+              SELECT k, v, ROW_NUMBER() OVER (PARTITION BY k ORDER BY COUNT(*) DESC, v) r
+                FROM (SELECT {", ".join(f"{as_text(c)} x{j}" for j, c in enumerate(part))} FROM {frm})
+             UNPIVOT (v FOR k IN ({", ".join(f"x{j} AS {j}" for j in range(len(part)))}))
+               GROUP BY k, v) WHERE r <= 5 ORDER BY k, r''')
+        for k, v in top or []:
+            col = part[int(k)]
+            if col['column_name'] in out:
+                out[col['column_name']]['samples'].append(typed(v, col))
+    return out, frm, pct
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description='Read-only GARMENT_DEMO discovery (writes evidence for the Database mapping screen).')
+    ap.add_argument('--out', default=str(OUT), help='folder for schema_discovery.json/.md (default: data/)')
+    ap.add_argument('--sample-rows', type=int, default=SAMPLE_ROWS, help='profile bigger tables on a sample of about this many rows')
+    ap.add_argument('--timeout', type=float, default=STATEMENT_S, help='seconds allowed per statement')
+    args = ap.parse_args(argv)
+    out_dir = Path(args.out)
+    started = time.time()
+    conn = connect(); c = conn.cursor(); run = Run(conn, args.timeout)
+    tables = rows(c, 'select table_name, num_rows, last_analyzed from all_tables where owner=:o order by table_name', o=OWNER)
     columns = rows(c, '''select table_name, column_name, data_type, data_length, data_precision, data_scale, nullable, column_id
         from all_tab_columns where owner=:o order by table_name, column_id''', o=OWNER)
+    colstats = {(r['table_name'], r['column_name']): r for r in rows(c, '''select table_name, column_name, num_distinct, num_nulls
+        from all_tab_col_statistics where owner=:o''', o=OWNER)}
     constraints = rows(c, '''select c.table_name, c.constraint_name, c.constraint_type, c.status, c.search_condition_vc,
             r.table_name ref_table, (select listagg(cc.column_name, ',') within group (order by cc.position) from all_cons_columns cc
               where cc.owner=c.owner and cc.constraint_name=c.constraint_name) cols,
@@ -88,40 +194,49 @@ def main():
     sequences = rows(c, 'select sequence_name, last_number, increment_by from all_sequences where sequence_owner=:o', o=OWNER)
     objects = rows(c, '''select object_name, object_type, status from all_objects where owner=:o
         and object_type in ('PACKAGE','PROCEDURE','FUNCTION','VIEW','TRIGGER') order by object_type, object_name''', o=OWNER)
+    indexes = rows(c, '''select table_name, index_name, listagg(column_name, ',') within group (order by column_position) cols
+        from all_ind_columns where table_owner=:o group by table_name, index_name order by table_name, index_name''', o=OWNER)
 
-    evidence = {}
+    evidence = {}; timing = {}; frm = {}
+    stats = {t['table_name']: t['num_rows'] for t in tables}
     by_table = {}
     for col in columns:
         by_table.setdefault(col['table_name'], []).append(col)
     for table in FOCUS:
         if table not in by_table:
             continue
-        c.execute(f'select count(*) from {OWNER}.{table}'); total = c.fetchone()[0]
-        for col in by_table[table]:
-            name = col['column_name']
-            if col['data_type'] in ('BLOB', 'CLOB', 'LONG', 'RAW', 'LONG RAW'):
-                continue
-            c.execute(f'select count({name}), count(distinct {name}) from {OWNER}.{table}')
-            filled, distinct = c.fetchone()
-            c.execute(f'select {name}, count(*) n from {OWNER}.{table} where {name} is not null group by {name} order by n desc fetch first 5 rows only')
-            samples = [text(r[0]) for r in c]
-            evidence[f'{table}.{name}'] = dict(rows=total, filled=filled, fill_pct=round(100 * filled / total, 1) if total else None,
-                                               distinct=distinct, samples=samples)
+        t0 = time.time(); n0 = run.statements; e0 = len(run.errors)
+        total = stats.get(table)
+        rows_from = 'statistics'
+        if total is None or total <= args.sample_rows:   # small or never analysed: count it (time-limited)
+            got = run(f'{table} row count', f'select count(*) from {OWNER}.{q(table)}')
+            total, rows_from = (got[0][0], 'count') if got else (total, 'statistics')
+        cols = [x for x in by_table[table] if x['data_type'] not in SKIP_TYPES]
+        found, frm[table], pct = profile(run, table, cols, total, colstats, args.sample_rows)
+        evidence.update({f'{table}.{k}': v for k, v in found.items()})
+        timing[table] = dict(rows=total, rows_from=rows_from, columns=len(cols), sampled_pct=pct, seconds=round(time.time() - t0, 1),
+                             statements=run.statements - n0, errors=run.errors[e0:])
+        print(f'  {table}: {len(cols)} columns, {total if total is not None else "?"} rows ({rows_from})'
+              f'{f", {pct}% block sample" if pct else ""} — {timing[table]["seconds"]} s', flush=True)
     for key, (master, mkey) in REFERENCES.items():
         table, col = key.split('.')
         if table in by_table and master in by_table and key in evidence:
-            c.execute(f'''select count(*), sum(case when exists (select 1 from {OWNER}.{master} m where m.{mkey}=t.{col}) then 1 else 0 end)
-                from {OWNER}.{table} t where t.{col} is not null''')
-            n, ok = c.fetchone()
-            evidence[key]['resolves_in'] = dict(table=master, key=mkey, rows=n, matched=ok or 0,
-                                                match_pct=round(100 * (ok or 0) / n, 1) if n else None)
+            got = run(f'{key} → {master}', f'''select count(*), sum(case when exists (select 1 from {OWNER}.{master} m where m.{mkey}=t.{col}) then 1 else 0 end)
+                from {frm[table]} t where t.{col} is not null''')
+            if got:
+                n, ok = got[0]
+                evidence[key]['resolves_in'] = dict(table=master, key=mkey, rows=n, matched=ok or 0, sampled_pct=timing[table]['sampled_pct'],
+                                                    match_pct=round(100 * (ok or 0) / n, 1) if n else None)
     links = []
     for child, ccol, parent, pcol in LINKS:
         if child in by_table and parent in by_table and all(x in [k['column_name'] for k in by_table[t]] for t, x in ((child, ccol), (parent, pcol))):
-            c.execute(f'''select count(*), sum(case when exists (select 1 from {OWNER}.{parent} p where p.ORDMASID=t.ORDMASID and p.{pcol}=t.{ccol}) then 1 else 0 end)
-                from {OWNER}.{child} t where t.{ccol} is not null''')
-            n, ok = c.fetchone()
-            link = dict(child=f'{child}.{ccol}', parent=f'{parent}.{pcol}', rows=n, matched=ok or 0, match_pct=round(100 * (ok or 0) / n, 1) if n else None)
+            got = run(f'{child}.{ccol} → {parent}.{pcol}', f'''select count(*), sum(case when exists (select 1 from {OWNER}.{parent} p where p.ORDMASID=t.ORDMASID and p.{pcol}=t.{ccol}) then 1 else 0 end)
+                from {frm.get(child, f"{OWNER}.{child}")} t where t.{ccol} is not null''')
+            if not got:
+                continue
+            n, ok = got[0]
+            link = dict(child=f'{child}.{ccol}', parent=f'{parent}.{pcol}', rows=n, matched=ok or 0, match_pct=round(100 * (ok or 0) / n, 1) if n else None,
+                        sampled_pct=(timing.get(child) or {}).get('sampled_pct'))
             links.append(link)
             evidence.setdefault(f'{child}.{ccol}', {})['link'] = link
     for con in constraints:
@@ -129,25 +244,34 @@ def main():
             for col, rc in zip((con['cols'] or '').split(','), (con['ref_cols'] or '').split(',')):
                 evidence.setdefault(f'{con["table_name"]}.{col}', {})['foreign_key'] = f'{con["ref_table"]}.{rc}'
 
+    seconds = round(time.time() - started, 1)
     result = dict(generated_at=datetime.now().astimezone().isoformat(timespec='seconds'), owner=OWNER, dsn=conn.dsn,
                   database_version=conn.version, tables=tables, dictionary=columns, constraints=constraints, triggers=triggers,
-                  sequences=sequences, objects=objects, links=links, columns=evidence)
-    OUT.mkdir(exist_ok=True)
-    (OUT / 'schema_discovery.json').write_text(json.dumps(result, indent=1, default=str, ensure_ascii=False), encoding='utf-8')
+                  sequences=sequences, objects=objects, indexes=indexes, links=links, columns=evidence,
+                  profile=dict(seconds=seconds, sample_rows=args.sample_rows, statement_timeout_s=args.timeout, tables=timing, errors=run.errors))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / 'schema_discovery.json').write_text(json.dumps(result, indent=1, default=str, ensure_ascii=False), encoding='utf-8')
 
     md = [f'# GARMENT_DEMO discovery — {result["generated_at"]}', '', f'Oracle {conn.version}, {len(tables)} tables, '
-          f'{len(columns)} columns, {len(triggers)} triggers, {len(objects)} code objects.', '', '## Tables', '']
+          f'{len(columns)} columns, {len(triggers)} triggers, {len(objects)} code objects. Took {seconds} s.', '', '## Tables', '']
     md += [f'- {t["table_name"]} ({t["num_rows"] if t["num_rows"] is not None else "?"} rows by statistics)' for t in tables]
     md += ['', '## Declared constraints', ''] + [f'- {x["table_name"]}: {x["constraint_type"]} {x["cols"]}'
                                                   + (f' → {x["ref_table"]}({x["ref_cols"]})' if x['ref_table'] else '') for x in constraints]
+    md += ['', '## Indexes', ''] + [f'- {x["table_name"]}.{x["index_name"]} ({x["cols"]})' for x in indexes]
     md += ['', '## Triggers (save-time behaviour)', ''] + [f'- {t["table_name"]}.{t["trigger_name"]}: {t["triggering_event"]} {t["status"]}' for t in triggers]
     md += ['', '## Child → parent link evidence (same ORDMASID)', ''] + [
         f'- {l["child"]} → {l["parent"]}: {l["matched"]}/{l["rows"]} rows match ({l["match_pct"]}%)' for l in links]
     md += ['', '## Reference columns resolving in masters', ''] + [
         f'- {k}: {v["resolves_in"]["matched"]}/{v["resolves_in"]["rows"]} in {v["resolves_in"]["table"]}' for k, v in evidence.items() if 'resolves_in' in v]
-    (OUT / 'schema_discovery.md').write_text('\n'.join(md) + '\n', encoding='utf-8')
+    md += ['', '## Profiling (how each table was read)', ''] + [
+        f'- {t}: {v["rows"]} rows ({v["rows_from"]}), {v["columns"]} columns, '
+        + (f'{v["sampled_pct"]}% block sample' if v['sampled_pct'] else 'whole table') + f', {v["statements"]} statements, {v["seconds"]} s'
+        for t, v in timing.items()]
+    if run.errors:
+        md += ['', '## Skipped (time limit or error)', ''] + [f'- {e}' for e in run.errors]
+    (out_dir / 'schema_discovery.md').write_text('\n'.join(md) + '\n', encoding='utf-8')
     print('\n'.join(md))
-    print(f'\nSaved {OUT / "schema_discovery.json"} (git-ignored). Open POPPYS AI → Database mapping to review the evidence.')
+    print(f'\nSaved {out_dir / "schema_discovery.json"} (git-ignored). Open POPPYS AI → Database mapping to review the evidence.')
     print('No data was changed: this script only runs SELECT statements.')
 
 

@@ -2,7 +2,7 @@
 // Problems are shown on the field or table cell they belong to (red outline + one short reason),
 // never as a separate list at the bottom of the page.
 import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, confirmDialog, drawer } from './util.js';
-import { api, id } from './api.js';
+import { api, id, orderFields } from './api.js';
 import { renderMapping } from './mapping.js';
 import { flowCard, mountFlow } from './flowview.js';
 
@@ -14,9 +14,15 @@ const HEADER = [
   ['merch', 'Merchandiser', false, 'merch'], ['season', 'Season'], ['packing_type', 'Packing type'], ['components', 'Components', false, null, 'number'],
   ['gender', 'Gender'],
 ];
-const REQUIRED = HEADER.filter(h => h[2]).map(h => h[0]);
+const DEFAULT_REQUIRED = HEADER.filter(h => h[2]).map(h => h[0]);
 const LABEL = Object.fromEntries(HEADER.map(h => [h[0], h[1]]));
+const UNIT_WORDS = { PACK: /\b(packs?|pks?|sets?|ratio)\b/i, PCS: /\b(pcs|pieces?|pc)\b/i };
 let nav = 0;
+
+// Required fields follow Setup → Order fields (Axpert-locked ones are always required).
+function isRequired(k) { const f = (state.fields || []).find(x => x.key === k); return f ? !!f.required : DEFAULT_REQUIRED.includes(k); }
+function requiredKeys() { return HEADER.map(h => h[0]).filter(k => k !== '__orderno' && isRequired(k)); }
+async function loadFields() { try { state.fields = await orderFields(true); } catch (_) { /* the screen falls back to the Axpert defaults */ } }
 
 // ---------------------------------------------------------------- stages
 function step(n) {
@@ -30,7 +36,7 @@ function stage(name) {
 }
 
 export function resetWorkspace() {
-  state.draft = null; state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = [];
+  state.draft = null; state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false;
   $('#file-input').value = ''; stage('upload'); recent();
 }
 
@@ -53,16 +59,16 @@ export async function upload(file) {
   stage('read'); $('#read-title').textContent = `Reading ${file.name}…`; $('#read-steps').innerHTML = ''; $('#read-actions').hidden = true;
   await busy('Reading the file and finding the order…', async () => {
     const form = new FormData(); form.append('file', file);
-    try { state.draft = await api('/api/uploads', { method: 'POST', form }); }
+    try { [state.draft] = await Promise.all([api('/api/uploads', { method: 'POST', form }), loadFields()]); }
     catch (e) { stage('upload'); throw e; }
-    state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = [];
+    state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false;
     showReading();
   });
 }
 
 export async function openDraft(draftId) {
   await busy('Opening the saved draft…', async () => {
-    state.draft = await api(`/api/drafts/${id(draftId)}`); state.dirty = false; state.saved = !!state.draft.result; state.tab = {};
+    [state.draft] = await Promise.all([api(`/api/drafts/${id(draftId)}`), loadFields()]); state.dirty = false; state.saved = !!state.draft.result; state.tab = {}; state.showMapping = false;
     state.planIssues = state.draft.plan?.issues || [];
     if (state.draft.result) return showSaved(state.draft.result);
     renderReview(); stage('review');
@@ -72,10 +78,11 @@ export async function openDraft(draftId) {
 function showReading() {
   const d = state.draft; const o = d.orders[0]; const items = [];
   items.push(['ok', `Opened: ${d.source_format || 'Excel workbook'}`, `${plural(d.sheets.length, 'sheet')} · ${fmt(d.sheets.reduce((n, s) => n + s.cells.length, 0), 0)} filled cells read, each value keeps its source cell`]);
+  (d.templates_refused || []).forEach(t => items.push(['warn', `Saved layout “${t.name}” (version ${t.version}) was not used`, `${(t.reasons || []).join('; ')} — so nothing from the saved layout was carried over.`]));
   if (!d.orders.length) {
-    items.push(['warn', 'This layout is new to POPPYS AI', d.suggestion ? 'A layout was proposed. Check it once — it is saved as a template so next time it is automatic.' : 'Show us once where the order details are; it is saved as a template for next time.']);
+    items.push(['warn', 'This layout is new to POPPYS AI', d.suggestion ? 'A layout was proposed from the labels and values in the file. Check it once — it is saved as a template so next time it is automatic.' : 'Show us once where the order details are; it is saved as a template for next time.']);
   } else {
-    items.push(['ok', `Layout recognised: ${d.format}`, `${plural(d.orders.length, 'order')} found`]);
+    items.push(['ok', d.template ? `Read with your saved layout “${d.template.name}” (version ${d.template.version})` : `Layout recognised: ${d.format}`, `${plural(d.orders.length, 'order')} found`]);
     const found = ['buyer', 'style', 'description', 'po_number', 'ship_date', 'season', 'merch'].filter(k => o[k]);
     items.push(['ok', `Order details found (${found.length} of 7)`, found.map(k => `${LABEL[k] || k}: ${o[k]}`).join(' · ') || 'none']);
     const pcs = l => l.reduce((n, x) => n + x.sizes.reduce((m, s) => m + num(s.quantity), 0), 0);
@@ -83,7 +90,9 @@ function showReading() {
       `Buyer order ${fmt(pcs(o.order_lines || []), 0)} pcs${(o.sample_lines || []).length ? ` · sample section ${fmt(pcs(o.sample_lines), 0)} pcs` : ''}${o.packs ? ` · ${fmt(o.packs.packs, 0)} packs × ${fmt(o.packs.pieces / o.packs.packs, 0)} = ${fmt(o.packs.pieces, 0)} pcs` : ''}`]);
     items.push([o.fabrics?.length ? 'ok' : 'miss', `Fabric & yarn: ${plural(o.fabrics?.length || 0, 'fabric row')}`, o.fabrics?.length ? `${fmt(o.fabrics.reduce((n, f) => n + num(f.total), 0))} kg in the workbook · yarn split suggested from fabric content` : 'No fabric table in this file']);
     items.push([o.accessories?.length ? 'ok' : 'miss', `Trims & accessories: ${plural(o.accessories?.length || 0, 'row')}`, o.accessories?.length ? `${new Set(o.accessories.map(a => a.block)).size} trim tables: ${[...new Set(o.accessories.map(a => a.category))].slice(0, 6).join(', ')}…` : 'No accessory tables in this file']);
-    const need = [...new Set(d.orders.flatMap(x => REQUIRED.filter(k => !x[k]).map(k => LABEL[k])))];
+    const unknown = d.orders.filter(x => 'qty_unit' in x && !x.qty_unit);
+    if (unknown.length) items.push(['warn', 'Pieces or packs? The file does not say', `${unknown[0].provenance?.qty_unit?.question || 'Are these quantities pieces or packs?'} You choose it on the next screen.`]);
+    const need = [...new Set(d.orders.flatMap(x => requiredKeys().filter(k => !x[k]).map(k => LABEL[k])))];
     items.push([need.length ? 'warn' : 'ok', need.length ? `${plural(need.length, 'field')} not in the file: ${need.join(', ')}` : 'All required order details present',
       need.length ? 'They are outlined in red on the next screen — type them there.' : 'Review the quantities and approve.']);
   }
@@ -100,8 +109,13 @@ const lineQty = l => (l.sizes || []).reduce((n, s) => n + num(s.quantity), 0);
 function clientIssues() {
   const out = [];
   state.draft.orders.forEach((o, oi) => {
-    REQUIRED.forEach(k => { if (o[k] == null || String(o[k]).trim() === '') out.push({ severity: 'error', message: 'Not in the file — please enter it.', path: `orders.${oi}.${k}`, client: true }); });
+    requiredKeys().forEach(k => { if (o[k] == null || String(o[k]).trim() === '') out.push({ severity: 'error', message: DEFAULT_REQUIRED.includes(k) ? 'Not in the file — please enter it.' : `${LABEL[k]} is required for every order — enter it.`, path: `orders.${oi}.${k}`, client: true }); });
     if (!['sample', 'order_demo'].includes(o.quantity_basis)) out.push({ severity: 'error', message: 'Choose which quantities this sample order uses.', path: `orders.${oi}.quantity_basis`, client: true });
+    if ('qty_unit' in o) {   // drafts saved before the unit question keep the old pieces-per-unit rule
+      const ppu = o.pieces_per_unit == null || o.pieces_per_unit === '' ? null : Number(o.pieces_per_unit);
+      if (!['PCS', 'PACK'].includes(o.qty_unit)) out.push({ severity: 'error', message: o.provenance?.qty_unit?.question || 'Are these quantities pieces or packs?', path: `orders.${oi}.qty_unit`, client: true });
+      else if (o.qty_unit === 'PACK' && !(Number.isInteger(ppu) && ppu >= 2)) out.push({ severity: 'error', message: ppu === 1 ? 'A pack holds at least 2 pieces — how many pieces are in one pack?' : 'How many pieces are in one pack?', path: `orders.${oi}.pieces_per_unit`, client: true });
+    }
     (o.lines || []).forEach((l, li) => {
       if (!String(l.color || '').trim()) out.push({ severity: 'error', message: 'Enter the colour / combo.', path: `orders.${oi}.lines.${li}.color`, client: true });
       if (lineQty(l) === 0) out.push({ severity: 'error', message: 'All quantities are zero — type the quantities or choose another quantity source.', path: `orders.${oi}.lines.${li}.sizes`, client: true });
@@ -136,7 +150,7 @@ export function renderReview() {
   const p = d.plan;
   root.innerHTML = `
     <div class="card doc-bar"><span class="file-badge">XLS</span>
-      <div><span class="name">${esc(d.filename)}</span><small>${esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
+      <div><span class="name">${esc(d.filename)}</span><small>${d.template ? `Saved layout “${esc(d.template.name)}” (v${esc(d.template.version)})` : esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
       <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? 'Saved to Oracle' : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
       <button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
     ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}
@@ -170,14 +184,35 @@ function orderScreen(o, oi) {
 
 function srcOf(o, k) {
   const s = o.provenance?.[k];
+  if (s?.cell && s.derivation && ['ship_date', 'order_date'].includes(k)) return dateChip(s);
   if (s) return source(s);
   return o[k] ? '<span class="chip calc">entered</span>' : '';
 }
 
+// A date read from a cell and converted: the chip keeps the cell and says how it was read (§7 of the spec).
+function dateChip(s) {
+  const where = `${s.sheet ? s.sheet + '!' : ''}${s.cell}`; const d = String(s.derivation);
+  const ambiguous = /day\/month/.test(d);
+  const how = ambiguous ? 'day/month?' : /month\/day/.test(d) ? 'month/day' : /Excel date/i.test(d) ? 'Excel date' : 'converted';
+  return `<span class="chip cell date-note ${ambiguous ? 'ambiguous' : ''}" title="${esc(`${d}${ambiguous ? ' — check it' : ''} · read from ${where}`)}">${esc(where.length > 12 ? '…' + where.slice(-10) : where)} · ${how}</span>`;
+}
+
+// Where the quantity unit came from: the file's heading, the saved layout, or the person.
+function unitSrc(o) {
+  const p = o.provenance?.qty_unit; if (!o.qty_unit) return '';
+  const said = String(p?.said ?? p?.value ?? '');
+  const fileSays = UNIT_WORDS.PACK.test(said) ? 'PACK' : UNIT_WORDS.PCS.test(said) ? 'PCS' : null;
+  if (state.unitTouched?.has(o) || !p || !['file', 'template', 'person'].includes(p.reason) || (p.reason === 'file' && fileSays && fileSays !== o.qty_unit)) return '<span class="chip calc">entered</span>';
+  if (p.reason === 'template') return `<span class="chip calc" title="${esc(p.derivation || p.evidence || 'Restored from the saved layout')}">saved layout</span>`;
+  if (p.reason === 'person') return `<span class="chip calc" title="${esc(p.derivation || '')}">chosen with the layout</span>`;
+  const where = p.cell ? `${p.sheet ? p.sheet + '!' : ''}${p.cell}` : '';
+  return `<span class="chip cell" title="${esc(`${p.evidence || ''}${where ? ' · read from ' + where : ''}`)}">${esc(where ? where + ' · ' : '')}“${esc(said.length > 18 ? said.slice(0, 17) + '…' : said)}”</span>`;
+}
+
 function field(o, oi, [k, text, req, list, type]) {
   if (k === '__orderno') return `<div class="f"><label class="f-label">${text}<span class="src"><span class="chip calc">automatic</span></span></label><input readonly value="Generated by Oracle on save"></div>`;
-  const path = `orders.${oi}.${k}`; const v = o[k] ?? ''; const issue = at(path);
-  return `<div class="f ${cls(issue)}" data-field="${esc(path)}"><label class="f-label" for="f-${esc(path)}"><span>${esc(text)}</span>${req ? '<span class="req">*</span>' : ''}<span class="src">${issue ? '' : srcOf(o, k)}</span></label>
+  const path = `orders.${oi}.${k}`; const v = o[k] ?? ''; const issue = at(path); void req;
+  return `<div class="f ${cls(issue)}" data-field="${esc(path)}"><label class="f-label" for="f-${esc(path)}"><span>${esc(text)}</span>${isRequired(k) ? '<span class="req" title="Required">*</span>' : ''}<span class="src">${issue ? '' : srcOf(o, k)}</span></label>
     <input id="f-${esc(path)}" data-path="${esc(path)}" ${type ? `type="${type}"` : ''} value="${esc(v)}" ${list ? `list="list-${list}"` : ''} ${k === 'order_ref' ? 'placeholder="e.g. PK/26-27/S/1320" maxlength="30"' : ''} ${issue ? 'aria-invalid="true"' : ''}>${msgHtml(issue)}</div>`;
 }
 
@@ -189,16 +224,36 @@ function orderTab(o, oi) {
   return `<div class="block"><div class="block-head"><h3>Order header</h3><span class="sub">Same fields as the Axpert screen · filled from the file · the cell each value came from is shown on the right</span></div>
       <div class="form-grid">${HEADER.map(h => field(o, oi, h)).join('')}</div></div>
     <div class="block"><div class="block-head"><h3>Style &amp; size quantities</h3><span class="sub">${esc(o.po_number || '')}</span></div>
-      <div class="qty-bar"><span class="lbl">Quantities to save <span style="color:var(--err)">*</span></span>
-        <div class="segmented ${cls(bIssue)}" role="radiogroup" aria-label="Quantity source">
-          ${(o.order_lines || []).length ? `<button role="radio" aria-checked="${basis === 'order_demo'}" class="${basis === 'order_demo' ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="order_demo">Buyer order · ${fmt(sum(o.order_lines), 0)} pcs</button>` : ''}
-          ${(o.sample_lines || []).length ? `<button role="radio" aria-checked="${basis === 'sample' && o._manual !== true}" class="${basis === 'sample' && !o._manual ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="sample">Sample section · ${fmt(sum(o.sample_lines), 0)} pcs</button>` : ''}
-          <button role="radio" class="${o._manual ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="manual">Type them</button></div>
-        <div class="f ${cls(at(`orders.${oi}.pieces_per_unit`))}"><label class="f-label" for="ppu-${oi}">Pieces per unit</label><input id="ppu-${oi}" type="number" min="1" step="1" data-path="orders.${oi}.pieces_per_unit" value="${esc(o.pieces_per_unit ?? '')}" title="1 = quantities are pieces; 3 = each quantity is a pack of 3"></div>
+      <div class="qty-bar"><div class="qty-row"><span class="lbl" id="basis-lbl-${oi}">Quantities to save <span style="color:var(--err)">*</span></span>
+        <div class="segmented ${cls(bIssue)}" role="radiogroup" aria-labelledby="basis-lbl-${oi}">
+          ${(o.order_lines || []).length ? `<button role="radio" aria-checked="${basis === 'order_demo'}" class="${basis === 'order_demo' ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="order_demo">Buyer order · ${fmt(sum(o.order_lines), 0)} ${o.qty_unit === 'PACK' ? 'packs' : 'pcs'}</button>` : ''}
+          ${(o.sample_lines || []).length ? `<button role="radio" aria-checked="${basis === 'sample' && o._manual !== true}" class="${basis === 'sample' && !o._manual ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="sample">Sample section · ${fmt(sum(o.sample_lines), 0)} ${o.qty_unit === 'PACK' ? 'packs' : 'pcs'}</button>` : ''}
+          <button role="radio" aria-checked="${!!o._manual}" class="${o._manual ? 'on' : ''}" data-act="basis" data-oi="${oi}" data-basis="manual">Type them</button></div>
         ${bIssue ? `<div class="cell-msg ${cls(bIssue)}">${esc(strip(bIssue.message))}</div>` : ''}</div>
+        ${unitRow(o, oi)}</div>
       ${matrix(o, oi)}
       ${packs.length ? `<div class="banner warning" style="margin-top:10px"><span class="b-ic">!</span><div>${packs.map(i => esc(strip(i.message))).join('<br>')}</div></div>` : ''}
-      ${(o.warnings || []).length ? `<details class="notes"><summary class="muted small-text" style="cursor:pointer">Notes from reading the file (${o.warnings.length})</summary><ul class="small-text">${o.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}</div>`;
+      ${notesHtml(o, oi)}</div>`;
+}
+
+function notesHtml(o, oi) {
+  // the unit and basis questions are asked on their fields, so they are not repeated here
+  const onField = [o.provenance?.qty_unit?.question, 'Confirm whether these are sample quantities.'];
+  const notes = [...(oi === 0 ? state.draft.notes || [] : []), ...(o.warnings || []).filter(w => !onField.includes(w))];
+  return notes.length ? `<details class="notes"><summary class="muted small-text" style="cursor:pointer">Notes from reading the file (${notes.length})</summary><ul class="small-text">${notes.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : '';
+}
+
+function unitRow(o, oi) {
+  const pp = `orders.${oi}.pieces_per_unit`; const ppIssue = at(pp);
+  if (!('qty_unit' in o)) {   // drafts saved before the unit question: the old pieces-per-unit field
+    return `<div class="qty-row"><div class="f ${cls(ppIssue)}"><label class="f-label" for="ppu-${oi}">Pieces per unit</label><input id="ppu-${oi}" type="number" min="1" step="1" data-path="${pp}" value="${esc(o.pieces_per_unit ?? '')}" title="1 = quantities are pieces; 3 = each quantity is a pack of 3">${msgHtml(ppIssue)}</div></div>`;
+  }
+  const u = o.qty_unit || ''; const path = `orders.${oi}.qty_unit`; const issue = at(path);
+  return `<div class="qty-row unit-row" data-field="${esc(path)}"><span class="lbl" id="unit-lbl-${oi}">Quantity unit <span style="color:var(--err)">*</span></span>
+    <div class="segmented ${cls(issue)}" role="radiogroup" aria-labelledby="unit-lbl-${oi}" ${issue ? `aria-describedby="unit-msg-${oi}"` : ''}>
+      ${[['PCS', 'Pieces'], ['PACK', 'Packs']].map(([v, l]) => `<button role="radio" aria-checked="${u === v}" class="${u === v ? 'on' : ''}" data-act="unit" data-oi="${oi}" data-unit="${v}">${l}</button>`).join('')}</div>
+    ${u === 'PACK' ? `<div class="f ${cls(ppIssue)}"><label class="f-label" for="ppu-${oi}">Pieces in one pack <span class="req">*</span></label><input id="ppu-${oi}" type="number" min="2" step="1" data-path="${pp}" value="${esc(o.pieces_per_unit ?? '')}" ${ppIssue ? 'aria-invalid="true"' : ''}>${msgHtml(ppIssue)}</div>` : ''}
+    ${issue ? `<div class="cell-msg ${cls(issue)}" id="unit-msg-${oi}">${esc(strip(issue.message))}</div>` : `<span class="unit-src">${unitSrc(o)}</span>`}</div>`;
 }
 
 function sizeNames(o) {
@@ -239,7 +294,7 @@ function matrix(o, oi) {
         <td><button class="icon-btn" data-act="remove-line" data-oi="${oi}" data-li="${li}" title="Remove line ${li + 1}" aria-label="Remove line ${li + 1}">✕</button></td></tr>
         ${msgRow(rowIss, span, rowCls)}`;
     }).join('') || `<tr><td colspan="${span}" class="empty">No lines yet. Add a colour line.</td></tr>`}
-    </tbody><tfoot><tr><td></td><td>Total pieces</td><td class="muted">${ppu > 1 ? `× ${ppu} per unit = <b>${fmt(grand * ppu, 0)}</b> pcs` : ''}</td>${sizes.map(s => `<td class="num">${fmt(colTotal(s), 0)}</td>`).join('')}<td></td><td class="num">${fmt(grand, 0)}</td><td></td><td></td></tr></tfoot></table></div>
+    </tbody><tfoot><tr><td></td><td>${o.qty_unit === 'PACK' ? 'Total packs' : 'Total pieces'}</td><td class="muted">${ppu > 1 ? `${o.qty_unit === 'PACK' ? `packs × ${ppu} pieces` : `× ${ppu} per unit`} = <b>${fmt(grand * ppu, 0)}</b> pcs` : ''}</td>${sizes.map(s => `<td class="num">${fmt(colTotal(s), 0)}</td>`).join('')}<td></td><td class="num">${fmt(grand, 0)}</td><td></td><td></td></tr></tfoot></table></div>
     <div class="tbl-actions"><button class="secondary small" data-act="add-line" data-oi="${oi}">＋ Add colour line</button><span class="muted small-text" style="align-self:center">Tip: type a new size name in “＋ size” to add a column.</span></div>`;
 }
 
@@ -326,6 +381,7 @@ function trimsTab(o, oi) {
 
 function renderSide() {
   const d = state.draft; const p = !state.dirty && d.plan && !d.plan.stale;
+  $('#review-side').hidden = !d.orders.length;   // nothing to check until the layout is read
   const errs = allIssues().filter(i => i.severity === 'error').length + fileIssues().length;
   const t = p ? p.totals : null;
   const pcs = d.orders.reduce((n, o) => n + (o.lines || []).reduce((m, l) => m + lineQty(l), 0) * (num(o.pieces_per_unit) || 1), 0);
@@ -453,6 +509,16 @@ export async function onAction(btn) {
     case 'ask-file': askFile(); return true;
     case 'new-upload': if (state.dirty && !await confirmDialog('Discard your corrections?', '<p>Corrections not yet checked will be lost.</p>', 'Discard')) return true; resetWorkspace(); return true;
     case 'show-mapping': state.showMapping = true; renderReview(); $('#mapping-panel').scrollIntoView({ behavior: 'smooth' }); return true;
+    case 'hide-mapping': state.showMapping = false; renderReview(); return true;
+    case 'unit': {
+      const u = btn.dataset.unit; o.qty_unit = u;
+      if (u === 'PCS') o.pieces_per_unit = 1;
+      if (u === 'PACK' && !(Number.isInteger(Number(o.pieces_per_unit)) && Number(o.pieces_per_unit) >= 2)) o.pieces_per_unit = null;
+      (state.unitTouched ||= new WeakSet()).add(o);
+      clearIssues(`orders.${oi}.qty_unit`); clearIssues(`orders.${oi}.pieces_per_unit`);
+      markDirty(); renderReview(); if (u === 'PACK' && o.pieces_per_unit == null) $(`#ppu-${oi}`)?.focus();
+      return true;
+    }
     case 'toggle-yarn': { const k = btn.dataset.key; state.openFab.has(k) ? state.openFab.delete(k) : state.openFab.add(k); renderReview(); return true; }
     case 'toggle-group': { const k = btn.dataset.key; state.openGroups.has(k) ? state.openGroups.delete(k) : state.openGroups.add(k); renderReview(); return true; }
     case 'only-problems': state.onlyProblems = btn.checked; renderReview(); return true;
@@ -465,7 +531,7 @@ export async function onAction(btn) {
       clearIssues(`orders.${oi}.quantity_basis`); clearIssues(`orders.${oi}.lines`);
       break;
     }
-    case 'add-order': d.orders.push({ buyer: '', style: '', description: '', po_number: '', order_ref: '', order_date: '', ship_date: '', exporter: state.health?.settings?.company_exporter || '', sample_type: state.health?.settings?.default_sample_type || '', quantity_basis: 'sample', _manual: true, pieces_per_unit: 1, lines: [{ label: '', color: '', declared_total: null, sizes: [{ size: '', quantity: null }] }], fabrics: [], accessories: [], provenance: {}, warnings: [] }); break;
+    case 'add-order': d.orders.push({ buyer: '', style: '', description: '', po_number: '', order_ref: '', order_date: '', ship_date: '', exporter: state.health?.settings?.company_exporter || '', sample_type: state.health?.settings?.default_sample_type || '', quantity_basis: 'sample', _manual: true, qty_unit: '', pieces_per_unit: null, lines: [{ label: '', color: '', declared_total: null, sizes: [{ size: '', quantity: null }] }], fabrics: [], accessories: [], provenance: {}, warnings: [] }); break;
     case 'remove-order': if (!await confirmDialog('Remove this order?', '<p>It will not be imported. You can add it back by uploading again.</p>', 'Remove')) return true; d.orders.splice(oi, 1); break;
     case 'add-line': o.lines.push(emptyLine()); break;
     case 'remove-line': o.lines.splice(Number(btn.dataset.li), 1); clearIssues(`orders.${oi}.lines`); break;
@@ -489,13 +555,21 @@ async function saveEdits() {
   state.dirty = false;
 }
 
+// Returns {ok} or {rejected: [...]} (409: each wrong choice, shown on its field in the layout check).
 async function applyMapping(body) {
-  await busy('Reading the file with this layout…', async () => {
+  return busy('Reading the file with this layout…', async () => {
     await saveEdits();
-    state.draft = await api(`/api/drafts/${id(state.draft.id)}/map`, { method: 'POST', body: { version: state.draft.version, ...body } });
+    try { state.draft = await api(`/api/drafts/${id(state.draft.id)}/map`, { method: 'POST', body: { version: state.draft.version, ...body } }); }
+    catch (e) {
+      if (e.status === 409 && e.data?.rejected?.length) return { rejected: e.data.rejected };
+      if (e.status === 409 && /pack/i.test(e.message)) return { rejected: [{ field: 'qty_unit', reason: e.message }] };
+      throw e;
+    }
     state.showMapping = false; state.tab = {}; state.planIssues = [];
-    notify(body.save_template ? 'Layout applied and saved as a template. Files with this layout are now read automatically.' : 'Layout applied. Check the order details.', 'success');
+    const t = state.draft.template;
+    notify(body.save_template && t ? `Layout saved as “${t.name}” (version ${t.version}). The next file with this layout is read automatically.` : 'Layout applied. Check the order details.', 'success');
     renderReview();
+    return { ok: true };
   });
 }
 

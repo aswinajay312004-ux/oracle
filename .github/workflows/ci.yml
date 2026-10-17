@@ -1,0 +1,219 @@
+# POPPYS AI continuous integration. Every job runs the same scripts/check.sh step a laptop can run.
+#   secrets  - no settings files, local data or passwords committed (own rules + gitleaks over all history)
+#   lint     - ruff with the bug-catching rules in pyproject.toml
+#   js       - frontend ES modules parse, and keep to the strict content-security rules
+#   tests    - the unit suite on Python 3.13 (stand-in Oracle and SQLite)
+#   oracle   - the real-Oracle tests against a throwaway Oracle Free 23 with a GARMENT_DEMO replica
+#   audit    - known vulnerabilities in requirements.txt (also weekly, as new advisories appear)
+#   windows  - the unit suite through scripts/check.ps1 on Windows PowerShell 5.1, the laptop's shell
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'   # Mondays 03:23 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}   # a newer push replaces an older run, except on main
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  PYTHONUNBUFFERED: '1'
+  PYTHON: python   # the interpreter scripts/check.sh uses: the one actions/setup-python installed
+
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0             # gitleaks reads every commit, not just the last one
+          persist-credentials: false
+      - name: No settings files, local data or passwords in the repository
+        run: bash scripts/check.sh secrets
+      - name: Gitleaks over the whole git history
+        env:
+          # Pinned by version and digest; the image runs as root and trusts the mounted repository.
+          GITLEAKS_IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+        run: docker run --rm -v "$PWD:/repo:ro" "$GITLEAKS_IMAGE" git /repo --redact --no-banner --exit-code 1
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install ruff (the version pinned in requirements-dev.txt)
+        run: python -m pip install "$(grep -oE '^ruff==[^ ]+' requirements-dev.txt)"
+      - name: ruff check
+        env:
+          RUFF_OUTPUT_FORMAT: github   # findings show up as annotations on the changed lines
+        run: bash scripts/check.sh lint
+
+  js:
+    name: JavaScript syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: node --check every frontend module
+        run: bash scripts/check.sh js
+
+  tests:
+    name: Unit tests (Python 3.13)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v7   # the flowchart tests run the real graph.js module in Node
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: pytest
+        run: bash scripts/check.sh tests -ra
+
+  oracle:
+    name: Oracle integration (Oracle Free 23)
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          # Services start before any step can make a password, and their env is printed in the job log.
+          # So the image starts with its own throwaway password, and the first step replaces it with one
+          # generated (and masked) in this job. Nothing secret lives in the repository or its settings.
+          ORACLE_RANDOM_PASSWORD: 'true'
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      POPPYS_REPLICA_DSN: 127.0.0.1:1521/FREEPDB1
+      POPPYS_ORACLE_DSN: 127.0.0.1:1521/FREEPDB1   # same address scripts/bootstrap_local.py writes
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Generate one-time database passwords
+        run: |
+          for name in ORACLE_PASSWORD APP_USER_PASSWORD; do
+            value="Ci$(python -c 'import secrets; print(secrets.token_hex(12))')"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
+
+      - name: Set the passwords and create the GARMENT_DEMO schema
+        env:
+          SERVICE_ID: ${{ job.services.oracle.id }}
+        run: |
+          docker ps --filter "id=$SERVICE_ID" --format 'Oracle service container {{.ID}} ({{.Image}}): {{.Status}}'
+          echo "POPPYS_ORACLE_CONTAINER=$SERVICE_ID" >> "$GITHUB_ENV"   # read by the scripts below
+          docker exec "$SERVICE_ID" resetPassword "$ORACLE_PASSWORD" > /dev/null
+          docker exec "$SERVICE_ID" createAppUser GARMENT_DEMO "$APP_USER_PASSWORD" FREEPDB1 > /dev/null
+
+      - name: Build the GARMENT_DEMO replica (19 tables, synthetic orders)
+        run: POPPYS_REPLICA_PASSWORD="$APP_USER_PASSWORD" python tests/oracle_replica.py
+
+      - name: Create the restricted POPPYS_APP account (writes a temporary .env.poppys)
+        run: |
+          test ! -e .env.poppys
+          python scripts/bootstrap_local.py
+          echo "::add-mask::$(sed -n 's/^ORACLE_PASSWORD=//p' .env.poppys)"
+          python scripts/grant_bom_tables.py
+          python scripts/check_oracle.py
+
+      - name: Real-Oracle tests
+        run: bash scripts/check.sh oracle -ra
+
+      - name: Remove the temporary .env.poppys
+        if: always()
+        run: rm -f .env.poppys
+
+  audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install pip-audit (the version pinned in requirements-dev.txt)
+        run: python -m pip install "$(grep -oE '^pip-audit==[^ ]+' requirements-dev.txt)"
+      - name: Audit requirements.txt (what the laptop runs)
+        run: pip-audit -r requirements.txt --progress-spinner off --aliases on
+      - name: Audit requirements-dev.txt (test and CI tools)
+        if: success() || failure()
+        run: pip-audit -r requirements-dev.txt --progress-spinner off --aliases on
+
+  windows:
+    name: Unit tests on Windows (non-blocking)
+    runs-on: windows-latest
+    continue-on-error: true   # the laptop's OS; make it blocking once it has been green for a while
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: powershell     # Windows PowerShell 5.1, as on the laptop
+    env:
+      PYTHON: ''              # let scripts/check.ps1 use the python on PATH
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: scripts/check.ps1 (secret scan, lint, JavaScript, unit tests)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check.ps1 all -ra

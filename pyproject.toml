@@ -1,3 +1,57 @@
+# Tool settings only. POPPYS AI is not an installable package; dependencies live in requirements*.txt.
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.ruff]
+target-version = "py313"
+line-length = 160                     # only read by rules that measure width; E501 is not selected
+extend-exclude = ["data", "docs", "notes", "tools"]
+
+[tool.ruff.lint]
+# The code is deliberately compact (semicolons, one-line ifs, short names), so style rules stay off
+# and nothing here asks for reformatting. Only rules that catch real bugs or risky code are on.
+select = [
+    "F",                               # pyflakes: undefined names, unused imports/variables, bad % / format calls
+    "E401", "E402",                    # imports: several modules on one line, imports below code
+    "E711", "E712", "E713", "E714",    # comparisons with None/True/False, `not x in y`
+    "E721", "E722", "E742", "E743",    # type(x) == y, bare except, ambiguous class/function names
+    "E9",                              # syntax and IO errors
+    "W6",                              # invalid escape sequences in strings
+    "B",                               # bugbear: mutable defaults, loop-variable closures, useless expressions...
+    "PLE",                             # pylint errors
+    "PLW0120", "PLW0127", "PLW0128", "PLW0129", "PLW0131", "PLW0133", "PLW0177", "PLW0211",
+    "PLW0245", "PLW0406", "PLW0602", "PLW0604", "PLW0642", "PLW0711", "PLW1501", "PLW1507",
+    "PLW1508", "PLW1509", "PLW2101", "PLW3301",   # pylint warnings that are real mistakes (missing raise, NaN ==, ...)
+    "PLR0124", "PLR0133", "PLR1722",   # comparing a value with itself / constants, exit() instead of sys.exit()
+    "UP005", "UP020", "UP021", "UP022", "UP023", "UP024", "UP026", "UP035", "UP036", "UP041",  # deprecated APIs
+    "S102", "S103", "S104", "S113", "S301", "S302", "S306", "S307", "S324",
+    "S501", "S506", "S602", "S604", "S605",   # security: exec/eval, pickle, shell=True, 0.0.0.0, no timeout, weak hash
+    "ASYNC", "T10", "EXE", "YTT",      # async pitfalls, forgotten debugger calls, shebangs, sys.version checks
+    "FAST003",                         # FastAPI path parameter missing from the function
+    "PGH005", "PIE794", "PIE796",      # invalid mock asserts, duplicate class fields / enum values
+    "RUF006", "RUF008", "RUF009", "RUF016", "RUF017", "RUF018", "RUF024", "RUF026",
+    "RUF030", "RUF034", "RUF040",      # dangling asyncio tasks, shared mutable defaults, assert mistakes
+]
+ignore = [
+    "B007",   # unused loop variable: harmless, the compact style keeps tuple unpacking readable
+    "B008",   # FastAPI declares File()/Depends() in argument defaults by design
+    "B009", "B010",   # getattr/setattr with a constant: style only
+    "B028",   # warnings.warn without stacklevel: style only
+    "B904",   # raise ... from inside except: HTTPException replies do not need chaining
+    "B905",   # zip() without strict=: the zipped lists are built together
+]
+
+[tool.ruff.lint.per-file-ignores]
+# backend/workbooks.py ignores B023 (below): its small readers defined inside a loop run in the same iteration.
+"tests/**" = [
+    "B017",   # pytest.raises(Exception) is used where the Oracle driver error type does not matter
+    "S307",   # tests/fixtures.py evaluates its own arithmetic formulas when building workbooks
+]
+# Known findings, listed in the CI report for the owners of these files to fix. Remove each line once fixed
+# so the rule protects that file again (`ruff check --fix` removes the unused imports safely).
+"backend/insight/engine.py" = ["F401", "F841"]
+"backend/insight/service.py" = ["F401"]
+"backend/insight/understand.py" = ["F401"]
+"backend/main.py" = ["F841"]
+"backend/workbooks.py" = ["B023", "F401"]   # F401 is a known finding; B023 as explained above

@@ -397,12 +397,18 @@ def edit(id: str, data: Edit, user=Depends(require('edit'))):
 
 def _decided_unit(orders):
     """(unit, basis) when every order of the draft has the same complete unit decision, else (None, None)."""
-    units = {(o.get('qty_unit'), 1 if o.get('qty_unit') == 'PCS' else o.get('pieces_per_unit')) for o in orders}
+    def whole(v):
+        try:
+            n = float(str(v).strip())
+            return int(n) if n.is_integer() else None
+        except (TypeError, ValueError):
+            return None
+    units = {(o.get('qty_unit'), 1 if o.get('qty_unit') == 'PCS' else whole(o.get('pieces_per_unit'))) for o in orders}
     bases = {o.get('quantity_basis') for o in orders}
     unit = None
     if len(units) == 1:
         u, per = units.pop()
-        if u == 'PCS' or (u == 'PACK' and isinstance(per, int) and per >= 2):
+        if u == 'PCS' or (u == 'PACK' and per and per >= 2):
             unit = dict(qty_unit=u, pieces_per_unit=per)
     basis = bases.pop() if len(bases) == 1 and bases <= {'sample', 'order_demo'} else None
     return unit, basis
@@ -1022,22 +1028,26 @@ COUNT_TTL = 30
 _counts = {}; _counts_lock = threading.Lock()
 
 
-def _count(execute, dialect, table, meta, cond='', binds=None):
-    """Exact COUNT(*) unless dictionary statistics say the table is very large (then approximate)."""
+def _count(execute, dialect, table, meta, cond='', binds=None, timeout_ms=4000):
+    """Exact COUNT(*) unless dictionary statistics say the table is very large (then approximate).
+    A count gets a few seconds at most: a whole-table count that runs out falls back to statistics (≈),
+    a filtered one to None ('not counted'), so a page never waits on counting a big table."""
     stats = meta.get('rows')
     if stats is not None and stats > BIG_ROWS and not cond:
         return stats, True
     try:
-        return execute(f'SELECT COUNT(*) FROM {dialect.table(table)}{cond}', binds or {}, 1)[0][0], False
+        run = execute.limited(timeout_ms) if hasattr(execute, 'limited') else execute   # Oracle executor: tighter time limit
+        return run(f'SELECT COUNT(*) FROM {dialect.table(table)}{cond}', binds or {}, 1)[0][0], False
     except Exception:
-        return stats, True
+        return (None if cond else stats), True
 
 
-def table_counts(kb, sources, tables):
+def table_counts(kb, sources, tables, budget_ms=8000):
     """{table: (rows, approximate)} shared by Ask AI, the explorer and the data dictionary. Exact counts
     (cached 30 s, cleared after every save) so a number on screen never silently disagrees with Oracle;
-    very large tables use statistics and are shown with ≈."""
-    out = {}; now = time.time()
+    very large tables use statistics and are shown with ≈. All counts of one call share a time budget;
+    tables left when it runs out show statistics (≈) and are counted on a later call."""
+    out = {}; now = time.time(); deadline = now + budget_ms / 1000
     for t in dict.fromkeys(tables):
         meta = kb.table(t)
         if not meta:
@@ -1049,7 +1059,10 @@ def table_counts(kb, sources, tables):
         src = sources.get('local') if meta.get('source') == 'local' else sources.get('db')
         if not src:
             out[t] = (meta.get('rows'), True); continue
-        out[t] = _count(*src, t, meta)
+        left = (deadline - time.time()) * 1000
+        if meta.get('source') != 'local' and left < 200:
+            out[t] = (meta.get('rows'), True); continue
+        out[t] = _count(*src, t, meta, timeout_ms=int(min(4000, max(left, 200))))
         if meta.get('source') != 'local':   # uploaded-file table is in memory: always counted fresh
             with _counts_lock:
                 _counts[t] = (now, *out[t])
@@ -1124,35 +1137,71 @@ def explorer_rows(table: str, column: str | None = None, value: str | None = Que
                   exact: bool = False, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0, le=100000),
                   after: str | None = Query(default=None, max_length=40), user=Depends(authenticated)):
     """One page of a table. column + value filter by 'contains' (any case); exact=true matches the whole
-    value instead (a record ID or an order reference), using the plain column for numbers so indexes help."""
+    value instead (a record ID or an order reference). Exact matches use the plain column (col = :v, as typed
+    and in capitals) so an index answers them on a big table; the any-case/any-spaces form is used only when
+    that finds nothing on a table that is not very large. Rows are read before counting: a result that fits
+    on the first page needs no COUNT at all."""
     table = table.upper(); kb = knowledge_base(); meta = _oracle_tables(kb).get(table)
     if not IDENT.match(table) or not meta:
         raise HTTPException(404, 'Table not available.')
     names = list(meta['columns'])
-    binds = {}; where = []
+    big = (meta.get('rows') or 0) > BIG_ROWS
+    key = meta.get('key') if meta.get('key') in names and meta['columns'][meta['key']]['type'] == 'NUMBER' else None
+    paging = bool(key) and after not in (None, '')
+    if paging and not re.fullmatch(r'-?\d{1,38}', after):
+        raise HTTPException(422, 'Invalid page position.')
+    choices = [('', {})]   # (WHERE clause, binds) alternatives: the first that finds a row is used
     with query_sources() as sources:
         execute, dialect = _db(sources)
         if column and value:
             column = column.upper(); value = value.strip()
             if column not in names:
                 raise HTTPException(404, 'Column not available.')
-            if exact and meta['columns'][column]['type'] == 'NUMBER' and re.fullmatch(r'-?\d{1,38}', value):
-                where.append(f'{column} = :v'); binds['v'] = int(value)
+            kind = meta['columns'][column]['type']
+            if exact and kind == 'NUMBER' and re.fullmatch(r'-?\d{1,38}', value):
+                choices = [(f'{column} = :v', {'v': int(value)})]
+            elif exact and kind in ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR', 'VARCHAR'):
+                plain = {f'v{i}': v for i, v in enumerate(dict.fromkeys([value, value.upper()]))}
+                choices = [(f'{column} IN ({", ".join(":" + k for k in plain)})', plain)]
+                if not big:
+                    choices.append((f'{dialect.text(column)} = :v', {'v': value.upper()}))
             elif exact:
-                where.append(f'{dialect.text(column)} = :v'); binds['v'] = value.upper()
+                choices = [(f'{dialect.text(column)} = :v', {'v': value.upper()})]
             else:
-                where.append(f'{dialect.text(column)} LIKE :v'); binds['v'] = f'%{value.upper()}%'
-        key = meta.get('key') if meta.get('key') in names and meta['columns'][meta['key']]['type'] == 'NUMBER' else None
-        cond = (' WHERE ' + ' AND '.join(where)) if where else ''
-        total, approx = _count(execute, dialect, table, meta, cond, binds)
+                like = re.sub(r'([\\%_])', r'\\\1', value.upper())
+                choices = [(f"{dialect.text(column)} LIKE :v ESCAPE '\\'", {'v': f'%{like}%'})]
+        if len(choices) > 1:   # a cheap existence probe picks the predicate, the same one on every page
+            pick = execute.limited(4000) if hasattr(execute, 'limited') else execute
+            try:
+                found = pick(dialect.limit(f'SELECT 1 FROM {dialect.table(table)} WHERE {choices[0][0]}', 1), choices[0][1], 1)
+            except QueryError:
+                found = []
+            choices = choices[:1] if found else choices[1:]
+        where, binds = choices[0]
+        cond = f' WHERE {where}' if where else ''
         select = f'SELECT {", ".join(names)} FROM {dialect.table(table)}'
+        page_binds = dict(binds)
         if key:   # keyset paging: constant cost on big tables
-            if after not in (None, ''):
-                where.append(f'{key} < :after'); binds['after'] = int(after)
-            sql = dialect.limit(select + (' WHERE ' + ' AND '.join(where) if where else '') + f' ORDER BY {key} DESC', limit)
+            clauses = [w for w in (where, f'{key} < :after' if paging else '') if w]
+            if paging:
+                page_binds['after'] = int(after)
+            sql = dialect.limit(select + (' WHERE ' + ' AND '.join(clauses) if clauses else '') + f' ORDER BY {key} DESC', limit)
         else:
             sql = dialect.page(select + cond + f' ORDER BY {names[0]} DESC', limit, offset)
-        rows = _rows(execute, sql, binds, names, limit)
+        try:
+            rows = _rows(execute, sql, page_binds, names, limit)
+        except QueryError as exc:
+            if where and not exact and big:
+                raise HTTPException(409, f'Looking for “{value}” anywhere inside {meta["columns"][column]["business"]} means reading all '
+                                         f'≈ {meta["rows"]:,} rows of {meta["business"]}, which took too long. Choose “is exactly” to look up a '
+                                         'whole value (an order reference or record ID), or filter a smaller linked table.')
+            raise HTTPException(409, str(exc))
+        if not paging and not offset and len(rows) < limit:
+            total, approx = len(rows), False   # everything is on this page
+        elif where and not exact and big:
+            total, approx = None, True         # 'contains' on a very large table: counting would read every row again
+        else:
+            total, approx = _count(execute, dialect, table, meta, cond, binds)
         decoded = _decode(kb, execute, dialect, table, rows)
     return dict(table=table, business=meta['business'], description=meta['description'], key=key, label=meta.get('label'),
                 display=meta['display'], columns=_columns(meta),

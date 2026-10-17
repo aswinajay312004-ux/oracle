@@ -12,11 +12,16 @@ be touched), and never drops, updates or deletes anything.
 Tables and columns come from docs/live_schema_columns.json (the real column types and NOT NULL
 rules). Primary keys are added on the ID columns and indexes on the order links. --orders N adds N
 synthetic historic orders (2 lines x 4 sizes each) to rehearse large-table behaviour.
+
+Large-database rehearsal (docs/PERFORMANCE.md): a SECOND disposable container on another port, e.g.
+    docker run -d --name poppys-replica-big -p 1522:1521 ... gvenzl/oracle-free:23-slim-faststart
+    POPPYS_REPLICA_DSN=127.0.0.1:1522/FREEPDB1 ... python tests/oracle_replica.py --orders 3000000   (24M size rows)
 """
 from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -36,26 +41,34 @@ def coltype(c):
     return c['type']
 
 
-def bulk(cur, n):
-    """Server-side generation of n historic orders: n ORDMAS, 2n ORDSTYLE, 8n ORDSIZE rows."""
+CHUNK = 250_000   # orders generated per INSERT: CONNECT BY holds every level in memory, so big runs go in chunks
+
+
+def bulk(cur, n, chunk=CHUNK):
+    """Server-side generation of n historic orders: n ORDMAS, 2n ORDSTYLE, 8n ORDSIZE rows, in chunks so any
+    size loads (measured: 300k orders ≈ 35 s, 3M orders ≈ 6 min incl. statistics; see docs/PERFORMANCE.md)."""
     base = 10_000_000
-    cur.execute(f'''INSERT /*+ APPEND */ INTO ORDMAS (ORDMASID, DOCID, BUYER, STYLENO, STYLEDESC, ODATE, OQTY, BONO, UOM, MERCH, SAMPLETYPE, ORDCATEGORY, CANCEL)
-        SELECT {base} + LEVEL, 'HX/' || LPAD(LEVEL, 7, '0'), MOD(LEVEL, 3) + 1, 11 + MOD(LEVEL, 3), 21 + MOD(LEVEL, 2),
-               DATE '2019-01-01' + MOD(LEVEL * 7, 2800), 400, 'PO-H' || LEVEL, 51, 61, 'BULK ORDER', 'PRODUCTION ORDER',
-               CASE WHEN MOD(LEVEL, 50) = 0 THEN 'T' ELSE 'F' END
-          FROM dual CONNECT BY LEVEL <= :n''', n=n)
-    cur.connection.commit()
-    cur.execute(f'''INSERT /*+ APPEND */ INTO ORDSTYLE (ORDSTYLEID, ORDMASID, SNO, SUBNO, COMBO, ORDQTY, SHIPDT, PONUM)
-        SELECT ({base} + o.l) * 10 + s.n, {base} + o.l, s.n, ({base} + o.l) || ':' || s.n, 41 + MOD(o.l + s.n, 3), 200,
-               DATE '2019-03-01' + MOD(o.l * 7, 2800), 'PO-H' || o.l
-          FROM (SELECT LEVEL l FROM dual CONNECT BY LEVEL <= :n) o CROSS JOIN (SELECT LEVEL n FROM dual CONNECT BY LEVEL <= 2) s''', n=n)
-    cur.connection.commit()
-    cur.execute(f'''INSERT /*+ APPEND */ INTO ORDSIZE (ORDSIZEID, ORDMASID, SUB3_SUBNO, GSIZE, RQTY, PQTY, ORDSIZEROW)
-        SELECT (({base} + o.l) * 10 + s.n) * 10 + z.r, {base} + o.l, ({base} + o.l) || ':' || s.n, 30 + z.r + MOD(o.l, 2), 50, 50, z.r
-          FROM (SELECT LEVEL l FROM dual CONNECT BY LEVEL <= :n) o
-          CROSS JOIN (SELECT LEVEL n FROM dual CONNECT BY LEVEL <= 2) s
-          CROSS JOIN (SELECT LEVEL r FROM dual CONNECT BY LEVEL <= 4) z''', n=n)
-    cur.connection.commit()
+    orders = 'SELECT LEVEL + :s l FROM dual CONNECT BY LEVEL <= :k'
+    for start in range(0, n, chunk):
+        k = min(chunk, n - start); t = time.time()
+        cur.execute(f'''INSERT /*+ APPEND */ INTO ORDMAS (ORDMASID, DOCID, BUYER, STYLENO, STYLEDESC, ODATE, OQTY, BONO, UOM, MERCH, SAMPLETYPE, ORDCATEGORY, CANCEL)
+            SELECT {base} + o.l, 'HX/' || LPAD(o.l, 7, '0'), MOD(o.l, 3) + 1, 11 + MOD(o.l, 3), 21 + MOD(o.l, 2),
+                   DATE '2019-01-01' + MOD(o.l * 7, 2800), 400, 'PO-H' || o.l, 51, 61, 'BULK ORDER', 'PRODUCTION ORDER',
+                   CASE WHEN MOD(o.l, 50) = 0 THEN 'T' ELSE 'F' END
+              FROM ({orders}) o''', s=start, k=k)
+        cur.connection.commit()
+        cur.execute(f'''INSERT /*+ APPEND */ INTO ORDSTYLE (ORDSTYLEID, ORDMASID, SNO, SUBNO, COMBO, ORDQTY, SHIPDT, PONUM)
+            SELECT ({base} + o.l) * 10 + s.n, {base} + o.l, s.n, ({base} + o.l) || ':' || s.n, 41 + MOD(o.l + s.n, 3), 200,
+                   DATE '2019-03-01' + MOD(o.l * 7, 2800), 'PO-H' || o.l
+              FROM ({orders}) o CROSS JOIN (SELECT LEVEL n FROM dual CONNECT BY LEVEL <= 2) s''', s=start, k=k)
+        cur.connection.commit()
+        cur.execute(f'''INSERT /*+ APPEND */ INTO ORDSIZE (ORDSIZEID, ORDMASID, SUB3_SUBNO, GSIZE, RQTY, PQTY, ORDSIZEROW)
+            SELECT (({base} + o.l) * 10 + s.n) * 10 + z.r, {base} + o.l, ({base} + o.l) || ':' || s.n, 30 + z.r + MOD(o.l, 2), 50, 50, z.r
+              FROM ({orders}) o
+              CROSS JOIN (SELECT LEVEL n FROM dual CONNECT BY LEVEL <= 2) s
+              CROSS JOIN (SELECT LEVEL r FROM dual CONNECT BY LEVEL <= 4) z''', s=start, k=k)
+        cur.connection.commit()
+        print(f'  {start + k:,} / {n:,} historic orders ({time.time() - t:.1f} s)', flush=True)
 
 
 def main():
@@ -88,7 +101,9 @@ def main():
         conn.commit()
         if args.orders:
             bulk(cur, args.orders)
+        t = time.time()
         cur.callproc('DBMS_STATS.GATHER_SCHEMA_STATS', ['GARMENT_DEMO'])
+        print(f'  statistics gathered ({time.time() - t:.1f} s)', flush=True)
         cur.execute('SELECT table_name, num_rows FROM user_tables ORDER BY table_name')
         print('Replica ready:', ', '.join(f'{t}={n}' for t, n in cur))
 

@@ -8,6 +8,7 @@ here saves anything: a person confirms the layout once.
 """
 from __future__ import annotations
 from copy import deepcopy
+from functools import lru_cache
 import re
 from . import fields as F, workbooks as W
 
@@ -46,6 +47,11 @@ def dice(a, b):
 def name_score(label, aliases):
     """(score, alias): 1.0 for an exact alias after normalisation, else the best of token Jaccard and
     character-trigram Dice against every alias, after expanding abbreviations."""
+    return _name_score(str(label or ''), tuple(aliases))
+
+
+@lru_cache(maxsize=20000)
+def _name_score(label, aliases):
     n = W.norm(label)
     if not n:
         return 0.0, None
@@ -200,14 +206,16 @@ def matrix_at(g, r, mi):
     run = max(runs, key=lambda x: (sum(isinstance(v, str) for _, v in x), len(x)))
     first, last = run[0][0], run[-1][0]
     texts = sum(isinstance(v, str) for _, v in run)
-    if texts + sum(1 for c, v in filled if isinstance(v, str) and c < first) < 3:
-        return None    # a row of quantities, not headings
     left = [(c, v) for c, v in filled if c < first and isinstance(v, str)]
     color = next((c for c, v in left if name_score(v, g.fields.aliases('color'))[0] >= HIGH), None)
     names = g.fields.aliases('style') + g.fields.aliases('description') + ['garment', 'garment style']
     label = next((c for c, v in left if c != color and name_score(v, names)[0] >= HIGH), None)
     total = next((c for c, v in filled if c > last and isinstance(v, str) and
                   (W.norm(v).startswith('total') or W.strip_units(W.norm(v)) in {W.norm(a) for a in g.fields.aliases('quantity')})), None)
+    # ≥ 3 text headings, or numeric sizes (28, 30, 32) named as a table by a colour/style/total heading —
+    # otherwise this is a row of quantities, not headings.
+    if texts < 3 and not (color or label or total) or sum(isinstance(v, str) for _, v in filled) < 2:
+        return None
     rows = _body(g, r, range(first, last + 1), label or color)
     cells, numeric, negative = _numbers(g, rows, range(first, last + 1))
     if not numeric or len(numeric) < 0.8 * len(cells) or negative:
@@ -346,7 +354,7 @@ def check(sheet, definition, fields=None, masters=None, source=None):
             reject(key, cell, v, f'{cell} holds “{show(v)}”, which is not a number'); continue
         if key in ('buyer', 'description') and (is_number(v) or is_date(v)):
             reject(key, cell, v, f'{cell} holds {show(v)}, a {"date" if is_date(v) else "number"} — not a {Fv.label(key).lower()}'); continue
-        used[cell] = key; ok_fields[key] = ref
+        used[cell] = key; ok_fields[key] = cell
     d['fields'] = ok_fields
     t = d.get('table')
     d['table'] = _check_table(g, t, Fv, mi, reject) if t else None
@@ -355,6 +363,9 @@ def check(sheet, definition, fields=None, masters=None, source=None):
 
 def _check_table(g, t, Fv, mi, reject):
     hr = t.get('header_row')
+    if hr in (None, ''):
+        reject('table', None, None, 'choose the header row of the table')
+        return None
     if not isinstance(hr, int) or hr < 1 or hr > g.rows:
         reject('table', None, hr, f'the header row {hr} is outside the sheet (it has {g.rows} rows)')
         return None
@@ -484,7 +495,8 @@ def merge(sheet, base, proposal, fields=None, masters=None, source='ai'):
     validated, scored by the matcher and kept only where it is at least as good; agreement is 'both'."""
     Fv = F.resolve(fields); g = W.Grid(sheet, Fv); mi = masters_index(masters)
     out = deepcopy(base)
-    raw = dict(fields={k: v for k, v in (proposal.get('fields') or {}).items() if isinstance(v, str)},
+    given = proposal.get('fields') if isinstance(proposal.get('fields'), dict) else {}
+    raw = dict(fields={k: v for k, v in given.items() if isinstance(k, str) and isinstance(v, str)},
                table=proposal.get('table') if isinstance(proposal.get('table'), dict) else None)
     ok, bad = check(sheet, raw, Fv, masters, source=source)
     out['rejected'] = out.get('rejected', []) + bad
@@ -492,7 +504,9 @@ def merge(sheet, base, proposal, fields=None, masters=None, source='ai'):
     for key, ref in ok['fields'].items():
         r, c = W.cell_ref(ref); cell = W.address(c, r); mine = out['fields'].get(key)
         if mine and mine['cell'] == cell:
-            mine['source'] = 'both'; mine['evidence'].append('the local AI proposed the same cell' if source == 'ai' else 'the layout analysis agrees')
+            if source == 'ai':
+                mine['source'] = 'both' if mine['source'] == 'matcher' else mine['source']
+            mine['evidence'].append('the local AI proposed the same cell' if source == 'ai' else 'the layout analysis agrees')
             if mine['confidence'] == 'low':
                 mine['confidence'] = 'medium'
             chosen[key] = cell
@@ -525,7 +539,7 @@ def merge(sheet, base, proposal, fields=None, masters=None, source='ai'):
                                           'the validator accepts it on this sheet'])
             out['unit'] = unit_info(g, theirs)
         elif _same_table(out['definition']['table'], theirs):
-            out['table']['source'] = 'both'
+            out['table']['source'] = 'both' if source == 'ai' else out['table']['source']
             out['table']['evidence'].append('the local AI proposed the same table' if source == 'ai' else 'the layout analysis agrees')
         else:
             out['table']['evidence'].append(f'the {"local AI" if source == "ai" else "layout analysis"} proposed a different table '

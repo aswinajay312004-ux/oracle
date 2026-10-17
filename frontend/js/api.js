@@ -18,8 +18,16 @@ export async function api(path, { method = 'GET', body, form } = {}) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 401) listeners.forEach(fn => fn());
-    throw new Error(message(data.detail, res.status));
+    // keep the status and body: some answers carry details for the screen (e.g. 409 {detail, rejected})
+    throw Object.assign(new Error(message(data.detail, res.status)), { status: res.status, data });
   }
   return data;
 }
 export const id = s => encodeURIComponent(s);
+
+// Effective order fields (Setup → Order fields): labels, aliases and which ones are required.
+let fieldsCache = null;
+export function orderFields(refresh = false) {
+  if (refresh || !fieldsCache) fieldsCache = api('/api/fields').catch(e => { fieldsCache = null; throw e; });
+  return fieldsCache;
+}
