@@ -96,7 +96,25 @@ Try asking:
 - `Top 5 buyers by quantity`
 - `Colour wise quantity for NEXT`
 
-Each answer shows the tables it used. Click a table to preview it and add columns; "+" shows linked tables. Open **How this was answered** to see the exact read-only query.
+Each answer shows the tables it used. Click a table to preview it and add columns; "+" shows linked tables. Under every answer a check strip shows what was verified (safety review, links, read-only run, total cross-check); open **How this was answered and checked** to see each step and the exact read-only query.
+
+### Check Ask AI's accuracy on your data
+
+```powershell
+python scripts\run_benchmark.py
+```
+
+Each question in `config\golden_questions.json` is asked as a person would ask it, and its correct answer is worked out separately with hand-written SQL on your database. Expect `12 of 12 correct`; any other line names the question and both results. Add your own questions (with the SQL your team trusts) to `data\golden_questions.json` in the same format, and run the check again after changing the data dictionary or the local AI model. The same check is in **Setup → Answer accuracy**, and the last score is on the Overview.
+
+### Optional: let an AI coding tool study the ERP (read-only)
+
+`scripts\mcp_server.py` is a local MCP server for tools such as Claude Code on this laptop. It uses the read-only account, runs every question through the same checks as Ask AI, has no tool that can write, and records every call in **Setup → Audit history**. Add this to `.mcp.json` in the project folder:
+
+```json
+{"mcpServers": {"poppys-erp": {"command": ".venv\\Scripts\\python.exe", "args": ["scripts\\mcp_server.py"]}}}
+```
+
+Raw SQL is off. `--allow-sql` adds a `run_select` tool; each statement must still pass the safety review and runs on the read-only account.
 
 ## 8. Demo walkthrough
 

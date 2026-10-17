@@ -27,6 +27,10 @@ Excel ───────► 1 Document layer ──► 2 Business draft ─�
 | 6 | Read-back | `backend/erp/readback.py`, explorer endpoints | Fresh `SELECT` by primary key, compared with what was approved. Master IDs decoded to labels. Graph edges from the registry links | Show success from the receipt alone |
 | 7 | Semantic model | `backend/erp/semantic.py`, `GET /api/semantic-model` | Entities, verified attributes, master references and scoped join conditions, generated from the registry | Contain anything the writer does not also trust |
 | 8 | Knowledge catalog & Ask AI | `backend/insight/` | Business meaning of every visible table and column, relationship graph, value index, natural-language questions compiled to read-only SQL | Execute model-written SQL, write data, or join outside the relationship graph |
+| 8a | SQL safety review | `backend/insight/policy.py` | SQLGlot parse of every statement any executor runs: one SELECT, owner's tables only, allowlisted built-in functions, no links/locks/PL/SQL; fails closed | Trust the compiler that built the SQL |
+| 8b | Answer verification | `backend/insight/verify.py` | Join check (unique keys or a bounded duplicate probe) and an independent total cross-check; results in the answer's check trace | Hide a disagreement |
+| 8c | Accuracy benchmark | `backend/insight/benchmark.py` | Golden questions compared with hand-written SQL on the same database; runs saved, score on the Overview | Count a skipped or truncated comparison as correct |
+| 9 | Local MCP server | `backend/mcp_server.py` | Read-only tools for development agents on the laptop (catalog, paths, evidence, governed questions; raw SELECT only with `--allow-sql`, still reviewed); every call audited | Offer any tool that writes |
 
 ## Why this avoids the earlier mapping problems
 

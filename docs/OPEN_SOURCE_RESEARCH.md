@@ -135,3 +135,58 @@ product never receives, and its installer fetches unpinned code, which breaks th
 cloud session was also blocked by the session's code-safety policy, so nothing from REA is vendored. What transfers is
 its **evidence ledger design**, now implemented natively in `backend/evidence.py` (tests: `tests/test_evidence.py`) and
 enforced on every "Verified" decision in Setup.
+
+## Expert data team: repository assessment (session 2, 2026-10-17)
+
+The master prompt addendum asked for an Oracle expert, data engineer, analyst, SQL engineer, data-quality and
+ERP-transaction "team", built from what open-source projects already do well. Method: README, LICENSE and key source
+files were read on the web (nothing cloned, installed or executed); licences and activity come from each repository's
+GitHub metadata on 2026-10-17. **Adopt** = runtime dependency. **Adapt** = idea re-implemented in our code.
+**Study** = read for design only. **Reject** = not used.
+
+| Project | Licence | State | Runtime weight | Decision | What POPPYS AI took |
+|---|---|---|---|---|---|
+| tobymao/sqlglot | MIT | active | pure Python, no deps | **Adopt** | `backend/insight/policy.py`: every statement parsed and walked; fail-closed safety review. Pinned `sqlglot==30.23.0`. Its README warns parsing ≠ validity, so correctness stays with the compiler + verifier |
+| MuhDur/oraclemcp | Apache-2.0 OR MIT | active, small | Rust | **Adapt** | AST classifier that admits only *proven* read-only statements, fails closed, rejects unproven function calls, re-checks at execution time → policy.py on every executor call; read-only transaction as backstop |
+| oracle/skills (SQLcl MCP) | UPL-1.0 | active | Java/SQLcl | **Adapt** (one idea) | Sessions named in `V$SESSION` (MODULE/ACTION) so DBAs see POPPYS AI queries (`oracle_store._tag`). Not used at runtime: `run-sql` runs anything; restrict levels are not a read-only mode |
+| oracle/mcp | UPL-1.0 | active, "proof-of-concept" | OCI / Java | Study | Curated parameterised tools rather than free SQL → our MCP exposes catalog/intent tools, raw SELECT off by default |
+| Dataherald | Apache-2.0 | unmaintained since 2024-07 | Docker, MongoDB, OpenAI | **Adapt** | "Golden SQL" + execution-accuracy evaluation → `backend/insight/benchmark.py`, `config/golden_questions.json`, Setup → Answer accuracy |
+| alibaba/XiYan-SQL | Apache-2.0 | active | 3B–32B models | Adapt (planned) | M-Schema catalog cards (types, keys, examples, FK lines) for the local model; multi-candidate generation + selection by agreement. Its models write SQL directly, which our intent-only design forbids |
+| eosphoros-ai/DB-GPT, dbgpts | MIT | active / stale | heavy platform | Study / Reject | Oracle connector reads comments via `user_col_comments` (we already harvest `ALL_*_COMMENTS`); builds SQL with f-strings and has no read-only guard — an example of what not to do |
+| vanna-ai/vanna | MIT | **archived 2026-03** | Python | Study | Question/SQL pairs as retrieval examples — we keep confirmed *intents* (`nl_examples`), never SQL |
+| pydantic/pydantic-ai | MIT | active | light | Study | Typed, validated agent output with retry. Our intent is validated by compiling it against the catalog; no new dependency needed |
+| langchain-ai/langgraph | MIT | active | medium | Study | Checkpointed human-in-the-loop interrupts — our draft/approval state machine in SQLite already provides this without the dependency |
+| datahub-project/datahub, open-metadata/OpenMetadata | Apache-2.0 | active | very heavy (Kafka, OpenSearch, Java) | Reject | Ideas already present in a light form: glossary (semantic catalog), lineage (receipts + read-back), ownership/evidence (evidence ledger) |
+| acryldata/mcp-server-datahub | Apache-2.0 | active | needs DataHub | Study | Mutations off by default; example queries attached to datasets |
+| apache/hop | Apache-2.0 | active | Java 21 | Reject | Metadata-driven pipelines — our mapping registry plays this role |
+| delftdata/valentine | Apache-2.0 | active | SciPy, pandas, PuLP | Adapt (planned) | Name + instance + distribution matchers with one-to-one (Hungarian) assignment, scored by precision/recall, for Excel→Oracle column suggestions |
+| biggorilla-gh/flexmatcher | Apache-2.0 | unmaintained | sklearn, old Python | Reject | — |
+| microsoft/data-formulator | MIT | active | TS/Vite + DuckDB + LiteLLM | Study | Reviewable agent plans before data is used; analysis threads |
+| Canner/WrenAI | mixed (core Apache-2.0; AGPL text present) | active | Rust/Python | Adapt (ideas only) | Semantic layer: named relationships with cardinality and approved metrics as the only vocabulary — matches our catalog + compiler |
+| xyflow/xyflow | MIT | active | React/Svelte + build | Reject (dependency) | Our relationship graph stays vanilla SVG (no build step, no CDN) |
+| langfuse/langfuse | MIT except `ee/` | active | Docker/K8s, telemetry on by default | Reject | Trace concept → each answer carries its check trace; benchmark runs stored locally |
+| tannerpace/mcp-oracle-database | **AGPL-3.0** | active | Node | Reject (copyleft) | — |
+| muazam99/oracle-db-mcp | **no licence** | small | Node | Study (cannot copy) | Its caveat is in our threat model: READ ONLY does not stop a PL/SQL function with an autonomous transaction → policy.py allows only built-in functions |
+| ram62836/database-mcp-agent | MIT | stale | .NET | Study | Checklist of DBA tools (FKs, dependents, unused indexes) for the explorer |
+| morluto/rea | MIT | — | Node, unpinned installer | Adapt (earlier) | Evidence ledger (`backend/evidence.py`) |
+
+### How the "expert team" is built
+
+The research supports one strong conclusion: more AI agents do not make answers more accurate. What makes them accurate is verified
+metadata, deterministic rules, restricted execution and independent checking between the model and the data. So the specialists are
+**pipeline stages with fixed responsibilities**, not separate chatbots. They share one catalog, one relationship graph with statuses,
+one evidence ledger and one read-only executor:
+
+| Specialist | Stage | Code |
+|---|---|---|
+| Business data analyst | Understands the question: values linked to real stored values, measures, groupings, dates; local AI only as a checked fallback | `insight/understand.py` |
+| SQL engineer | Compiles the intent into one bind-variable SELECT along verified links, with fan-out protection and the cancelled rules | `insight/query.py` |
+| Oracle security reviewer | Independent SQLGlot review of the finished SQL, on every statement | `insight/policy.py` |
+| Data-quality reviewer | Join check (Oracle unique keys, else a bounded duplicate probe) before the query runs; total cross-check after it | `insight/verify.py` |
+| Oracle database expert | Read-only account, read-only transaction, time limits, sessions named in V$SESSION, dictionary harvest incl. unique keys | `insight/service.py`, `oracle_store.py` |
+| Data engineer | Excel → cell model → business draft → ERP plan, provenance on every value | `readers.py`, `workbooks.py`, `erp/planner.py` |
+| ERP transaction expert | Verified mapping only, approval bound to the exact plan hash, one transaction, read-back | `erp/`, `oracle_store.py` |
+| Evaluator | Golden questions vs. hand-written SQL; score shown on the Overview | `insight/benchmark.py` |
+
+Every answer carries the trace of these stages (Ask AI: "How this was answered and checked"). The local MCP server
+(`backend/mcp_server.py`) gives development agents on the laptop the same governed tools and no write tool.
