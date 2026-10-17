@@ -172,7 +172,7 @@ def _body(g, header, cols, stop_col=None):
     """Data rows under a header: until a grand total or the first row with nothing in these columns. Other total
     rows (a "Total" under each colour block, sub totals) are skipped — the table goes on below them — and hidden
     rows are not read."""
-    rows = []; cols = list(cols); span = range(1, max(cols + [3, stop_col or 0]) + 1)
+    rows = []; cols = list(cols); span = range(1, max(cols + [3, stop_col or 0]) + 1); after_total = False
     heads = {c: W.norm(g.v(header, c)) for c in cols if isinstance(g.v(header, c), str)}
     for r in range(header + 1, min(header + 201, g.rows + 1)):
         if r in g.hidden_rows:
@@ -181,7 +181,10 @@ def _body(g, header, cols, stop_col=None):
         if kinds & {'sub', 'total', 'grand'}:
             if 'grand' in kinds:
                 break
-            continue
+            after_total = True; continue
+        if after_total and not any(W.qty_value(g.v(r, c))[0] is not None for c in cols):
+            break                                      # text after a total row: another table
+        after_total = False
         if sum(1 for c, h in heads.items() if h and W.norm(g.v(r, c)) == h) >= 2:
             break                                      # the headings again: a second table starts here
         if all(g.v(r, c) in (None, '') for c in cols):

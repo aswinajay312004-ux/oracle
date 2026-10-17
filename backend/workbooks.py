@@ -798,13 +798,18 @@ def merch_bom(g):
 
 def merch_unit(g, o):
     """A merch BOM's size quantities are pieces when the buyer-order size table adds up to its QTY(IN PIECES)."""
-    total = sum(number(s.get('quantity')) or 0 for l in o['order_lines'] for s in l['sizes'])
+    sizes = [s for l in o['order_lines'] for s in l['sizes']]
+    total = sum(number(s.get('quantity')) or 0 for s in sizes if 'unclear' not in s)
     pk = o.get('packs') or {}; base = dict(sheet=g.sheet['name'])
-    if pk.get('pieces') and total == pk['pieces']:
+    if any('unclear' in s for s in sizes):            # quantities not read as numbers: the totals cannot be compared
+        set_unit(o, dict(qty_unit='', pieces_per_unit=None, provenance=dict(
+            base, reason='silent', said=None, evidence='some size quantities could not be read as numbers, so the size table '
+                                                        'cannot be compared with QTY(IN PIECES)')))
+    elif pk.get('pieces') and total == pk['pieces']:
         cell = pk['source']['pieces']['cell']
         return set_unit(o, dict(qty_unit='PCS', pieces_per_unit=1, provenance=dict(
             base, cell=cell, value=pk['pieces'], reason='file', evidence=f'the size table total {total:g} equals QTY(IN PIECES) {pk["pieces"]:g} in {cell}')))
-    if pk.get('pieces'):
+    elif pk.get('pieces'):
         ev = f'the size table totals {total:g} but QTY(IN PIECES) says {pk["pieces"]:g}'
         set_unit(o, dict(qty_unit='', pieces_per_unit=None, provenance=dict(
             base, cell=pk['source']['pieces']['cell'], value=pk['pieces'], reason='mismatch', evidence=ev, said=None)))
@@ -1066,7 +1071,8 @@ def finish(o, month_first=None):
     """Dates to YYYY-MM-DD and the last checks on the values read. month_first: a raw date elsewhere in the
     file that can be read only month first ("12/20/2026"); an ambiguous date ("10/01/2026") is then not read
     day-first but left empty and asked. Without it, the order's own dates are the evidence."""
-    o['workbook_pieces'] = sum(int(number(s.get('quantity')) or 0) for l in o.get('order_lines', []) for s in l.get('sizes', [])) or None
+    o['workbook_pieces'] = sum(int(number(s.get('quantity')) or 0) for l in o.get('order_lines', []) for s in l.get('sizes', [])
+                               if 'unclear' not in s) or None
     month_first = month_first or month_first_example([o.get(k) for k in DATE_FIELDS])
     for key in DATE_FIELDS:
         raw = o.get(key)
