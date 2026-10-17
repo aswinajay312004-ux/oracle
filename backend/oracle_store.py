@@ -14,11 +14,21 @@ normalize = planner.normalize
 count = planner.count
 
 
+def _tag(conn, action):
+    """Name the session in V$SESSION (MODULE / ACTION), so a DBA can see at once which statements come from
+    POPPYS AI and from which part of it (idea from Oracle's SQLcl MCP server, docs/OPEN_SOURCE_RESEARCH.md)."""
+    try:
+        conn.module = 'POPPYS AI'; conn.action = action
+    except Exception:   # an older client or a test double: naming the session is a help, never a reason to fail
+        pass
+    return conn
+
+
 def connect():
     if not setting('ORACLE_PASSWORD'):
         raise RuntimeError('Local Oracle configuration is missing. Run scripts/bootstrap_local.py.')
-    return oracledb.connect(user=setting('ORACLE_USER'), password=setting('ORACLE_PASSWORD'),
-                            dsn=setting('ORACLE_DSN', '127.0.0.1:1521/FREEPDB1'), tcp_connect_timeout=4)
+    return _tag(oracledb.connect(user=setting('ORACLE_USER'), password=setting('ORACLE_PASSWORD'),
+                                 dsn=setting('ORACLE_DSN', '127.0.0.1:1521/FREEPDB1'), tcp_connect_timeout=4), 'writer account')
 
 
 READONLY_MISSING = ('The read-only Oracle account for Ask AI and the explorer is not set up. '
@@ -55,7 +65,7 @@ def connect_readonly():
             raise RuntimeError(f'The account {user} is not read-only ({", ".join(extra[:5])}). '
                                'Ask AI and the explorer will not use it. Run scripts\\create_readonly_user.py.')
         _VERIFIED_READONLY.add(user.upper())
-    return conn
+    return _tag(conn, 'read-only questions')
 
 
 def current_mapping():

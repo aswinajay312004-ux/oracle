@@ -127,11 +127,11 @@ class FakeConn:
 def test_oracle_executor_turns_a_call_timeout_into_a_plain_message_and_restores_the_limit():
     conn = FakeConn(); ex = service.OracleExecutor(conn, timeout_ms=20000)
     with pytest.raises(QueryError, match='more than 2.5 seconds') as err:
-        ex.limited(2500)('SELECT 1 FROM DUAL', {}, 1)
+        ex.limited(2500)('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1)
     assert isinstance(err.value, service.TimedOut) and 'DPY' not in str(err.value)
-    assert conn.seen[-1] == ('SELECT 1 FROM DUAL', 2500) and conn.call_timeout == 20000 and conn.rolled == 1
+    assert conn.seen[-1] == ('SELECT 1 FROM GARMENT_DEMO.ORDMAS', 2500) and conn.call_timeout == 20000 and conn.rolled == 1
     with pytest.raises(QueryError, match='more than 20 seconds'):
-        ex('SELECT 1 FROM DUAL', {}, 1)
+        ex('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1)
 
 
 def test_query_time_limit_is_configurable(monkeypatch):
@@ -285,7 +285,7 @@ def test_oracle_call_timeout_is_plain_and_connection_stays_usable():
         ex = service.OracleExecutor(conn)
         with pytest.raises(service.TimedOut):
             ex.limited(1000)('SELECT COUNT(*) FROM all_objects a, all_objects b, all_objects c', {}, 1)
-        assert ex('SELECT 1 FROM DUAL', {}, 1) == [(1,)] and conn.call_timeout == service.TIMEOUT_MS
+        assert ex('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1) == [(1,)] and conn.call_timeout == service.TIMEOUT_MS
 
 
 @oracle_only

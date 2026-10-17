@@ -754,3 +754,26 @@ details.ex-more > summary { cursor: pointer; font-weight: 600; font-size: 12.5px
 .ev-list { margin-top: 10px; display: grid; gap: 6px; font-size: 13px; }
 .ev-item { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--line-2); }
 #ev-text { width: 100%; }
+
+/* Answer checks (engine.run trace) */
+.checks { margin: 0 16px 10px; padding: 8px 12px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--bg); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.checks.ok .checks-head { color: var(--ok); }
+.checks.warn { background: var(--warn-soft); border-color: var(--warn-line); }
+.checks.warn .checks-head { color: var(--warn); }
+.checks.failed { background: var(--err-soft); border-color: var(--err-line); }
+.checks.failed .checks-head { color: var(--err); }
+.checks-head { font-weight: 600; }
+.checks-list { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--ink-2); min-width: 0; }
+.check { white-space: nowrap; cursor: help; }
+.check.passed { color: var(--ink-2); }
+.check.warning { color: var(--warn); font-weight: 600; }
+.check.failed { color: var(--err); font-weight: 600; }
+.check.skipped { color: var(--muted); }
+.check-note { flex-basis: 100%; color: var(--ink); }
+.check-steps { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.check-steps li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; align-items: start; }
+.check-icon { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 11px; background: var(--ok-soft); color: var(--ok); }
+.check-steps li.warning .check-icon { background: var(--warn-soft); color: var(--warn); }
+.check-steps li.failed .check-icon { background: var(--err-soft); color: var(--err); }
+.check-steps li.skipped .check-icon { background: var(--line-2); color: var(--muted); }
+@media (max-width: 640px) { .check { white-space: normal; } }

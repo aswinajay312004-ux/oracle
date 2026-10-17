@@ -8,6 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 import re
 import time
+from . import policy, verify
 from .knowledge import norm
 from .query import compile_intent
 from .understand import interpret, ai_intent, NotUnderstood
@@ -97,6 +98,7 @@ def summarize(intent, comp, rows, kb):
         top = rows[0]
         unit = f' {m["unit"]}' if m.get('unit') else ''
         total = sum(r[mi] or 0 for r in rows) if m['agg'] in ('sum', 'count') else None
+        total = (comp.get('verified_totals') or {}).get(m['key'], total) if total is not None else None   # counted once each
         text = f'{m["label"]} by {dims[0]["label"].lower()}{where}: {len(rows)} group{"s" if len(rows) != 1 else ""}.'
         text += f' Highest: {top[di] if top[di] is not None else "(blank)"} with {fmt(top[mi])}{unit}.'
         if total is not None and len(rows) > 1:
@@ -169,21 +171,49 @@ def stored_spellings(finder):
     return stored
 
 
+SOURCE_TEXT = {'rules': 'the question rules', 'saved example': 'a confirmed example', 'edited': 'your own changes'}
+
+
 def run(intent, kb, sources, *, question='', source='rules', confidence=None, stored=None):
+    """The governed answer pipeline. Each specialist step adds an entry to the answer's check trace:
+    analyst (understanding) -> SQL engineer (compile from the catalog) -> security reviewer (independent SQL
+    safety review) -> data quality (join check) -> Oracle (read-only run) -> data quality (total cross-check)."""
     started = time.perf_counter()
     execute, dialect = pick(kb, intent, sources)
-    comp = compile_intent(intent, kb, dialect, stored=stored)
+    conf = dict(confidence or dict(score=0.9, reasons=[]))
+    comp = compile_intent(intent, kb, dialect, stored=stored)   # validates every table and column first
+    checks = [dict(stage='understand', role='Business analyst', status='passed' if conf.get('score', 0.9) >= 0.5 else 'warning',
+                   title='Question understood', detail=f'{describe(intent, kb)} — from {SOURCE_TEXT.get(source, source)}.')]
+    weak = [j for j in comp['joins'] if j['status'] in ('proposed', 'inferred')]
+    checks.append(dict(stage='build', role='SQL engineer', status='warning' if weak else 'passed', title='Query built from the catalog',
+                       detail=f'{len(comp["tables"])} table{"s" if len(comp["tables"]) != 1 else ""}'
+                              + (f', links: {"; ".join(j["label"] + " (" + j["status"] + ")" for j in comp["joins"])}' if comp['joins'] else '')
+                              + '. Values are sent separately, never written into the SQL.'))
+    checks.append(policy.review(comp, kb, dialect))
+    checks += verify.joins(comp, kb, execute, dialect, aggregates=any(c['kind'] == 'measure' for c in comp['columns']))
+    ran = time.perf_counter()
     raw = execute(comp['sql'], comp['binds'], comp['limit'] + 1)
     comp['truncated'] = len(raw) > comp['limit']
     rows = [[cell(v) for v in r] for r in raw[:comp['limit']]]
-    conf = dict(confidence or dict(score=0.9, reasons=[]))
-    weak = [j for j in comp['joins'] if j['status'] in ('proposed', 'inferred')]
+    checks.append(dict(stage='execute', role='Oracle database expert', status='passed', title='Read-only query ran',
+                       detail=f'{len(rows)}{"+" if comp["truncated"] else ""} row{"s" if len(rows) != 1 else ""} in '
+                              f'{round((time.perf_counter() - ran) * 1000)} ms, '
+                              + ('on this computer\'s list of uploaded files.' if dialect.name != 'oracle' or kb.table(intent['base']).get('source') == 'local'
+                                 else 'on the read-only account inside a read-only transaction (changes are impossible).')))
+    totals = verify.cross_check(intent, comp, rows, kb, execute, dialect, stored=stored)
+    if totals:
+        checks.append(totals); comp['verified_totals'] = totals.get('totals') or {}
     if weak:
         conf['score'] = round(max(0.05, conf['score'] - 0.15), 2)
         conf['reasons'] = conf.get('reasons', []) + [f'Uses an unconfirmed link: {", ".join(j["label"] for j in weak)}. An administrator can confirm it in Setup → Data dictionary.']
+    failed = [c for c in checks if c['status'] == 'failed']
+    unsure = [c for c in checks if c['stage'] == 'join' and c['status'] == 'warning']
+    if failed or unsure:
+        conf['score'] = round(max(0.05, conf['score'] - (0.4 if failed else 0.15)), 2)
+        conf['reasons'] = conf.get('reasons', []) + [c['detail'] for c in failed + unsure]
     conf['level'] = 'high' if conf['score'] >= 0.75 else 'medium' if conf['score'] >= 0.5 else 'low'
     shown_binds = {k: (v.date().isoformat() if isinstance(v, datetime) else v) for k, v in comp['binds'].items()}
-    return dict(question=question, understood=describe(intent, kb), intent=intent, source=source, confidence=conf,
+    return dict(question=question, understood=describe(intent, kb), intent=intent, source=source, confidence=conf, checks=checks,
                 summary=summarize(intent, comp, rows, kb), columns=comp['columns'], rows=rows, row_count=len(rows),
                 truncated=comp['truncated'], limit=comp['limit'], sql=comp['sql'], binds=shown_binds, notes=comp['notes'],
                 tables=comp['tables'], joins=comp['joins'], graph=graph(kb, comp, intent['base']),

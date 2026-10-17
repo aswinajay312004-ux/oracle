@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from .. import local_store as store
 from ..config import DATA, OWNER, ROOT, setting
+from . import policy
 from .knowledge import build, Knowledge, norm, IDENT
 from .query import FORGIVING_ROWS, QueryError
 
@@ -113,7 +114,20 @@ def harvest(conn):
     # Leading index columns: where an exact lookup is cheap on a big table (live_finder probes these first).
     c.execute('select table_name,column_name from all_ind_columns where table_owner=:o and column_position=1', o=OWNER)
     indexed = sorted({f'{t}.{col}' for t, col in c})
+    # Primary keys, unique constraints and unique indexes: a join to these columns cannot repeat a row (verify.py).
+    unique = {}
+    c.execute('''select a.table_name,a.constraint_name,ac.column_name from all_constraints a
+                   join all_cons_columns ac on ac.owner=a.owner and ac.constraint_name=a.constraint_name
+                  where a.owner=:o and a.constraint_type in ('P','U') order by a.constraint_name,ac.position''', o=OWNER)
+    for t, name, col in c:
+        unique.setdefault(t, {}).setdefault('C:' + name, []).append(col)
+    c.execute('''select i.table_name,i.index_name,ic.column_name from all_indexes i
+                   join all_ind_columns ic on ic.index_owner=i.owner and ic.index_name=i.index_name
+                  where i.table_owner=:o and i.uniqueness='UNIQUE' order by i.index_name,ic.column_position''', o=OWNER)
+    for t, name, col in c:
+        unique.setdefault(t, {}).setdefault('I:' + name, []).append(col)
     return dict(physical=physical, stats=stats, comments=comments, fks=list(fks.values()), indexed=indexed, live=True,
+                unique={t: sorted({tuple(cols) for cols in keys.values()}) for t, keys in unique.items()},
                 harvested_at=datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
 
@@ -197,6 +211,7 @@ def build_kb(phys, mapping=None, overrides=None):
     data['tables'][LOCAL_TABLE]['source'] = 'local'
     kb = Knowledge(data)
     kb.indexed = set(phys['indexed']) if 'indexed' in phys else None   # None: harvested before index info was kept
+    kb.unique = {t: [set(k) for k in keys] for t, keys in phys['unique'].items()} if 'unique' in phys else None   # None: not harvested
     return kb
 
 
@@ -206,21 +221,20 @@ def invalidate():
 
 
 # --- executors ------------------------------------------------------------------------------------
-def _guard(sql):
-    s = sql.lstrip().upper()
-    if not s.startswith('SELECT') or ';' in sql:
-        raise ValueError('Only single SELECT statements may run.')
+def _guard(sql, dialect='oracle', owner=OWNER):
+    """Every statement an executor runs passes the independent safety review first (policy.py)."""
+    policy.check(sql, dialect, owner)
 
 
 class OracleExecutor:
     """Read-only execution: SET TRANSACTION READ ONLY, call timeout, bounded fetch, always rolled back.
     A query that hits its time limit raises TimedOut (a plain-English QueryError); the connection stays usable."""
 
-    def __init__(self, conn, timeout_ms=TIMEOUT_MS):
-        self.conn = conn; self.timeout_ms = timeout_ms; conn.call_timeout = timeout_ms
+    def __init__(self, conn, timeout_ms=TIMEOUT_MS, owner=OWNER):
+        self.conn = conn; self.timeout_ms = timeout_ms; self.owner = owner; conn.call_timeout = timeout_ms
 
     def __call__(self, sql, binds, max_rows, timeout_ms=None):
-        _guard(sql)
+        _guard(sql, 'oracle', self.owner)
         c = self.conn.cursor()
         limit = int(timeout_ms or self.timeout_ms)
         self.conn.call_timeout = limit
@@ -246,7 +260,7 @@ class SqliteExecutor:
         self.conn = conn
 
     def __call__(self, sql, binds, max_rows):
-        _guard(sql)
+        _guard(sql, 'sqlite')
         return self.conn.execute(sql, binds).fetchmany(int(max_rows))
 
 

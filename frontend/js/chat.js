@@ -61,6 +61,25 @@ function confidencePill(c) {
   return `<span class="pill ${lvl === 'high' ? 'ok' : lvl === 'medium' ? 'warn' : 'err'}" title="${esc((c?.reasons || []).join(' '))}">${lvl === 'high' ? 'High confidence' : lvl === 'medium' ? 'Medium confidence — check' : 'Low confidence — check'}</span>`;
 }
 
+const CHECK_ICON = { passed: '✓', warning: '!', failed: '✗', skipped: '–' };
+
+// The specialist checks every answer passed (engine.run): a one-line strip under the answer, problems spelled out.
+function checkStrip(checks) {
+  if (!checks?.length) return '';
+  const bad = checks.filter(c => c.status === 'failed' || c.status === 'warning');
+  const passed = checks.filter(c => c.status === 'passed').length;
+  return `<div class="checks ${checks.some(c => c.status === 'failed') ? 'failed' : bad.length ? 'warn' : 'ok'}">
+    <span class="checks-head">${bad.length ? `${CHECK_ICON[checks.some(c => c.status === 'failed') ? 'failed' : 'warning']} ${plural(bad.length, 'check')} need${bad.length === 1 ? 's' : ''} attention` : `✓ ${passed} of ${checks.length} checks passed`}</span>
+    <span class="checks-list">${checks.map(c => `<span class="check ${esc(c.status)}" title="${esc(c.role + ': ' + c.detail)}">${CHECK_ICON[c.status] || ''} ${esc(c.title)}</span>`).join('')}</span>
+    ${[...bad, ...checks.filter(c => c.note && !bad.includes(c))].map(c => `<div class="check-note">${esc(c.detail)}</div>`).join('')}</div>`;
+}
+
+function checkList(checks) {
+  if (!checks?.length) return '';
+  return `<div><b>Checks, in order:</b><ol class="check-steps">${checks.map(c => `<li class="${esc(c.status)}"><span class="check-icon">${CHECK_ICON[c.status] || ''}</span>
+    <div><b>${esc(c.title)}</b> <span class="muted">· ${esc(c.role)}</span><div>${esc(c.detail)}</div></div></li>`).join('')}</ol></div>`;
+}
+
 function draw(aid) {
   const entry = answers.get(aid); const r = entry.result; const el = $(`#ans-${aid}`);
   if (r.kind !== 'answer') {
@@ -79,6 +98,7 @@ function draw(aid) {
     <div class="legend"><span><i style="background:var(--brand)"></i>Used in this answer</span><span><i style="border:1.5px dashed #94a3b8;background:#fff"></i>Linked, not used</span>
       <span><i style="background:#d39a2c"></i>Unconfirmed link</span><span class="muted">Click a table to preview it and add its columns · ＋ shows linked tables</span></div>
     <div class="answer-summary">${esc(r.summary)}</div>
+    ${checkStrip(r.checks)}
     ${answerChart(cols, rows)}
     <div class="answer-body">
       <div class="answer-tools"><span>${plural(r.row_count, 'row')}${r.truncated ? ` (first ${r.limit} shown)` : ''} · ${r.elapsed_ms} ms</span><span class="spacer"></span>
@@ -88,7 +108,8 @@ function draw(aid) {
         <tbody>${rows.map(row => `<tr>${cols.map(c => { const v = row[c.index]; return `<td class="${typeof v === 'number' ? 'num' : ''} ${v == null ? 'null' : ''}">${v == null ? '—' : esc(typeof v === 'number' ? fmt(v) : show(v))}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`
         : '<p class="empty">No matching rows.</p>'}
     </div>
-    <details class="how"><summary>How this was answered</summary><div class="how-body">
+    <details class="how"><summary>How this was answered and checked</summary><div class="how-body">
+      ${checkList(r.checks)}
       ${(r.confidence?.reasons || []).length ? `<div>${r.confidence.reasons.map(x => `<div>• ${esc(x)}</div>`).join('')}</div>` : ''}
       ${(r.notes || []).length ? `<div>${r.notes.map(x => `<div>• ${esc(x)}</div>`).join('')}</div>` : ''}
       ${(r.linked_values || []).length ? `<div><b>Values matched in the database:</b> ${r.linked_values.map(v => `<span class="chip ${v.found ? 'reuse' : 'new'}">${esc(v.phrase)} → ${esc(v.column)}${v.found ? '' : ' (not found)'}</span>`).join(' ')}</div>` : ''}
