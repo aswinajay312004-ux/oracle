@@ -78,6 +78,9 @@ def merch_bom(sample=(0, 0, 0, 0), extra_sewing_block=False):
 
 
 def save(wb):
+    # fixed timestamps keep identical workbooks byte-identical (duplicate-file tests compare hashes)
+    from datetime import datetime
+    wb.properties.created = wb.properties.modified = datetime(2026, 1, 1)
     buf = BytesIO(); wb.save(buf); return calculated(buf.getvalue())
 
 
@@ -110,6 +113,9 @@ def calculated(content):
                 if sheet_title == title:
                     text = re.sub(rf'(<c r="{ref}"[^>]*>)<f>(.*?)</f><v\s*/>', lambda m, v=v: f'{m.group(1)}<f>{m.group(2)}</f><v>{v}</v>', text)
             data = text.encode()
+        if item.filename == 'docProps/core.xml':   # fixed timestamps: identical workbooks stay byte-identical
+            data = re.sub(rb'(<dcterms:(?:created|modified)[^>]*>)[^<]*', rb'\g<1>2026-01-01T00:00:00Z', data)
+        item.date_time = (2026, 1, 1, 0, 0, 0)
         dst.writestr(item, data)
     dst.close()
     return out.getvalue()

@@ -75,3 +75,55 @@ Actual local `src/application/investigation/EvidenceLedger.ts` stores immutable 
 6. Benchmark the supplied workbooks and deliberate failure cases. No reviewed project's marketing or fuzzy matching establishes a zero-error guarantee for arbitrary future client layouts.
 
 No source code from the reviewed projects was copied into application code by this research task. If a dependency or substantial code is later incorporated, pin its version and retain its license notices. The research report is not evidence that the application implementation or Oracle end-to-end tests have already passed.
+
+## Update — natural-language questions, metadata catalog, explorer and entry UX
+
+Reviewed 17 October 2026 from public repositories, licences, papers and vendor documentation. Nothing was installed or run against client data. The question is narrower than "which NL-to-SQL product is best": **how do these systems avoid picking the wrong tables and columns on a large schema**, since that is what failed in the earlier POPPYS attempt.
+
+### What the reviewed systems do about accuracy
+
+| Project (licence) | Accuracy mechanism | Adopted in POPPYS AI |
+|---|---|---|
+| Vanna 2.0 (MIT) | Retrieval over DDL, documentation and saved question→SQL pairs; successful queries are remembered | **Confirmed answers**: a user marks an answer correct, and later questions with the same wording but different values reuse its validated plan |
+| WrenAI (Apache-2.0 core) | Semantic layer (MDL): models, approved relationships, metrics, value profiling, dry-plan validation, row limits | **Knowledge catalog + relationship graph**: joins only along known links; every query has a row limit |
+| Dataherald (Apache-2.0) | "Golden SQL" few-shot examples; distinct values of low-cardinality columns are scanned into the prompt | **Value index**: names like "NEXT" or "N44441" are matched to stored values before anything else |
+| CHESS (Apache-2.0) | Value retrieval (LSH) + schema pruning before generation; unit tests on candidates | Value linking first; only a retrieved slice of the catalog is shown to the local model |
+| DIN-SQL / MAC-SQL / RESDSQL | Schema linking → question classification → generation → self-correction | Rule-based schema linking from curated synonyms; low confidence is reported, not hidden |
+| Oracle Select AI (proprietary) | `enforce_object_list`, table/column comments in the prompt, `showsql`/`explainsql` | Oracle comments are harvested; every answer shows the exact query, tables and links ("How this was answered") |
+| Spider 2.0 / BIRD findings | Enterprise schemas average ~800 columns; schema linking is the main failure, and domain hints add roughly 10 points | Curated business names, synonyms and roles per column (`config/semantic_catalog.json`), editable in Setup |
+| LangChain SQL agent (MIT) | Lets the model write SQL and retries on errors | **Not adopted.** The model never writes SQL here (see below) |
+| OpenMetadata / DataHub / Amundsen (Apache-2.0) | Descriptions, glossary, tags, owners, profiling, usage | Minimal subset: business name, description, synonyms, role, status (verified/proposed/rejected), row statistics, audit of every edit |
+| Azimutt (MIT); ChartDB, drawDB (AGPL — ideas only) | Explore a large schema from one table outward: "+" to add related tables, find-path, row cards with linked rows | Relationship map with "+" expansion, linked-record drawer, table preview popup with column picking |
+| react-spreadsheet-import (MIT), OneSchema, Flatfile, CSVBox | Errors shown on the cell with a reason; "only rows with errors" filter; never a bare "Row 5: error" | Red outline on the exact field or cell, a one-line reason under it, "Show me the next one", "Only rows that need attention" |
+
+### Design decision: the model proposes an intent, never SQL
+
+The research shows two broad approaches. One lets a language model write SQL and then validates or repairs it. The other has the model, or rules, produce a structured request that a compiler turns into SQL along a known join graph (semantic-layer products). With a 7B local model and a schema of cryptic names, the second is far safer. In POPPYS AI:
+
+1. **Rules first.** Deterministic rules understand the question: value linking, curated synonyms, aggregation words, "by / wise / per" grouping, date phrases, "top N" and comparisons. This works offline and is fully explainable.
+2. **Local AI only as a fallback.** It is consulted only when the rules are unsure. It may only return a JSON *intent* restricted to a retrieved slice of the catalog, and the intent must compile against the catalog or it is discarded.
+3. **The compiler is the only SQL author.** It:
+   - takes tables and columns only from the catalog;
+   - takes joins only from the relationship graph, preferring confirmed many-to-one links;
+   - uses bind variables;
+   - always produces a single `SELECT` with a row limit;
+   - turns child-table filters into `EXISTS`, so rows are counted once;
+   - counts with `COUNT(DISTINCT key)`;
+   - refuses any total that would double count.
+4. **Execution is read-only.** Every query runs in `SET TRANSACTION READ ONLY`, with a call timeout and a bounded fetch, and is always rolled back.
+5. **Provenance on every answer:** what was understood, a confidence level with reasons, the values matched, the tables, the links used with their status, the SQL with binds, and the row count.
+
+### Large databases (17 GB+)
+
+- Row counts in the explorer are exact for normal tables and taken from `ALL_TABLES.NUM_ROWS` (shown with "≈") for very large ones.
+- Paging uses keyset paging on the record ID (`WHERE id < :last ORDER BY id DESC FETCH FIRST n`) instead of `OFFSET`.
+- The catalog is harvested once from the dictionary (`ALL_TAB_COLUMNS`, `ALL_TABLES`, `ALL_*_COMMENTS`, `ALL_CONSTRAINTS`) and cached. Lookups scale with the size of the catalog, not of the data.
+- The value index covers master names and searchable codes only, capped per column. Codes saved after the last refresh are looked up live.
+
+### REA (Reverse Engineer Anything)
+
+Repository: `morluto/rea` (MIT). I read the repository, including `.agents/skills/reverse-engineer-anything/SKILL.md`, but did not run or install it.
+
+- REA is an MCP server and CLI for analysing **shipped artifacts without source**: binaries, Electron bundles, APKs, firmware and packet captures. Its own skill says to skip it for ordinary source-repository analysis. The open-source products above publish their source, so REA's tooling does not apply.
+- Its official installer downloads unpinned code (`npx rea-agents@latest`, `curl | bash`). That conflicts with this project's offline and pinned-dependency rules, so it was not installed into the project.
+- **Its method was adopted.** Each finding above is a claim backed by evidence: the repository and licence, the mechanism, and what we took from it. What we observed is kept separate from our own design choices. Unknowns stay open: real-Oracle behaviour of the new screens is verified only by the opt-in tests on the client's machine (`tests/test_oracle_insight.py`).

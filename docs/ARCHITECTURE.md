@@ -26,6 +26,7 @@ Excel / PDF ──► 1 Document layer ──► 2 Business draft ──► 3 ER
 | 5 | Writer | `backend/oracle_store.py` | Global write lock. Re-plans inside the transaction and requires the same hash. Sequence keys. Bind variables only; identifiers come from the registry and are checked against the dictionary. Reads back every inserted row; receipt in `PP_IMPORT_LOG`; rollback on any error | Overwrite or update existing rows |
 | 6 | Read-back | `backend/erp/readback.py`, explorer endpoints | Fresh `SELECT` by primary key, compared with what was approved. Master IDs decoded to labels. Graph edges from the registry links | Show success from the receipt alone |
 | 7 | Semantic model | `backend/erp/semantic.py`, `GET /api/semantic-model` | Entities, verified attributes, master references and scoped join conditions, generated from the registry | Contain anything the writer does not also trust |
+| 8 | Knowledge catalog & Ask AI | `backend/insight/` | Business meaning of every visible table and column, relationship graph, value index, natural-language questions compiled to read-only SQL | Execute model-written SQL, write data, or join outside the relationship graph |
 
 ## Why this avoids the earlier mapping problems
 
@@ -36,33 +37,41 @@ The previous natural-language attempt tried to find tables and columns across th
 3. The planner writes only verified columns. The semantic model exposes only verified attributes and joins.
 4. Join rules encode real relationships. For example, a child SUBNO is matched only within the same ORDMASID, because SUBNO alone is not unique.
 
-## Future natural-language Q&A (designed in, not built yet)
+## Data intelligence layer: knowledge catalog, Ask AI and explorer
 
-Future question answering can use this pipeline:
+Built on the same foundation as data entry, so questions use the same meanings as writes.
 
 ```
-question → entity/attribute retrieval from the semantic model (local embeddings)
-         → join path from the semantic model's join list (no free joins)
-         → read-only SQL template with binds → row limit → execution as a read-only account
-         → answer with table + the exact query + the business labels used
+question ─► understand (rules; local AI only as checked fallback) ─► intent (JSON)
+         ─► compile (catalog + relationship graph) ─► one read-only SELECT with binds and a row limit
+         ─► execute (SET TRANSACTION READ ONLY, call timeout, bounded fetch, rollback)
+         ─► answer: summary + result table + linked-table flowchart + exact query + confidence
 ```
 
-The building blocks exist today:
+| Part | Code | Responsibility |
+|---|---|---|
+| Knowledge catalog | `backend/insight/knowledge.py`, `config/semantic_catalog.json` | Merges four layers, in order: the live dictionary (or the offline snapshot), the write registry, the curated business meaning, and admin edits. Every column has a business name, synonyms and a role (label / measure / date / reference / key / attribute / system). Each relationship has a status: verified, declared (Oracle FK), proposed, inferred (naming) or rejected |
+| Relationship graph | `Knowledge.path()` | Shortest join path. It prefers confirmed links and many-to-one steps, and scopes child links by ORDMASID (SUBNO alone is not unique) |
+| Understanding | `backend/insight/understand.py` | Links values first ("NEXT" → `BUYMAS.BUYERNAME`), then matches table and column words longest-phrase-first. Handles count/total/average/top-N, "by / per / wise", date phrases and comparisons. Picks the base table whose quantity can be totalled without crossing a one-to-many link. Every guess lowers confidence and is reported |
+| Compiler | `backend/insight/query.py` | The **only** SQL author. Identifiers come from the catalog, joins from the graph, values are binds, reference IDs are shown as master names, and child filters become `EXISTS`. It refuses totals that would double count |
+| Engine | `backend/insight/engine.py` | Runs a question or an edited intent and builds the answer, the provenance and the graph. It reuses confirmed examples with new values |
+| Services | `backend/insight/service.py` | Dictionary harvest and cache, value index, read-only executors, and the local "uploaded files" source |
+| API | `backend/main.py` | `/api/chat/*`, `/api/knowledge/*` (admin edits audited), `/api/explorer/*` (exact counts, or "≈" statistics for very large tables; keyset paging; linked records) |
 
-- the semantic model API
-- business labels for every column
-- discovery evidence
-- the read-only explorer queries
-- the local model integration
+Why it avoids the earlier mapping problem:
 
-A separate read-only Oracle account (SELECT grants only) should be used for Q&A.
+- **Meaning is decided once, with evidence.** The local model never writes SQL. It can only propose an intent, and that intent must compile against the catalog.
+- **Everything is visible.** Each answer shows what was understood, the values matched, the tables and links (confirmed or not), and the exact query.
+- **Mistakes are corrected once and reused.** An admin fixes a business name or confirms a link in Setup → Data dictionary. A user marks an answer correct, and similar questions reuse it.
 
 ## Scaling to a large enterprise schema
 
 - **Registry per screen or department.** `config/oracle_mapping.json` is one file today. The loader can merge several (order entry, fabric planning `FPLANM`/`FPLANDET`/`FPCOL`/`FABP`/`YARNP`, purchasing…) without code changes. Each new screen is a new registry section plus evidence and verification.
 - **Bounded catalog queries.** The catalog reads only the tables the registry references, so the cost does not grow with thousands of unrelated tables.
 - **Scoped masters.** Master lookups are capped (5,000 rows). Large masters should switch to indexed lookups by label; this changes only `Catalog.masters`.
-- **Pure, testable logic.** Planner and validation are pure functions over a catalog interface, and covered by golden tests. The writer is the only component that touches Oracle data.
+- **Pure, testable logic.** Planner and validation are pure functions over a catalog interface, and covered by golden tests. The writer is the only component that writes Oracle data.
+- **Questions on a big schema.** Retrieval works over the catalog (thousands of tables are fine in memory), not over the data. The value index stores distinct names and codes only, capped per column; transactional columns of very large tables are looked up live. Queries are bounded by row limits and call timeouts.
+- **Explorer on a big schema.** Uses dictionary statistics for very large tables, keyset paging on record IDs, and explicit column lists (never `SELECT *`).
 
 ## Open-source and research decisions
 

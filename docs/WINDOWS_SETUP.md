@@ -77,16 +77,36 @@ Out of the box, POPPYS AI saves the order header, style/colour lines and size qu
 
 To verify them, open **Setup → Database mapping** and compare each proposed column with the discovery evidence (fill %, example values, link match %). Then set the table, and each column you agree with, to **Verified**. Every change is recorded in the audit history. Columns whose master table is not in GARMENT_DEMO (fabric quality, yarn count, accessory item) cannot be verified and stay unwritten.
 
-## 7. Demo walkthrough
+## 7. Ask AI and the data dictionary (first run)
+
+The first time Ask AI is used, POPPYS AI reads the Oracle data dictionary and indexes master names and codes (buyers, styles, colours, sizes, order references). It takes a few seconds and needs only SELECT. To refresh after the database changes, go to **Setup → Data dictionary → Refresh from Oracle**.
+
+In **Setup → Data dictionary** you can:
+
+- confirm or reject the relationships between tables (unconfirmed ones lower an answer's confidence)
+- give tables and columns better business names and synonyms (for example, the words your team uses)
+- remove confirmed answers
+
+Try asking:
+
+- `How many orders for NEXT?`
+- `Size wise quantity for order PK/26-27/S/9001`
+- `Buyer wise order quantity this year`
+- `Top 5 buyers by quantity`
+- `Colour wise quantity for NEXT`
+
+Each answer shows the tables it used. Click a table to preview it and add columns; "+" shows linked tables. Open **How this was answered** to see the exact read-only query.
+
+## 8. Demo walkthrough
 
 1. **New order** → drop `Merch Dept Worked Manual Excel (2).xlsx`, or a buyer PDF.
-2. **Auto-read** shows what was found: header, sizes, packs, fabric kg and trim tables.
-3. **Review**: fill the order reference (OC No) and confirmation date, and choose the quantity source. Each question in the right panel has a **Fix** button that jumps to the field.
-4. **Check & prepare** validates against Oracle masters, existing orders, units, totals, column sizes and relationships.
-5. **Approve** shows every value, its Oracle `TABLE.COLUMN`, and the Excel cell it came from. **Approve & save to Oracle** writes everything in one transaction and reads every row back.
-6. **Saved** shows the table flowchart. Click any table to see the exact rows Oracle returned just now.
+2. The reading summary shows what was found: header, sizes, packs, fabric kg and trim tables.
+3. **Review** works like the Axpert Sample Order Entry screen. Fields not in the file are outlined in red with a short reason: fill the order reference (OC No) and confirmation date, and choose the quantities to save. **Show me the next one** jumps between them.
+4. **Check & continue** validates against Oracle masters, existing orders, units, totals, column sizes and relationships. Anything wrong is outlined on its field or table row.
+5. **Check before saving** shows the flowchart of every table that will be written. Click a table to see its rows below, with the Excel cell each value came from. **Accept and save to Oracle** writes everything in one transaction and reads every row back.
+6. **Saved** shows the same flowchart from a fresh read of Oracle. Click any table to see the exact rows Oracle returned just now.
 
-## 8. Confirm in SQL Developer (as GARMENT_DEMO)
+## 9. Confirm in SQL Developer (as GARMENT_DEMO)
 
 Replace `PK/26-27/S/9001` with your order reference:
 
@@ -110,11 +130,12 @@ SELECT JOBID, APPROVER, COMMITTED_AT FROM POPPYS_APP.PP_IMPORT_LOG ORDER BY COMM
 
 The same records are visible in the app under **Database** → *Find an order by record ID* (use the ORDMASID shown after saving).
 
-## 9. Tests
+## 10. Tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 $env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q     # adds live Oracle tests (labelled TEST rows)
+$env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q tests\test_oracle_insight.py   # Ask AI + explorer SQL on your Oracle (read-only)
 ```
 
 ## Troubleshooting
@@ -127,4 +148,6 @@ $env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q     # adds 
 | "POPPYS AI has no INSERT permission" | Run `.\.venv\Scripts\python.exe scripts\grant_bom_tables.py` |
 | "formula cells have no calculated value" | Open the workbook in Excel, save, upload again |
 | "This exact workbook has already been committed" | Duplicate protection: that file was saved before. See **Saved orders** |
+| Ask AI says "Oracle is not connected" | Start Oracle; questions about uploaded files still work offline |
+| An answer shows "Medium/Low confidence" | Open **How this was answered**. Confirm the link or add a synonym in Setup → Data dictionary, then ask again |
 | Port 8008 busy | Close the other POPPYS window, or end the old `python` process in Task Manager |
