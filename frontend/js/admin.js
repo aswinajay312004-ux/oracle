@@ -18,13 +18,24 @@ function toggle(attrs, status, enabled) {
   return `<span class="status-toggle">${['verified', 'proposed'].map(s => `<button ${attrs} data-status="${s}" class="${status === s ? 'on ' + s : ''}" ${enabled ? '' : 'disabled'}>${s === 'verified' ? 'Verified' : 'Proposed'}</button>`).join('')}</span>`;
 }
 
+// Big tables are profiled on a block sample (scripts/discover_schema.py: sampled_pct = % of the table read),
+// so the figures say how many rows they were measured on instead of implying every row was read.
+const sampled = (pct, rows) => {
+  const n = rows * pct / 100;
+  return fmt(n >= 10000 ? Math.round(n / 1000) * 1000 : Math.round(n), 0);
+};
+const sampleTip = (pct, what) => `title="${esc(`Measured on a block sample of about ${pct}% of the table${what ? `; ${what}` : ''}. Discovery reads a sample of very large tables so it finishes quickly.`)}"`;
+const DISTINCT_FROM = { statistics: 'distinct values from Oracle statistics', sample: 'distinct values counted in the sample' };
+
 function evidence(c) {
   const d = c.discovery || {};
   const parts = [];
-  if (d.fill_pct != null) parts.push(`<span>filled in ${d.fill_pct}% of ${fmt(d.rows, 0)} rows</span>`);
+  if (d.fill_pct != null) parts.push(d.sampled_pct && d.rows
+    ? `<span ${sampleTip(d.sampled_pct, DISTINCT_FROM[d.distinct_from])}>filled in ${d.fill_pct}% (sample of about ${sampled(d.sampled_pct, d.rows)} of ${fmt(d.rows, 0)} rows)</span>`
+    : `<span>filled in ${d.fill_pct}% of ${fmt(d.rows, 0)} rows</span>`);
   if (d.samples?.length) parts.push(`<span>e.g. ${esc(d.samples.slice(0, 3).map(show).join(' | '))}</span>`);
-  if (d.resolves_in) parts.push(`<span>${d.resolves_in.match_pct ?? '—'}% resolve in ${esc(d.resolves_in.table)}</span>`);
-  if (d.link) parts.push(`<span>${d.link.match_pct ?? '—'}% link to ${esc(d.link.parent)}</span>`);
+  if (d.resolves_in) parts.push(`<span ${d.resolves_in.sampled_pct ? sampleTip(d.resolves_in.sampled_pct) : ''}>${d.resolves_in.match_pct ?? '—'}% resolve in ${esc(d.resolves_in.table)}${d.resolves_in.sampled_pct ? ` (in a sample of ${fmt(d.resolves_in.rows, 0)} filled rows)` : ''}</span>`);
+  if (d.link) parts.push(`<span ${d.link.sampled_pct ? sampleTip(d.link.sampled_pct) : ''}>${d.link.match_pct ?? '—'}% link to ${esc(d.link.parent)}${d.link.sampled_pct ? ` (in a sample of ${fmt(d.link.rows, 0)} rows)` : ''}</span>`);
   if (d.foreign_key) parts.push(`<span>FK → ${esc(d.foreign_key)}</span>`);
   return parts.join('') || '<span class="muted">—</span>';
 }

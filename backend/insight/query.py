@@ -258,7 +258,7 @@ def compile_intent(intent, kb, dialect, display_references=True, stored=None):
             exists.setdefault(tuple((j['id'], d) for j, d in r['steps']), (r, first, []))[2].append(f)
             continue
         alias = join_chain(r['steps'])
-        where.append(_condition(f'{alias}.{r["column"]}', meta, op, f.get('value'), bind, dialect))
+        where.append(condition(f'{alias}.{r["column"]}', r, f))
     for key, (r, first, flist) in exists.items():
         outer = join_chain(r['steps'][:first])
         sub_from = []; sub_where = []; prev = outer
@@ -273,7 +273,7 @@ def compile_intent(intent, kb, dialect, display_references=True, stored=None):
             joins_used[j['id']] = dict(join=j, direction=d)
             prev = a
         for f in flist:
-            sub_where.append(_condition(f'{prev}.{r["column"]}', r['meta'], f.get('op', 'eq'), f.get('value'), bind, dialect))
+            sub_where.append(condition(f'{prev}.{r["column"]}', r, f))
         target_table = kb.table(r['table'])
         if 'CANCEL' in target_table['columns'] and target_table['kind'] != 'master':
             sub_where.append(f"({prev}.CANCEL IS NULL OR {prev}.CANCEL <> 'T')")
@@ -316,7 +316,36 @@ def compile_intent(intent, kb, dialect, display_references=True, stored=None):
                                 direction=v['direction']) for v in joins_used.values()])
 
 
-def _condition(expr, meta, op, value, bind, dialect):
+def _spellings(value, meta, dialect, stored):
+    """Bind expressions for an exact text match on the plain column: the value as given, the spellings the value
+    index holds for it (same letters, any case), and capitals, since Oracle codes are usually stored in capitals.
+    CHAR columns are blank-padded, so on Oracle the value is padded to the column width (as the live finder does)."""
+    v = str(value).strip()
+    known = [str(s).strip() for s in (stored(v) if stored else None) or []]
+    out = list(dict.fromkeys([v, *[s for s in known if s.upper() == v.upper()], v.upper()]))[:MAX_SPELLINGS]
+    width = meta.get('length') if meta['type'] in ('CHAR', 'NCHAR') and dialect.name == 'oracle' else None
+    if width:
+        fits = [s for s in out if len(s.encode()) <= int(width)]   # a longer value cannot be stored there
+        return fits, (lambda b: f'RPAD({b}, {int(width)})') if fits else None
+    return out, None
+
+
+def _exact_text(expr, meta, values, bind, dialect, stored):
+    """expr = :b or expr IN (...) over every spelling of every value: an index on expr can answer it."""
+    binds = []
+    for value in values:
+        spellings, pad = _spellings(value, meta, dialect, stored)
+        if not spellings:
+            continue
+        binds += [pad(bind(s)) if pad else bind(s) for s in spellings]
+    if not binds:   # nothing can match (every value is longer than the column): keep the statement valid
+        return '1 = 0'
+    return f'{expr} = {binds[0]}' if len(binds) == 1 else f'{expr} IN ({", ".join(binds)})'
+
+
+def _condition(expr, meta, op, value, bind, dialect, forgiving=True, stored=None):
+    """One filter as SQL. forgiving=False (a big table) compiles text equality on the plain column so an index can
+    answer it; stored(value) gives the spellings the value index knows for this column."""
     kind = meta['type']
     if op == 'is_null':
         return f'{expr} IS NULL'
@@ -341,6 +370,8 @@ def _condition(expr, meta, op, value, bind, dialect):
             return f'{expr} IN ({", ".join(bind(_as_number(v)) for v in list(value)[:50])})'
         sym = {'eq': '=', 'ne': '<>', 'gt': '>', 'gte': '>=', 'lt': '<', 'lte': '<='}[op]
         return f'{expr} {sym} {bind(_as_number(value))}'
+    if not forgiving and kind in TEXT_TYPES and op in ('eq', 'in'):
+        return _exact_text(expr, meta, list(value)[:50] if op == 'in' else [value], bind, dialect, stored)
     text = f'UPPER(TRIM({expr}))' if kind != 'NUMBER' else f'UPPER({expr})'
     if op == 'in':
         return f'{text} IN ({", ".join(bind(str(v).strip().upper()) for v in list(value)[:50])})'
