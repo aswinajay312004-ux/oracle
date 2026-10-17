@@ -141,6 +141,14 @@ def unknown_matrix():
     return save(wb)
 
 
+def _results(content):
+    """{(sheet title, row, col): value} as Excel would show them, including formulas the fixture saved
+    without a result (openpyxl stores none). Excel's own "Save as" carries those results over."""
+    from backend import readers
+    _, sheets = readers._read_inline(content, 'fixture.xlsx')
+    return {(s['name'], c['row'], c['col']): c['value'] for s in sheets for c in s['cells'] if c['value'] is not None}
+
+
 def as_xls(content):
     """The same workbook saved as legacy Excel 97-2003 (.xls): values, dates, leading-zero formats,
     merged ranges and hidden sheets are carried over, like Excel's own "Save as .xls"."""
@@ -148,6 +156,7 @@ def as_xls(content):
     from datetime import date, datetime as dt
     from openpyxl import load_workbook
     src = load_workbook(BytesIO(content), data_only=True)
+    results = _results(content)
     book = xlwt.Workbook()
     date_style = xlwt.easyxf(num_format_str='YYYY-MM-DD')
     for ws in src.worksheets:
@@ -159,7 +168,7 @@ def as_xls(content):
             merged[(rng.min_row, rng.min_col)] = rng
         for row in ws.iter_rows():
             for c in row:
-                v = c.value
+                v = c.value if c.value is not None else results.get((ws.title, c.row, c.column))
                 if v is None:
                     continue
                 if isinstance(v, (dt, date)):
@@ -180,11 +189,14 @@ def _grid(content, sheet=None):
     """[(sheet title, hidden, {(row, col): value}, merged ranges)] from an xlsx fixture (cached values)."""
     from openpyxl import load_workbook
     wb = load_workbook(BytesIO(content), data_only=True)
+    results = _results(content)
     out = []
     for ws in wb.worksheets:
         if sheet and ws.title != sheet:
             continue
-        cells = {(c.row, c.column): c.value for row in ws.iter_rows() for c in row if c.value is not None}
+        cells = {(c.row, c.column): c.value if c.value is not None else results.get((ws.title, c.row, c.column))
+                 for row in ws.iter_rows() for c in row}
+        cells = {k: v for k, v in cells.items() if v is not None}
         out.append((ws.title, ws.sheet_state != 'visible', cells, list(ws.merged_cells.ranges)))
     return out
 

@@ -1051,7 +1051,7 @@ def test_sniff_reports_an_oversized_upload_as_too_large_not_damaged():
 def test_zip_with_more_records_than_its_declared_count_is_refused_while_sniffing():
     out, central = BytesIO(), BytesIO()
     for i in range(readers.MAX_ZIP_ENTRIES + 5):
-        name = (f'xl/workbook.bin' if i == 0 else f'x/{i}').encode(); offset = out.tell()
+        name = ('xl/workbook.bin' if i == 0 else f'x/{i}').encode(); offset = out.tell()
         out.write(struct.pack('<4sHHHHHIIIHH', b'PK\x03\x04', 20, 0, 0, 0, 0, 0, 0, 0, len(name), 0) + name)
         central.write(struct.pack('<4sHHHHHHIIIHHHHHII', b'PK\x01\x02', 20, 20, 0, 0, 0, 0, 0, 0, 0, len(name), 0, 0, 0, 0, 0, offset) + name)
     cd = central.getvalue(); at = out.tell(); out.write(cd)
@@ -1282,3 +1282,19 @@ def test_isolated_native_reader_running_out_of_memory_only_stops_the_worker():
         isolation.run(readers.read_calamine, (liar,), timeout=60, memory=384 << 20, passthrough=(readers.Unsupported, readers.Unreadable))
     assert getattr(err.value, 'reason', None) in ('crashed', 'memory')        # calamine buffers the whole part
     assert cells_of(read_one(b'Style,Qty\r\nZK-1,5\r\n', 'x.csv'))['B2'] == 5
+
+
+def test_formulas_saved_without_results_are_calculated_safely():
+    from backend import formulas
+    cells = [dict(row=1, col=1, cell='A1', value=100, formula=None), dict(row=1, col=2, cell='B1', value=None, formula='=A1*2'),
+             dict(row=2, col=1, cell='A2', value=None, formula='=SUM(A1:B1)+ROUND(1.005,2)'),
+             dict(row=3, col=1, cell='A3', value=None, formula='=VLOOKUP(A1,B:B,1,0)'),
+             dict(row=4, col=1, cell='A4', value=None, formula='=A4+1'),
+             dict(row=5, col=1, cell='A5', value=None, formula="='Other sheet'!A1/4"),
+             dict(row=6, col=1, cell='A6', value='text', formula=None), dict(row=6, col=2, cell='B6', value=None, formula='=A6*2')]
+    sheets = [dict(name='S', cells=cells), dict(name='Other sheet', cells=[dict(row=1, col=1, cell='A1', value=10, formula=None)])]
+    assert formulas.fill_missing(sheets) == 3
+    got = {c['cell']: (c['value'], c.get('computed')) for c in cells}
+    assert got['B1'] == (200, True) and got['A2'] == (301.01, True) and got['A5'] == (2.5, True)
+    assert got['A3'] == (None, None) and got['A4'] == (None, None) and got['B6'] == (None, None)   # lookups, cycles, text stay empty
+    assert 'could not be calculated' in sheets[0]['notes'][0]

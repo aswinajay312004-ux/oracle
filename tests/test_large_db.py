@@ -71,7 +71,8 @@ def test_live_finder_uses_the_index_and_never_upper_trim_on_big_tables(tmp_path,
 def test_unknown_word_scans_only_partial_columns_and_numbers_only_for_digits(tmp_path, monkeypatch):
     monkeypatch.setattr(local_store, 'DATA', tmp_path)
     (tmp_path / service.VALUE_META).write_text(json.dumps(dict(   # BONO is complete too, but a growing code column: still probed
-        complete=['ORDMAS.SAMPLETYPE', 'ORDMAS.ORDCATEGORY', 'ORDMAS.BONO'], counts={'ORDMAS.SAMPLETYPE': 2, 'ORDMAS.ORDCATEGORY': 3, 'ORDMAS.BONO': 15000})))
+        complete=['ORDMAS.SAMPLETYPE', 'ORDMAS.ORDCATEGORY', 'ORDMAS.BONO'], counts={'ORDMAS.SAMPLETYPE': 2, 'ORDMAS.ORDCATEGORY': 3, 'ORDMAS.BONO': 15000},
+        words=['ORDMAS.SAMPLETYPE', 'ORDMAS.ORDCATEGORY'])))
     assert service.closed_lists() == {'ORDMAS.SAMPLETYPE', 'ORDMAS.ORDCATEGORY'}
     spy = Spy(answer=lambda *a: [])
     assert service.live_finder(big_kb(), spy, ORACLE)('PK/26-27/S/9999') == []

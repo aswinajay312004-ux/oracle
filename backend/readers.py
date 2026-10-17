@@ -30,7 +30,8 @@ Formats (decided from the file's bytes, never from its name alone):
 Protected files are refused with what to do: password-protected (encrypted) workbooks, Microsoft IRM /
 sensitivity-label files, and other Office documents (Word, PowerPoint, Outlook e-mails).
 
-Safety: cell contents are data only - nothing is evaluated or executed. Sizes are capped before any
+Safety: cell contents are data only - nothing is executed (backend/formulas.py calculates only simple
+arithmetic formulas a file saved without their result). Sizes are capped before any
 parser runs (bytes, real decompressed zip sizes, cells, sheets, merged areas, nesting), and read()
 parses in a separate worker process with a time limit and a memory cap (backend/isolation.py).
 Environment: POPPYS_PARSE_TIMEOUT (seconds, default 60), POPPYS_PARSE_MEMORY_MB (default 1536),
@@ -60,7 +61,7 @@ import warnings
 import zipfile
 import zlib
 
-from . import isolation, numfmt
+from . import formulas, isolation, numfmt
 
 MAX_BYTES = 12 * 1024 * 1024
 MAX_SHEETS = 30
@@ -823,6 +824,7 @@ def _read_inline(content, filename=''):
         raise Unreadable(f'The workbook has more than {MAX_TOTAL_CELLS:,} filled cells. Split it into smaller workbooks and upload them one at a time.')
     if _text_size(sheets) > MAX_TEXT:
         raise Unreadable(MSG_TOO_MUCH_TEXT)
+    formulas.fill_missing(sheets)
     return kind, sheets
 
 
@@ -1550,7 +1552,7 @@ def read_xml2003(content):
         column_styles.sort(key=lambda s: s[0])             # looked up by bisection: one step per cell
         column_starts = [s[0] for s in column_styles]
 
-        def column_style(c):
+        def column_style(c, column_starts=column_starts, column_styles=column_styles):
             i = bisect.bisect_right(column_starts, c) - 1
             return column_styles[i][2] if i >= 0 and c <= column_styles[i][1] else None
         r = 0

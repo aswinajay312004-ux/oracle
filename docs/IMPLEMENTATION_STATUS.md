@@ -15,13 +15,14 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 
 | Date | Result | Notes |
 |---|---|---|
-| 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | Failures inherited from WIP checkpoints: `test_formats.py` (ods/xlsb/xls fallbacks, OLE2 messages, isolation), `test_documents.py` (pack detection), `test_engine.py` (unit evidence), `test_large_db.py`, `test_planner.py` (composition warnings) |
+| 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-17 (session 2, batch 1) | **377 passed, 0 failed, 18 skipped**; ruff clean | Root cause of 6: formulas saved without a result (script/export files) read as empty, so pack/piece totals and workbook arithmetic were missing. Added `backend/formulas.py` (safe subset: + − × ÷ ^, refs, SUM/MIN/MAX/AVERAGE/COUNT/ROUND*; nothing executed; cells marked `computed`, sheet note added). 1 stale test updated for the intentional `words` rule in `closed_lists()`. The 18 skips are opt-in local-Oracle tests and client workbooks that exist only on the laptop |
 
 ## Feature status
 
 | # | Feature | Status | Evidence / gap |
 |---|---|---|---|
-| A1 | Excel reading (.xlsx/.xlsm; .xls/.xlsb/.ods via isolated readers), provenance, formulas, hidden, merged | Implemented, partly Broken | `backend/readers.py`, `backend/workbooks.py`; format tests failing |
+| A1 | Excel reading (.xlsx/.xlsm; .xls/.xlsb/.ods via isolated readers), provenance, formulas, hidden, merged | Implemented, Cloud-tested | `backend/readers.py`, `backend/workbooks.py`, `backend/formulas.py` |
 | A2 | Layout detection: merch BOM, buyer contract, flat table, saved templates, matcher | Implemented, Cloud-tested (partly) | `backend/matcher.py`, `backend/fields.py` |
 | A3 | Raw → business draft → ERP plan → approved snapshot (hash-bound) | Implemented, Cloud-tested | `backend/erp/planner.py`, `tests/test_planner.py` |
 | A4 | Mapping registry (verified/proposed columns) | Implemented, Cloud-tested | `config/oracle_mapping.json`, `backend/erp/mapping.py` |
@@ -40,7 +41,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 
 ## Next steps (in order)
 
-1. Fix the 33 failing tests (root cause, not test edits).
+1. ~~Fix the failing tests~~ (done, batch 1).
 2. Remove leftover PDF wording in docs (PDF is out of scope).
 3. Re-audit gaps against the master prompt; implement missing pieces.
 4. Produce exact local Oracle verification commands and record results here.
