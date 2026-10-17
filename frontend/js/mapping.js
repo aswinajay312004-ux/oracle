@@ -35,11 +35,11 @@ export function renderMapping(container, draft, apply) {
   autoPropose();
 }
 
-// Without the local AI the matcher's proposal is cheap: fetch it for a sheet that has none yet.
+// The matcher's proposal is cheap (the local AI is only asked through its own button): fetch it for a sheet that has none yet.
 function autoPropose() {
   const name = ctx.sheet; const draftId = ctx.draftId;
   const run = () => { if (ctx.draftId !== draftId || ctx.sheet !== name || ctx.sug || ctx.proposed?.[name] || !ctx.container.isConnected) return; if (state.busy) return setTimeout(run, 150); propose(false); };
-  if (!ctx.sug && !aiOn() && !ctx.proposed?.[name]) setTimeout(run, 0);
+  if (!ctx.sug && !ctx.proposed?.[name]) setTimeout(run, 0);
 }
 
 const aiOn = () => !!state.health?.ollama?.available;
@@ -147,7 +147,7 @@ async function propose(useAi) {
   const sheetName = ctx.sheet;
   await busy(useAi ? 'Asking the local AI — every proposal is checked by the field matcher…' : 'Looking for the order fields in this sheet…', async () => {
     let r;
-    try { r = await api(`/api/drafts/${id(ctx.draft.id)}/suggest`, { method: 'POST', body: { sheet: sheetName } }); }
+    try { r = await api(`/api/drafts/${id(ctx.draft.id)}/suggest`, { method: 'POST', body: { sheet: sheetName, use_ai: !!useAi } }); }
     catch (e) {
       (ctx.proposed ||= {})[sheetName] = true;
       if (e.status === 409) { notify(`${e.message} Use Pick to show where each value is.`, 'warning'); return; }

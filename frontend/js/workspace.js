@@ -576,6 +576,14 @@ async function saveEdits() {
 async function applyMapping(body) {
   return busy('Reading the file with this layout…', async () => {
     await saveEdits();
+    // dry run first: a wrong choice is shown on its field without a failed request
+    try {
+      const check = await api(`/api/drafts/${id(state.draft.id)}/map/check`, { method: 'POST', body: { version: state.draft.version, ...body } });
+      if (!check.ok) return { rejected: check.rejected };
+    } catch (e) {
+      if (e.status === 409 && /pack/i.test(e.message)) return { rejected: [{ field: 'qty_unit', reason: e.message }] };
+      throw e;
+    }
     try { state.draft = await api(`/api/drafts/${id(state.draft.id)}/map`, { method: 'POST', body: { version: state.draft.version, ...body } }); }
     catch (e) {
       if (e.status === 409 && e.data?.rejected?.length) return { rejected: e.data.rejected };

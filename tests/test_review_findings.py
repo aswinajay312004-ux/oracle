@@ -97,3 +97,33 @@ def test_european_thousands_are_never_guessed():
     fixed = ready(o); fixed['lines'][0]['sizes'][0]['quantity'] = 2000; fixed['lines'][0]['sizes'][1]['quantity'] = 1500
     assert not [i for i in plan(fixed)['issues'] if i['severity'] == 'error']
     assert plan(fixed)['totals']['pieces'] == 3512
+
+
+def test_layout_dry_run_check_and_matcher_only_suggestions(tmp_path, monkeypatch):
+    """The layout screen checks a person's choices first (no failed request), a suggestion can be asked
+    without the local AI, and applying a layout clears the notes about the layout question."""
+    from fastapi.testclient import TestClient
+    from backend import local_store, main, ai
+    from fake_oracle import FakeOracle
+    from fixtures import wrong_mapping_po, unknown_matrix
+    monkeypatch.setattr(local_store, 'DATA', tmp_path); monkeypatch.setattr(main, 'DATA', tmp_path)
+    FakeOracle().install(monkeypatch)
+    called = []
+    monkeypatch.setattr(ai, 'available', lambda: True)
+    monkeypatch.setattr(ai, 'ai_proposal', lambda *a, **k: called.append(1) or None)
+    with TestClient(main.app) as c:
+        assert c.post('/api/setup', json={'username': 'admin', 'password': 'test-password-123'}).status_code == 200
+        d = c.post('/api/uploads', files={'file': ('w.xlsx', wrong_mapping_po())}).json()
+        s = c.post(f'/api/drafts/{d["id"]}/suggest', json={'sheet': 'PO', 'use_ai': False}).json()
+        assert s['definition'] and not called                         # matcher only: the AI was not asked
+        bad = dict(s['definition'], fields=dict(s['definition'].get('fields') or {}, ship_date='H3'))
+        r = c.post(f'/api/drafts/{d["id"]}/map/check', json={'version': d['version'], 'sheet': 'PO', 'definition': bad})
+        assert r.status_code == 200 and r.json()['ok'] is False and any(x['field'] == 'ship_date' for x in r.json()['rejected'])
+        assert c.get(f'/api/drafts/{d["id"]}').json()['version'] == d['version']     # a dry run changes nothing
+        u = c.post('/api/uploads', files={'file': ('z.xlsx', unknown_matrix())}).json()
+        sug = c.post(f'/api/drafts/{u["id"]}/suggest', json={'sheet': u['sheets'][0]['name'], 'use_ai': False}).json()
+        ok = c.post(f'/api/drafts/{u["id"]}/map/check', json={'version': u['version'], 'sheet': sug['sheet'], 'definition': sug['definition']}).json()
+        assert ok['ok'] is True and ok['rejected'] == []
+        applied = c.post(f'/api/drafts/{u["id"]}/map', json={'version': u['version'], 'sheet': sug['sheet'], 'definition': sug['definition'],
+                                                                'qty_unit': 'PCS'}).json()
+        assert applied['notes'] == [] and applied['orders']

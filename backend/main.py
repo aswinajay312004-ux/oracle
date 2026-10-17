@@ -462,18 +462,34 @@ def _refused(rejected, fields):
                                                   'rejected': [dict(r, source='person') for r in rejected]})
 
 
+def _check_mapping(d, data):
+    """(sheet, definition, fields, rejected) for a layout a person submitted; rejected names each wrong field."""
+    sheet = next((s for s in d['sheets'] if s['name'] == data.sheet), None)
+    if not sheet:
+        raise ValueError('Select a worksheet.')
+    fields = current_fields()
+    definition = data.definition or dict(fields={}, table=dict(type='flat', header_row=data.header_row, columns=data.columns or {}))
+    if data.qty_unit == 'PACK' and data.pieces_per_unit is not None and data.pieces_per_unit < 2:
+        raise HTTPException(409, 'A pack holds at least 2 pieces. How many pieces are in one pack?')
+    _, rejected = matcher.check(sheet, definition, fields, master_labels())
+    return sheet, definition, fields, rejected
+
+
+@app.post('/api/drafts/{id}/map/check')
+def mapping_check(id: str, data: Mapping, user=Depends(require('edit'))):
+    """Dry run of /map: says which choices do not fit the file, changes nothing (the screen checks first)."""
+    d = store.get(id)
+    _, _, fields, rejected = _check_mapping(d, data)
+    text = ' '.join(f'{fields.label(r["field"]) if r["field"] in fields else r["field"]}: {r["reason"]}.' for r in rejected)
+    return dict(ok=not rejected, rejected=[dict(r, source='person') for r in rejected],
+                detail=f'This layout does not fit the file. {text}' if rejected else 'The layout fits the file.')
+
+
 @app.post('/api/drafts/{id}/map')
 def mapping(id: str, data: Mapping, user=Depends(require('edit'))):
     with LOCK:
         d = editable(id, data.version)
-        sheet = next((s for s in d['sheets'] if s['name'] == data.sheet), None)
-        if not sheet:
-            raise ValueError('Select a worksheet.')
-        fields = current_fields()
-        definition = data.definition or dict(fields={}, table=dict(type='flat', header_row=data.header_row, columns=data.columns or {}))
-        if data.qty_unit == 'PACK' and data.pieces_per_unit is not None and data.pieces_per_unit < 2:
-            raise HTTPException(409, 'A pack holds at least 2 pieces. How many pieces are in one pack?')
-        _, rejected = matcher.check(sheet, definition, fields, master_labels())
+        sheet, definition, fields, rejected = _check_mapping(d, data)
         if rejected:
             return _refused(rejected, fields)
         orders = workbooks.apply_template(d['sheets'], sheet, definition, fields)
@@ -482,6 +498,7 @@ def mapping(id: str, data: Mapping, user=Depends(require('edit'))):
             _confirm_unit(o, data)
         d['orders'] = store.identify(_new_order_defaults([workbooks.finish(o) for o in orders]))
         d['format'] = 'Reviewed layout mapping'; d['version'] += 1; d['plan'] = None; d['template'] = None
+        d['notes'] = []; d['templates_refused'] = []        # the layout question they raised is now answered
         if data.save_template:
             name = (data.template_name or '').strip() or f'{d["filename"]} · {sheet["name"]}'
             unit, basis = _decided_unit(d['orders'])
@@ -519,6 +536,7 @@ def _confirm_unit(o, data):
 
 class Suggestion(BaseModel):
     sheet: str
+    use_ai: bool = True          # False: the field matcher only (fast, used when the screen opens)
 
 
 @app.post('/api/drafts/{id}/suggest')
@@ -526,7 +544,7 @@ def suggest(id: str, data: Suggestion, user=Depends(require('edit'))):
     d = store.get(id); sheet = next((s for s in d['sheets'] if s['name'] == data.sheet), None)
     if not sheet:
         raise ValueError('Select a worksheet.')
-    return ai.suggest(sheet, current_fields(), master_labels())
+    return ai.suggest(sheet, current_fields(), master_labels(), use_ai=data.use_ai)
 
 
 class Version(BaseModel):

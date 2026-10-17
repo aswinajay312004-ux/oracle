@@ -26,7 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-OUT = ROOT / 'data'
+OUT = Path(os.environ.get('POPPYS_DATA_DIR') or ROOT / 'data')   # same data folder as the app (service: ProgramData)
 OWNER = 'GARMENT_DEMO'
 SAMPLE_ROWS = 200_000      # profile about this many rows per table at most
 STATEMENT_S = 120          # time limit per statement
