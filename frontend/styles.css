@@ -720,3 +720,17 @@ details.ex-more > summary { cursor: pointer; font-weight: 600; font-size: 12.5px
 .switch[aria-checked="true"] .knob::after { transform: translateX(14px); }
 @media (max-width: 1240px) { .mapgrid { grid-template-columns: 360px minmax(0, 1fr); } }
 @media (max-width: 920px) { .mapgrid { grid-template-columns: 1fr; } .map-right { position: static; } .map-actions { max-width: none; } }
+
+/* Ask AI answer charts (frontend/js/chart.js): one series in the brand colour, recessive axes, hover per mark. */
+.answer-chart { margin: 4px 16px 6px; padding: 10px 12px 6px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.answer-chart figcaption { font-size: 12.5px; font-weight: 600; color: var(--ink-2, #475569); margin-bottom: 6px; }
+.answer-chart svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+.answer-chart .bar { fill: var(--brand-2); }
+.answer-chart .line { fill: none; stroke: var(--brand-2); stroke-width: 2; }
+.answer-chart .dot { fill: var(--brand-2); stroke: #fff; stroke-width: 2; }
+.answer-chart .axis, .answer-chart .grid { stroke: #e2e8f0; stroke-width: 1; }
+.answer-chart .lbl, .answer-chart .val, .answer-chart .tick { font-size: 11.5px; fill: #475569; }
+.answer-chart .val { fill: #0f172a; font-variant-numeric: tabular-nums; }
+.answer-chart .hit { fill: transparent; }
+.answer-chart .mark:hover .bar, .answer-chart .mark:hover .dot { fill: var(--brand-ink); }
+.answer-chart .mark:hover .hit { fill: var(--brand-soft); }

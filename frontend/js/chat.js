@@ -4,6 +4,7 @@
 import { $, $$, esc, fmt, show, plural, state, notify, modal, csv, timeAgo } from './util.js';
 import { api, id } from './api.js';
 import { renderGraph } from './graph.js';
+import { answerChart } from './chart.js';
 
 const answers = new Map();   // id -> { result, extra: {nodes, edges}, added:Set, sort }
 const STARTERS = ['How many orders for NEXT?', 'Size wise quantity for order PK/26-27/S/9001', 'Buyer wise order quantity',
@@ -78,6 +79,7 @@ function draw(aid) {
     <div class="legend"><span><i style="background:var(--brand)"></i>Used in this answer</span><span><i style="border:1.5px dashed #94a3b8;background:#fff"></i>Linked, not used</span>
       <span><i style="background:#d39a2c"></i>Unconfirmed link</span><span class="muted">Click a table to preview it and add its columns · ＋ shows linked tables</span></div>
     <div class="answer-summary">${esc(r.summary)}</div>
+    ${answerChart(cols, rows)}
     <div class="answer-body">
       <div class="answer-tools"><span>${plural(r.row_count, 'row')}${r.truncated ? ` (first ${r.limit} shown)` : ''} · ${r.elapsed_ms} ms</span><span class="spacer"></span>
         <button class="ghost small" data-csv="${esc(aid)}">Download CSV</button></div>

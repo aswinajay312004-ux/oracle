@@ -34,6 +34,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | B1 | Knowledge catalog + relationship statuses | Implemented, Cloud-tested | `backend/insight/knowledge.py`, `config/semantic_catalog.json` |
 | B2 | Question → intent → compiled read-only SELECT (no model SQL) | Implemented, Cloud-tested | `backend/insight/understand.py`, `query.py`, `engine.py` |
 | B3 | Local AI (Ollama) fallback for understanding and mapping | Implemented | `backend/ai.py`; needs local Ollama check |
+| B5 | Ask AI charts (bar for categories, line for dates) from the exact returned rows; table kept as the accessible view | Implemented, Cloud-tested (rendered on demo server) | `frontend/js/chart.js` |
 | B4 | Read-only executor (READ ONLY txn, timeout, row cap) on a **separate read-only account** `POPPYS_RO` | Implemented, Cloud-tested | `oracle_store.connect_readonly()` refuses an account with any write privilege; `scripts/create_readonly_user.py` (run by `setup.ps1`); `/api/health` reports it; `tests/test_readonly.py`. Needs Local Oracle test |
 | C1 | Explorer: search, rows, keyset paging, linked records | Implemented, Cloud-tested | `/api/explorer/*`, `frontend/js/explorer.js` |
 | C2 | Relationship graph / flowchart (no CDN, SVG) | Implemented | `frontend/js/graph.js`, `flow.js` |
