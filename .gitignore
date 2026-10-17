@@ -16,3 +16,6 @@ docs/live_sample_records.txt
 !tests/fixtures/*.xlsx
 !tests/fixtures/formats/
 !tests/fixtures/formats/*
+
+# downloaded Windows service wrapper (WinSW) and other binaries are never committed
+deploy/windows/*.exe

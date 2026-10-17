@@ -3,8 +3,10 @@ import os
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / 'data'
-DATA.mkdir(exist_ok=True)
+# Local state (SQLite, uploads, caches). The Windows service points this at ProgramData so the
+# data survives upgrades; development keeps it in the repo's git-ignored data/ folder.
+DATA = Path(os.environ.get('POPPYS_DATA_DIR') or ROOT / 'data')
+DATA.mkdir(parents=True, exist_ok=True)
 VALUES = dotenv_values(ROOT / '.env.poppys')
 
 def setting(key, default=''):
