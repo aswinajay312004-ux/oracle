@@ -1,88 +1,109 @@
-# POPPYS AI — Excel/PDF to Oracle ERP order entry
+# POPPYS AI — buyer order files to Axpert ERP (Oracle), with approval
 
-POPPYS AI is a local, approval-controlled automation tool for POPPYS Garments (Axpert ERP on Oracle). An employee drops a buyer or merchandising file. POPPYS AI then:
+POPPYS AI is a local, approval-controlled order-entry tool for POPPYS Garments (Axpert ERP on Oracle). Staff upload the order file a buyer sent. POPPYS AI then:
 
-1. reads the order, size breakdown, fabric and trims;
-2. maps them to the verified GARMENT_DEMO tables and columns;
-3. asks only what is missing;
-4. shows the exact Oracle entry;
-5. after approval, saves it in one transaction and proves it with a live read-back flowchart.
+1. reads it, in any common spreadsheet format or JSON;
+2. finds the order fields (buyer, style, PO, order reference, dates, colours, sizes, quantities, pieces or packs) and shows the source cell of every value;
+3. asks only what the file does not say, or says unclearly;
+4. shows the exact Oracle rows it will write (ORDMAS → ORDSTYLE → ORDSIZE and the master tables);
+5. after an approver approves, saves everything in one transaction, reads it back from Oracle and draws the saved records as a diagram.
 
-**Upload → Review (Axpert-style entry) → Check & approve → Saved & verified**, plus **Ask AI** (plain-language questions about the database) and a read-only **Database** explorer.
+**Upload → Review → Check & approve → Saved & verified**, plus **Ask AI** (plain-language questions about orders, answered with checked, read-only SQL) and a read-only **Database** explorer.
 
-## What it does
+Scope: spreadsheets and JSON with a local AI and the local Oracle database. No PDF, OCR, CAD, images or cloud AI.
 
-- **Documents:** Excel `.xlsx`/`.xlsm` and text PDFs.
-  - Built-in recognition: merch BOM workbooks (order / sample / summary blocks, packs, fabric requirement, trim tables) and buyer contract confirmation reports.
-  - Simple tables are matched by column headings.
-  - For a new layout, the user shows the fields once (local AI or layout analysis suggests them), and it is saved as a template.
-- **Accurate mapping:** a mapping registry (`config/oracle_mapping.json`) defines each business field → `TABLE.COLUMN`. Only columns verified with evidence are written. Fabric (`ORDFAB`), yarn (`ORDYARN`) and accessories (`ORDACC`) are validated and previewed, and saved once an admin verifies their mapping.
-- **Business validation:** required fields, quantity and unit checks, total reconciliation, duplicate file, order and size checks, cancelled or ambiguous masters, fabric kg and yarn %, composition mismatch, and the real Oracle column limits.
-- **Safe save:** bind variables, a write lock, the exact preview hash, one transaction, row-by-row read-back, and an audit receipt in `POPPYS_APP.PP_IMPORT_LOG`. Existing orders are never overwritten.
-- **Field-level validation:** a missing or wrong value is outlined in red on the exact field or table cell, with a one-line reason under it. There is no error list to decode. "Show me the next one" walks through them.
-- **Axpert-style entry:** the order header as a form, sizes as a size × colour table (first columns frozen), and fabric/yarn and trims as tables.
-- **Visual confirmation:** before and after saving, a flowchart of every affected table. Click a table to see its rows in table format below. After saving, the rows come from a fresh `SELECT`, with master IDs decoded to names.
-- **Ask AI:** plain-language questions about the database ("size wise quantity for order PK/26-27/S/9001", "buyer wise order quantity this year").
-  - Each answer shows a linked-table flowchart. "+" reveals related tables, clicking a table opens a preview, and any of its columns can be added to the answer, which re-runs with the correct joins.
-  - The model never writes SQL. Questions become a validated intent, compiled along known relationships into one read-only query, and the query is shown.
-- **Data dictionary:** business names, synonyms and roles for every table and column, plus relationship confirmation. Everything is editable and audited in Setup.
-- **Database explorer:** business names, exact row counts (or "≈" statistics for very large tables), master names instead of IDs, linked records (parents and children) and an expandable relationship map.
-- **People and audit:** admin, approver, operator and viewer roles, an optional four-eyes rule, and a full audit trail of uploads, corrections, previews, approvals and mapping changes.
-- **Offline:** UI, server, document reading, local AI (Ollama) and Oracle all run on the laptop.
+## What it reads
+
+| Format | Extensions | Reader |
+|---|---|---|
+| Excel workbook | `.xlsx` `.xlsm` `.xltx` `.xltm` | openpyxl (formulas with cached results, number formats, hidden rows/columns, merged cells; macros never run) |
+| Excel 97-2003 | `.xls` (BIFF2–BIFF8) | xlrd, then python-calamine for damaged files |
+| Excel binary | `.xlsb` | python-calamine |
+| OpenDocument | `.ods` | python-calamine + a bounded pass for merges and hidden rows |
+| Excel 2003 XML | `.xml` | defusedxml (no entity expansion) |
+| Web-page "Excel" exports | `.xls` `.htm` `.html` `.mht` `.mhtml` | HTML parser (what many ERP "Export to Excel" buttons produce) |
+| Text exports | `.csv` `.tsv` `.txt` | encoding detection (UTF-8/16, Windows-1252 …), `sep=` line and delimiter detection |
+| JSON | `.json` | records, row arrays, sheet maps, NDJSON, API envelopes, nested documents (flattened to columns and rows) |
+
+The format is decided from the file's bytes, not its name. Password-protected or rights-managed workbooks and other Office documents are refused with a message saying what to do. Every upload is parsed in a separate worker process with a time and memory limit. Details: [docs/EXCEL_UNDERSTANDING.md](docs/EXCEL_UNDERSTANDING.md).
+
+## How it understands a file
+
+- **Known buyer:** a layout confirmed once is saved as that buyer's versioned template (field anchors, table, unit). The next file with the same layout is read with no questions. A template is used only when each anchor's label still says the same thing, so data from one buyer never carries over to another.
+- **New layout:** a deterministic field matcher scores every candidate cell by its label (aliases, abbreviations, fuzzy match) and by its values (a date field must hold a date, quantities must be numbers). It explains each choice. The optional local AI (Ollama) can add proposals, and every proposal goes through the same validator.
+- **Refuses to guess:**
+  - A unit the file does not state: "pieces or packs?"
+  - A date with day and month unclear, in a file that writes month first.
+  - A quantity like `2.000` in a decimal-comma file.
+  - A description sitting in the style column.
+  - Two columns that could both be the quantity.
+
+  Each one becomes a question on the exact field.
+- **Review items:** a total row that disagrees with the sizes, a second ship date, data in hidden rows, or the same order on two sheets. These are shown under "Please read before approving", on the field they concern.
+
+## How it saves
+
+- Nothing is written to Oracle until a person with the approver role approves the exact preview. The approval is bound to a hash of the planned rows.
+- The save runs under a write lock and re-plans inside the transaction. It refuses if anything changed, uses bind variables only, reads back every inserted row and compares it, then writes a receipt (`PP_IMPORT_LOG`). Any failure rolls everything back.
+- Duplicate files, order references and repeated sizes or colours are refused. Existing ERP rows are never updated or deleted.
+- The app writes as the restricted `POPPYS_APP` account. Ask AI, the explorer, history and read-back use the read-only `POPPYS_RO` account. This build is scoped to the `GARMENT_DEMO` schema and refuses any other owner.
+
+> **Before production use:** a direct INSERT bypasses Axpert's own numbering and Gen/MD maps. Agile Labs (the Axpert vendor) must confirm the posting path. See [docs/adr/0001-posting-path.md](docs/adr/0001-posting-path.md).
 
 ## Run it on Windows
 
-See **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)**. In short:
+See **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)** for first-time setup and **[docs/RUNBOOK.md](docs/RUNBOOK.md)** for the permanent Windows-service install, upgrades, rollback and backups. In short:
 
 ```powershell
-.\setup.ps1                                              # venv, packages, POPPYS_APP account, grants, connection check
-.\.venv\Scripts\python.exe scripts\discover_schema.py   # read-only schema evidence (asks GARMENT_DEMO password)
-.\start.ps1                                              # http://127.0.0.1:8008
+git pull
+.\setup.ps1                                                   # venv, packages, POPPYS_APP account, grants, connection check
+.\.venv\Scripts\python.exe scripts\create_readonly_user.py   # read-only POPPYS_RO account for questions and the explorer
+.\start.ps1                                                   # http://127.0.0.1:8008
 ```
+
+Staff guide in plain language: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## Layout
 
 ```
 backend/
-  main.py            API: auth & roles, uploads, drafts, preview, approval, history, mapping, explorer, audit
-  workbooks.py       Excel understanding: detectors, BOM extraction, templates
-  pdfdocs.py         PDF → virtual sheets
-  ai.py              local layout suggestions (Ollama) + deterministic layout analysis
-  local_store.py     SQLite workspace: users, drafts, revisions, audit, templates, mapping verification
-  oracle_store.py    Oracle connection, transactional writer, live row reads
-  erp/
-    mapping.py       registry loader + verified/proposed overrides
-    catalog.py       live Oracle dictionary vs offline snapshot
-    planner.py       business rules → exact row plan
-    readback.py      live read-back graph (and the planned graph for the approval view)
-    semantic.py      business semantic model
-  insight/
-    knowledge.py     knowledge catalog: dictionary + registry + curated meaning + admin edits; relationship graph
-    understand.py    question → intent (rules first, local AI as a checked fallback)
-    query.py         intent → one read-only SELECT (catalog identifiers, graph joins, binds, no double counting)
-    engine.py        answers with provenance, confidence and linked-table graph
-    service.py       dictionary harvest/cache, value index, read-only executors
-config/oracle_mapping.json   field → table/column registry (what may be written)
-config/semantic_catalog.json business meaning of tables/columns and their relationships (what questions use)
-frontend/            vanilla JS UI (no CDN; works offline)
-scripts/             bootstrap, grants, discovery, connection check
-tests/               unit, workflow (in-memory Oracle stand-in) and opt-in live Oracle tests
-docs/                Windows setup, architecture, research, ERP video analysis, schema snapshot
+  main.py            API: sign-in & roles, uploads, drafts, layout mapping, preview, approval, history, explorer, admin
+  readers.py         every spreadsheet format and JSON → one cell model (format sniffing, size caps, fallbacks)
+  isolation.py       parses each upload in a separate worker with time and memory limits
+  numfmt.py          renders Excel number formats (keeps leading zeros such as 00123)
+  workbooks.py       order understanding: layouts, size matrices, flat tables, units, dates, review items, templates
+  fields.py          the order fields, their aliases and which are required (editable by an admin)
+  matcher.py         explainable field matcher and the validator every proposal must pass
+  ai.py              local AI (Ollama) layout proposals, always checked by the validator
+  security.py        passwords, sign-in throttling, sessions, CSRF, body limits, security headers, safe errors
+  logs.py            JSON-lines logs with request IDs and redaction
+  local_store.py     SQLite workspace: users, sessions, drafts, templates, settings, hash-chained audit log
+  oracle_store.py    Oracle pools (app + read-only), the transactional writer, live row reads
+  erp/               mapping registry, catalog (live or snapshot), planner (business rules → row plan), read-back
+  insight/           knowledge catalog, question understanding, read-only SQL compiler, answer engine
+config/              oracle_mapping.json (what may be written), semantic_catalog.json (business meaning)
+frontend/            vanilla JS, no CDN, works offline, strict Content Security Policy
+scripts/             bootstrap, read-only account, grants, schema discovery, Oracle check, backup, local checks
+deploy/windows/      Windows service (WinSW), install / upgrade / rollback / backup task / uninstall
+tests/               unit, workflow, browser (Playwright) and opt-in real-Oracle tests
+docs/                setup, runbook, architecture, Excel spec, research decisions, performance, security
 ```
 
-## Tests
+## Tests and checks
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-$env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q   # include the local Oracle tests
+.\scripts\check.ps1                 # secret scan, lint, JavaScript syntax, unit tests
+.\scripts\check.ps1 oracle          # the same plus the real-Oracle tests (needs .env.poppys)
 ```
 
-The tests use synthetic files that reproduce the structure of the client workbooks. Client files are never committed.
+CI (`.github/workflows/ci.yml`) runs lint, a secret scan (own rules plus Gitleaks over the whole history), a dependency audit, the unit and browser tests, a Windows run and a real Oracle Free 23 job. The Oracle job builds a replica of GARMENT_DEMO with 20,000 bulk-loaded orders and runs the save, read-back, Ask AI and explorer tests against it.
+
+The tests build synthetic files that reproduce the structure of the client's workbooks. Client files are never committed.
 
 ## Safety boundaries
 
-- Upload, review and preview never write to Oracle. A preview made while Oracle is offline is clearly marked and cannot be approved.
-- The local AI can only propose layout cells, explain drafts and propose question intents that must compile against the catalog. It cannot produce SQL or save.
-- Ask AI and the explorer run every query in a read-only transaction with a timeout and a row limit.
-- Credentials live only in the git-ignored `.env.poppys`. The GARMENT_DEMO password is typed at a prompt for discovery and never stored.
-- The app connects as the restricted `POPPYS_APP` account (SELECT plus INSERT on specific tables). It never updates or deletes GARMENT_DEMO rows, and is scoped to GARMENT_DEMO, never the client's live production database.
+- Upload, review and preview never write to Oracle. A preview made while Oracle is offline is marked as such and cannot be approved.
+- The local AI can only propose layout cells and question intents. Both are checked. It cannot write SQL, change values or save.
+- Ask AI and the explorer run each query read-only, with a timeout and a row limit, on the read-only account.
+- Passwords live only in the git-ignored `.env.poppys`, or are typed at a prompt. They are never logged, shown or committed.
+- Security details, and how to report a problem: [SECURITY.md](SECURITY.md). Changes per release: [CHANGELOG.md](CHANGELOG.md).

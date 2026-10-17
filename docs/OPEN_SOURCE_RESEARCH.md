@@ -1,5 +1,7 @@
 # Open-source research for POPPYS sample-order import
 
+> **Superseded.** This is the first survey, kept for history. The current decisions, sources and rejected alternatives are in [RESEARCH_DECISIONS.md](RESEARCH_DECISIONS.md). PDF, OCR and document-image tools mentioned below are out of scope: the product reads spreadsheets and JSON only.
+
 Reviewed 17 October 2026. Scope: local Excel upload, editable sample-order preview, affected Oracle rows, explicit acceptance, atomic save. Natural-language reporting is a later feature. Public documentation and source were read; these projects were not installed or benchmarked against the client workbooks during this research.
 
 ## Decision

@@ -2,7 +2,7 @@
 # The same checks CI runs (.github/workflows/ci.yml), so a change can be proven before it is pushed.
 #
 #   scripts/check.sh                 secret scan, lint, JavaScript syntax and unit tests
-#   scripts/check.sh lint            one step: secrets | lint | js | tests | oracle
+#   scripts/check.sh lint            one step: secrets | lint | js | tests | browser | oracle
 #   scripts/check.sh tests -k api    anything after the step name goes to pytest
 #   scripts/check.sh oracle          the suite with the real-Oracle tests on (needs .env.poppys or POPPYS_ORACLE_*)
 #
@@ -95,6 +95,15 @@ tests() {
   "$PY" -m pytest -q "$@"
 }
 
+browser() {
+  # The flowchart and the app's screens in Chromium under the strict CSP (needs Playwright and its Chromium:
+  # pip install -r requirements-dev.txt, then python -m playwright install chromium). On CI a missing browser
+  # fails instead of skipping.
+  step 'Browser tests: Playwright + Chromium, strict Content-Security-Policy'
+  if [ "${CI:-}" = "true" ]; then export POPPYS_REQUIRE_BROWSER=1; fi
+  "$PY" -m pytest -q tests/test_ui_browser.py "$@"
+}
+
 oracle() {
   # The whole suite with the opt-in switch on, so every real-Oracle test (test_oracle, test_oracle_insight,
   # acceptance E/F, large-table checks, and any added later) runs. It writes only TEST-labelled orders.
@@ -110,6 +119,6 @@ case "${1:-all}" in
     if [ ${#failed[@]} -gt 0 ]; then printf '\nFAILED: %s\n' "${failed[*]}" >&2; exit 1; fi
     printf '\nAll checks passed.\n' ;;
   secrets|lint|js) "$1" ;;
-  tests|oracle) name=$1; shift; "$name" "$@" ;;
-  *) echo "Unknown step '$1'. Use: secrets, lint, js, tests or oracle." >&2; exit 2 ;;
+  tests|browser|oracle) name=$1; shift; "$name" "$@" ;;
+  *) echo "Unknown step '$1'. Use: secrets, lint, js, tests, browser or oracle." >&2; exit 2 ;;
 esac

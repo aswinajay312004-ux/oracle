@@ -3,8 +3,8 @@
 Goal: an order document goes in, and the correct rows land in the correct Oracle tables and columns. Every value can be explained, nothing is written without approval, and every save is proven by reading it back. The same foundation must later support natural-language questions over a much larger schema without being rebuilt.
 
 ```
-Excel / PDF ──► 1 Document layer ──► 2 Business draft ──► 3 ERP planner ──► 4 Approval ──► 5 Writer ──► 6 Read-back
-                (cells + provenance)   (orders, lines,      (registry +        (exact plan     (one txn,    (fresh SELECT,
+Excel / CSV / JSON ─► 1 Document layer ─► 2 Business draft ──► 3 ERP planner ──► 4 Approval ──► 5 Writer ──► 6 Read-back
+                     (cells + provenance) (orders, lines,     (registry +        (exact plan     (one txn,    (fresh SELECT,
                                         sizes, fabric,       catalog +          hash)           bind vars,   flowchart,
                                         trims)               rules)                             lock)        explorer)
                          ▲                                      ▲
@@ -16,8 +16,9 @@ Excel / PDF ──► 1 Document layer ──► 2 Business draft ──► 3 ER
 
 | # | Layer | Code | Responsibility | Never does |
 |---|---|---|---|---|
-| 1 | Document | `backend/workbooks.py`, `backend/pdfdocs.py` | Reads every cell with value, formula, hidden state and source address. Detects layouts by structure, in order: saved templates, merch BOM, buyer contract, flat table. Extracts fabric and accessory tables. Text PDFs become virtual sheets that go through the same detectors | Guess from filenames or sheet titles, or execute workbook content |
-| 1b | Assistance | `backend/ai.py` | Deterministic layout guesser plus local Ollama proposals for unfamiliar layouts, validated against real cells | Produce SQL or values that skip review |
+| 1 | Readers | `backend/readers.py`, `backend/isolation.py`, `backend/numfmt.py` | Every accepted format (Excel 2007+ and 97-2003, `.xlsb`, `.ods`, Excel 2003 XML, HTML/MHTML exports, CSV/TSV, JSON) becomes one cell model: value, formula, hidden state, number format, flags, source address. The format comes from the file's bytes. Each upload is parsed in a worker process with a time and memory limit, behind size caps applied before any parser runs | Execute formulas, macros or external links; guess a number it cannot read safely (it keeps the text and flags it) |
+| 1a | Order understanding | `backend/workbooks.py`, `backend/fields.py`, `backend/matcher.py` | Finds the order in the cell model, in order: saved buyer templates, merch BOM, buyer contract, size matrices and flat tables. Unknown layouts get an explainable matcher proposal, checked by the validator. Decides the unit (pieces or packs) and dates from evidence, and raises review items (total mismatch, second date, hidden data, the same order twice) | Guess from filenames or sheet titles, or fill a field the file does not support |
+| 1b | Assistance | `backend/ai.py` | Local Ollama proposals for unfamiliar layouts, always passed through the same validator as the matcher | Produce SQL or values that skip review |
 | 2 | Draft | `backend/local_store.py` | Versioned drafts, field-level correction log. Workbook provenance is kept server-side even when a user edits | Lose the original source cell |
 | 3 | Planner | `backend/erp/planner.py` | Business rules: required fields, whole quantities, size and total reconciliation, pack checks, duplicates (file hash, order reference, sizes), cancelled or ambiguous masters, fabric kg = pieces × g ÷ 1000 × rejection, yarn % = 100 with an exact kg split, composition mismatch, accessory scaling, size-name alignment, live column length/precision/scale/nullability. Produces a hashable list of row operations | Write anything |
 | 3a | Mapping registry | `config/oracle_mapping.json`, `backend/erp/mapping.py` | Business field → `TABLE.COLUMN`, master references, parent links, SUBNO links. Each column is `verified` or `proposed`; admin overrides are audited | Let an unverified column be written |
@@ -73,12 +74,24 @@ Why it avoids the earlier mapping problem:
 - **Questions on a big schema.** Retrieval works over the catalog (thousands of tables are fine in memory), not over the data. The value index stores distinct names and codes only, capped per column; transactional columns of very large tables are looked up live. Queries are bounded by row limits and call timeouts.
 - **Explorer on a big schema.** Uses dictionary statistics for very large tables, keyset paging on record IDs, and explicit column lists (never `SELECT *`).
 
+## Security and operations
+
+| Part | Code | What it does |
+|---|---|---|
+| Web security | `backend/security.py` | Request body limits, PBKDF2-SHA256 passwords (600,000 iterations, rehash on sign-in), 12-character minimum with a common-password list, sign-in throttling and lockout stored in SQLite, idle (30 min) and absolute (8 h) session limits, CSRF checks on Origin/Referer and Sec-Fetch-Site, strict CSP and security headers, error answers with a reference ID instead of internals |
+| Audit | `backend/local_store.py` | Append-only, hash-chained audit log; Setup → Audit can verify the chain is untouched |
+| Logs and health | `backend/logs.py`, `backend/main.py` | JSON-lines logs with request IDs and redaction, Windows-safe rotation; `/healthz` (process up), `/readyz` (the local store opens and accepts a write; low disk and an unreachable Oracle only warn, because uploads and previews work without Oracle), `/api/version` |
+| Oracle accounts | `backend/oracle_store.py`, `scripts/create_readonly_user.py` | Two pools: `POPPYS_APP` for the save, `POPPYS_RO` (CREATE SESSION plus READ grants, and a READ ONLY user on Oracle 23ai) for everything read-only |
+| Windows service | `deploy/windows/` | WinSW service as LocalService, side-by-side releases with a `current` junction, upgrade with backup and automatic rollback, scheduled backups |
+| Backups | `scripts/backup.py` | Online SQLite backups (never a plain file copy), integrity check, SHA-256 manifest, retention of 14 daily / 8 weekly / 12 monthly, restore into an empty folder or over a stopped app, monthly restore drill |
+
+Full checklist and threat model: [SECURITY.md](../SECURITY.md). Operator steps: [RUNBOOK.md](RUNBOOK.md).
+
 ## Open-source and research decisions
 
-See `docs/OPEN_SOURCE_RESEARCH.md` (React Spreadsheet Import, TableFlow, Docling, Vanna, DB-GPT, REA). Each was evaluated against the client's actual workflow:
+The decision record is [RESEARCH_DECISIONS.md](RESEARCH_DECISIONS.md): what was adopted, what was rejected, and why, for each area (readers, matching, posting, security, operations). The earlier survey, [OPEN_SOURCE_RESEARCH.md](OPEN_SOURCE_RESEARCH.md), is kept for history.
 
-- Their interaction patterns were adopted: column matching, confirm-before-import, evidence ledgers.
-- Their code was not embedded. None provides garment business rules, Axpert relationships or approval-bound Oracle transactions, and adding them would bring heavy runtime dependencies that conflict with the offline requirement.
-- The runtime uses only permissive, pinned libraries: FastAPI, openpyxl, pdfplumber, python-oracledb, and optionally Ollama.
-
-REA's evidence-ledger idea is reflected in two places: the discovery evidence, and the "source cell → value → Oracle column" chain shown in the preview.
+- Interaction patterns were adopted: column matching with evidence, confirm-before-import, versioned layout templates, an evidence ledger from source cell to Oracle column.
+- Matching ideas came from COMA/Valentine, FlexMatcher and spreadsheet schema matching; no code was copied.
+- No large platform was embedded (Apache Hop, DataMosaic, DocETL, Budibase, Windmill …). None knows garment business rules, Axpert relationships or approval-bound Oracle transactions, and each would add heavy runtime dependencies to an offline laptop.
+- The runtime uses permissive, pinned libraries only: FastAPI, openpyxl, xlrd, python-calamine, defusedxml, olefile, charset-normalizer, python-oracledb, and optionally Ollama for the local AI.

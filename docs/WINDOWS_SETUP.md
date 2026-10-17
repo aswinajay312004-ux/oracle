@@ -117,7 +117,7 @@ Each answer shows the tables it used. Click a table to preview it and add column
 
 ## 8. Demo walkthrough
 
-1. **New order** → drop `Merch Dept Worked Manual Excel (2).xlsx`, or a buyer PDF.
+1. **New order** → drop `Merch Dept Worked Manual Excel (2).xlsx`, or any buyer order file (Excel in any format, CSV or JSON).
 2. The reading summary shows what was found: header, sizes, packs, fabric kg and trim tables.
 3. **Review** works like the Axpert Sample Order Entry screen. Fields not in the file are outlined in red with a short reason: fill the order reference (OC No) and confirmation date, and choose the quantities to save. **Show me the next one** jumps between them.
 4. **Check & continue** validates against Oracle masters, existing orders, units, totals, column sizes and relationships. Anything wrong is outlined on its field or table row.

@@ -6,7 +6,8 @@ A tiny static server serves the real frontend files with the app's Content-Secur
 page shaped like Ask AI (an answer with a diagram, then the sticky composer). The smoke run starts
 tests/demo_server.py (the app on a stand-in Oracle). Every page fails its test on a CSP violation or a console
 error. Skipped when Playwright or a Chromium for it is not installed (set POPPYS_CHROMIUM to a chrome
-executable to use a specific one)."""
+executable to use a specific one); with POPPYS_REQUIRE_BROWSER=1 (CI's browser job) a missing browser fails
+instead, so the job cannot pass by skipping everything."""
 import glob
 import os
 import socket
@@ -21,7 +22,15 @@ from urllib.parse import urlparse
 
 import pytest
 
-sync_api = pytest.importorskip('playwright.sync_api')
+REQUIRED = os.environ.get('POPPYS_REQUIRE_BROWSER') == '1'
+if REQUIRED:
+    import playwright.sync_api as sync_api
+else:
+    sync_api = pytest.importorskip('playwright.sync_api')
+
+
+def unavailable(message):
+    (pytest.fail if REQUIRED else pytest.skip)(message)
 
 TESTS = Path(__file__).resolve().parent
 FRONTEND = TESTS.parent / 'frontend'
@@ -93,7 +102,7 @@ def browser():
     try:
         pw = sync_api.sync_playwright().start()
     except Exception as exc:   # e.g. the Playwright driver is missing
-        pytest.skip(f'Playwright cannot start: {exc}')
+        unavailable(f'Playwright cannot start: {exc}')
     found = None
     for path in chromium_paths():
         try:
@@ -103,7 +112,7 @@ def browser():
             continue
     if not found:
         pw.stop()
-        pytest.skip('No Chromium for Playwright (run "playwright install chromium" or set POPPYS_CHROMIUM)')
+        unavailable('No Chromium for Playwright (run "playwright install chromium" or set POPPYS_CHROMIUM)')
     yield found
     found.close(); pw.stop()
 

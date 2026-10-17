@@ -695,6 +695,16 @@ def test_json_that_cannot_be_trusted_is_refused_plainly(content, message):
         readers.read(content, 'x.json')
 
 
+def test_a_missing_reader_package_is_not_blamed_on_the_file(monkeypatch):
+    """A reader package that failed to install must not tell the person to re-save a good workbook."""
+    def missing(content):
+        raise ModuleNotFoundError("No module named 'xlrd'", name='xlrd')
+    monkeypatch.setitem(readers.READERS, 'json', missing)
+    with pytest.raises(readers.Unreadable) as e:
+        readers.read(b'[{"Style": "A1"}]', 'x.json')
+    assert '(xlrd)' in str(e.value) and 'run setup.ps1 again' in str(e.value) and 'save it again' not in str(e.value)
+
+
 def test_json_decimals_ndjson_and_api_envelopes():
     sheet = read_one(b'[{"Price": 2.675, "Exact": 0.1000000000000000000001, "Qty": 1e3, "Big": 1E+999999999}]', 'x.json')
     assert cells_of(sheet) == {'A1': 'Price', 'B1': 'Exact', 'C1': 'Qty', 'D1': 'Big', 'A2': 2.675,

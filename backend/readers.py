@@ -815,6 +815,10 @@ def _read_inline(content, filename=''):
         raise Unreadable(f'This {NOUNS[kind]} is nested too deeply to read. Save it again from the program that made it and upload.') from None
     except INTERRUPTS:
         raise
+    except ImportError as exc:     # a reader package missing on this computer: the file is not the problem
+        log.error('%s reader unavailable: %s', kind, exc)
+        raise Unreadable(f'This computer is missing a part POPPYS AI needs to read this {NOUNS[kind]} ({exc.name or "a reader package"}). '
+                         'The file may be fine: ask the administrator to run setup.ps1 again, then upload it again.') from exc
     except BaseException as exc:   # library errors of every kind (zip, compound document, assertions, csv, XML)
         log.warning('%s reader failed: %s: %s', kind, type(exc).__name__, str(exc)[:300])   # and native panics
         raise Unreadable(f'This {NOUNS[kind]} could not be read. Open it in Excel, save it again as an Excel Workbook (.xlsx) and upload.') from exc

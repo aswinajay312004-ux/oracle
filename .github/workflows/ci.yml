@@ -4,6 +4,7 @@
 #   lint     - ruff with the bug-catching rules in pyproject.toml
 #   js       - frontend ES modules parse, and keep to the strict content-security rules
 #   tests    - the unit suite on Python 3.13 (stand-in Oracle and SQLite)
+#   browser  - the diagram and the app's screens in Chromium under the strict Content-Security-Policy
 #   oracle   - the real-Oracle tests against a throwaway Oracle Free 23 with a GARMENT_DEMO replica
 #   audit    - known vulnerabilities in requirements.txt (also weekly, as new advisories appear)
 #   windows  - the unit suite through scripts/check.ps1 on Windows PowerShell 5.1, the laptop's shell
@@ -111,6 +112,26 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
       - name: pytest
         run: bash scripts/check.sh tests -ra
+
+  browser:
+    name: Browser tests (Chromium, strict CSP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies and Playwright's Chromium (the version pinned in requirements-dev.txt)
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+      - name: Diagram and app screens in Chromium (a missing browser fails here, it never skips)
+        run: bash scripts/check.sh browser -ra
 
   oracle:
     name: Oracle integration (Oracle Free 23)

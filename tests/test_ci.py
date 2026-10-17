@@ -27,7 +27,7 @@ def steps(job):
 
 
 def test_workflow_has_every_job_and_least_privilege():
-    assert {'secrets', 'lint', 'js', 'tests', 'oracle', 'audit'} <= set(JOBS)
+    assert {'secrets', 'lint', 'js', 'tests', 'browser', 'oracle', 'audit'} <= set(JOBS)
     assert WORKFLOW['permissions'] == {'contents': 'read'}
     assert all(j.get('timeout-minutes') for j in JOBS.values()), 'every job has a time limit'
     tests_job = JOBS['tests']['steps']
@@ -72,6 +72,16 @@ def test_triggers_run_each_commit_once():
     assert 'event_name' not in group and 'head_ref' in group, 'a push and its pull request share one group, so one replaces the other'
 
 
+def test_browser_job_installs_chromium_and_cannot_pass_by_skipping():
+    text = '\n'.join(s.get('run', '') for s in steps('browser'))
+    assert 'playwright install --with-deps chromium' in text
+    assert 'playwright==' in (ROOT / 'requirements-dev.txt').read_text(encoding='utf-8'), 'Playwright is pinned'
+    check = (ROOT / 'scripts/check.sh').read_text(encoding='utf-8')
+    assert 'export POPPYS_REQUIRE_BROWSER=1' in check
+    ui = (ROOT / 'tests/test_ui_browser.py').read_text(encoding='utf-8')
+    assert "pytest.fail if REQUIRED else pytest.skip" in ui
+
+
 def test_windows_job_keeps_line_endings_as_committed():
     names = [s.get('run', s.get('uses', '')) for s in steps('windows')]
     autocrlf = next(i for i, x in enumerate(names) if 'core.autocrlf false' in x)
@@ -88,7 +98,7 @@ def test_oracle_job_bulk_loads_orders_so_the_existing_order_check_runs():
 
 
 def test_jobs_run_the_same_steps_as_the_local_scripts():
-    for job, step in (('secrets', 'secrets'), ('lint', 'lint'), ('js', 'js'), ('tests', 'tests'), ('oracle', 'oracle')):
+    for job, step in (('secrets', 'secrets'), ('lint', 'lint'), ('js', 'js'), ('tests', 'tests'), ('browser', 'browser'), ('oracle', 'oracle')):
         assert any(f'scripts/check.sh {step}' in s.get('run', '') for s in steps(job)), job
     assert any('check.ps1 all' in s.get('run', '') for s in steps('windows'))
     assert any('pip-audit -r requirements.txt' in s.get('run', '') for s in steps('audit'))

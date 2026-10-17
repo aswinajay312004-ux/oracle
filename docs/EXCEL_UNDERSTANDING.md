@@ -18,7 +18,7 @@ upload ─► readers (any Excel format / JSON → one cell model)            ba
        ─► planner checks Oracle rules → approval → one transaction → read-back
 ```
 
-Principles (from the research in `docs/OPEN_SOURCE_RESEARCH.md`):
+Principles (from the research in `docs/RESEARCH_DECISIONS.md`; the earlier survey is `docs/OPEN_SOURCE_RESEARCH.md`):
 
 * **Deterministic first, AI second.** A matcher that explains every score (names + values) runs on
   every unknown layout. The local AI may add proposals; every AI proposal is validated and compared
@@ -34,6 +34,42 @@ Principles (from the research in `docs/OPEN_SOURCE_RESEARCH.md`):
   (acceptance test B).
 * **Ask, don't assume, when the file is silent.** If the file does not say whether quantities are
   pieces or packs, the unit field is outlined red with that question (acceptance test C).
+
+### 1a. Readers and the cell model
+
+`backend/readers.py` turns every accepted file into the same list of sheets. The format is decided from the
+file's bytes (OLE2, ZIP parts, XML namespaces, HTML/MHTML markers, JSON, text), never from the extension alone:
+
+| Format | Reader | Reads |
+|--------|--------|-------|
+| `.xlsx .xlsm .xltx .xltm` | openpyxl; python-calamine for Strict OOXML or damaged files | values, cached formula results, number formats, hidden rows/columns/sheets, merged cells |
+| `.xls` (BIFF2–8) | xlrd (lenient mode for damaged files), then python-calamine | values, dates, number formats, hidden rows/columns, merged cells |
+| `.xlsb` | python-calamine | values, dates, sheet visibility |
+| `.ods` | python-calamine plus a bounded `content.xml` pass | values, merges, hidden rows |
+| Excel 2003 XML | defusedxml | values, styles' number formats, merges, hidden rows/columns |
+| HTML / MHTML "Excel" | html.parser (+ email for MHTML) | the table as shown, row and column spans |
+| `.csv .tsv .txt` | csv with encoding detection (BOM, UTF-8, UTF-16, charset-normalizer) and delimiter sniffing (`sep=` line first) | text; numbers and dates as the file writes them |
+| `.json` | json with duplicate-key, NaN/Infinity, depth and digit-count checks | records, row arrays, sheet maps, NDJSON, envelopes such as `{"data": [...]}`, nested documents (an object of plain values becomes columns; one inner list of records becomes one row per inner record, with the outer values repeated) |
+
+Cell model: `{cell, row, col, value, formula, hidden, error}` plus, only when they say something, `fmt` (number
+format), `raw` (the stored number when `value` is the text Excel shows, `8` formatted `0000` → `'0008'`) and
+`flag`:
+- `decimal_comma`: text such as `1.234,56`, or in a decimal-comma file `2.000`. It is kept as text, never read as a number.
+- `scientific`: a code Excel already turned into `1.23457E+11`.
+- `big_number`: 16 or more digits, kept as text so no digit is lost.
+
+Each sheet also carries `capabilities`, saying whether its reader could see merges, hidden rows and columns,
+number formats and formulas, so a note can say what a format cannot show.
+
+Refused with what to do, never guessed:
+- password-protected or IRM workbooks;
+- other Office documents;
+- files over 12 MB, 30 sheets, 250,000 cells per sheet or 400,000 per file;
+- zip bombs;
+- JSON nested deeper than 20 levels.
+
+Every upload is parsed in a separate worker process (60 s, about 1.5 GB). A reader package missing on the
+computer is reported as such ("run setup.ps1 again"), not as a damaged file.
 
 ## 2. Business fields (customisable)
 
@@ -137,8 +173,10 @@ a column outside the sheet.
 Each order has `qty_unit` = `PCS`, `PACK` or empty, plus `pieces_per_unit`.
 
 * Evidence from the file: quantity header or nearby label containing `pcs/pieces/pc` → `PCS`;
-  `pack/packs/pk/set/sets/ratio` → `PACK`; a merch BOM whose size table total equals its
-  `QTY(IN PIECES)` → `PCS`. Provenance records the evidence text and cell.
+  `pack/packs/pk/set/sets/ratio` → `PACK`; a unit label (`UOM | PCS`); a note just above the table;
+  quantities written with their unit (`1,500 pcs`, `20 packs`; the number is kept, the unit is evidence);
+  a merch BOM whose size table total equals its `QTY(IN PIECES)` → `PCS`. Provenance records the
+  evidence text and cell.
 * No evidence → empty. The review screen shows **Quantity unit** (Pieces | Packs) outlined red:
   "The file says only “Qty” — are these pieces or packs?"
 * `PCS` → `pieces_per_unit` = 1. `PACK` → `pieces_per_unit` ≥ 2 is required ("How many pieces are in one pack?").
@@ -150,8 +188,11 @@ Each order has `qty_unit` = `PCS`, `PACK` or empty, plus `pieces_per_unit`.
   contradicts the template's (the question names both). `PCS` with a stale pieces-per-pack is an error
   on `orders.N.pieces_per_unit`, never multiplied in.
 * `provenance.qty_unit = {sheet?, cell?, value?, evidence, said?, reason, question?}` with `reason` one
-  of `file`, `silent`, `both`, `mismatch`, `conflict`, `template`, `person`; `question` is present
-  only while `qty_unit` is empty and is the text shown on the field.
+  of `file`, `silent`, `both`, `mismatch`, `conflict`, `template`, `person`, `review`; `question` is
+  present only while `qty_unit` is empty and is the text shown on the field.
+* `review`: on the layout screen the person chose to decide the unit on the review screen. The
+  evidence the file gave is kept, so the question quotes it ("The quantity heading C3 says “Qty (pcs)” —
+  are these quantities pieces or packs?") instead of claiming the file is silent.
 
 ## 6. Buyer templates (acceptance tests A and B)
 
@@ -180,8 +221,41 @@ colour, style and total headings).
 
 `workbooks.iso_date` turns `2027-01-15`, `2027-01-15 0:00:00`, `20/12/2026`, `20-Dec-26`,
 `5 Mar 2027`, `2026/12/20` and Excel serial numbers into `YYYY-MM-DD`. Numbers are read day-first
-(Indian convention); `12/20/2026` is unmistakably month-first; an ambiguous `03/04/2026` is converted
-day-first and reported in the notes and the field's source chip.
+(Indian convention); `12/20/2026` is unmistakably month-first.
+
+An ambiguous date such as `03/04/2026` depends on the rest of the file:
+* **Day-first by default.** It is converted day-first, and the notes and the field's source chip say so.
+* **Not when the file writes month first.** If another date in the same file can only be month-first
+  (`12/20/2026`) and none can only be day-first, the date is *not* converted. The field is left empty
+  with the question "“03/04/2026” could be 3 April 2026 or 4 March 2026 — enter the ship date."
+
+A text date that cannot be read is left empty with a warning, never guessed.
+
+## 7a. Review items
+
+Some findings are not errors, but the approver must see them before approving. `workbooks.review(o, field,
+message)` adds them to `order.review = [{field, message}]`. The planner raises each one as a **warning** on that
+field (`orders.N.<field>`, or `orders.N.lines` for the size table), so it appears on the review screen and under
+"Please read before approving". The person decides; a warning never blocks saving.
+
+| Finding | Field | Example message |
+|---------|-------|-----------------|
+| A total row that disagrees with the sizes read | `lines` | “the size table says the total is 310, but the rows read add up to 300” |
+| A second date label for the same field | that date field | “F1 “Revised Ship Date” says 2027-02-01, but the ship date was read from B3 …” |
+| Hidden rows or columns that hold data (never read) | `lines` | names the hidden rows / columns |
+| Quantities left below the table end | `lines` | names the cells |
+| The same order on two sheets | `style` | names both sheets |
+
+Totals, subtotal and grand-total rows (`Total`, `TOTAL PCS`, `Sub-Total`, `G.Total`; not a colour such as
+“TOTAL ECLIPSE”) are never read as sizes or colours. Cells in hidden rows or columns are never read.
+
+## 7b. Quantities the reader will not guess
+
+* Text quantities with thousands separators or units (`1,500`, `1,500 pcs`) become the number.
+* In a file that writes decimals with a comma (semicolon CSV, `sep=;`), `2.000` is two thousand, not 2. Such
+  cells keep the file's text. The planner marks each one as an **error** ("“2.000” could mean 2000 …"), and
+  the size table says why, until a person types the whole number.
+* Anything else that is not a whole, non-negative number stays as the file wrote it, and the planner names it.
 
 ## 8. Acceptance tests (`tests/test_acceptance.py`)
 
@@ -204,8 +278,13 @@ Shapes the endpoints above settle (the frontend and `tests/test_acceptance.py` r
   order carries `qty_unit` (`PCS`, `PACK` or empty), `pieces_per_unit` (1 for `PCS`; ≥ 2 or `null` for
   `PACK`; `null` while undecided), `quantity_basis` and `provenance.qty_unit` (§5). A draft read with a
   template has `format` = `Template: <name>`.
-* `POST /api/drafts/{id}/suggest` body `{sheet}` → a §3 suggestion (matcher, plus the local AI when it
-  is running, cross-checked; heuristic when no table was found); 409 when nothing reliable is found.
+* `POST /api/drafts/{id}/suggest` body `{sheet, use_ai = true}` → a §3 suggestion (matcher, plus the local AI
+  when `use_ai` is true and it is running, cross-checked; heuristic when no table was found); 409 when nothing
+  reliable is found. The layout screen asks with `use_ai: false` when it opens (fast, offline) and asks the
+  local AI only from its own button.
+* `POST /api/drafts/{id}/map/check` — the same body as `/map` → `{ok, rejected: [{field, cell, value, reason,
+  source: "person"}], detail}`. A dry run: the draft, its version and the templates are unchanged. The layout
+  screen checks first, so a wrong choice is shown on its field without a failed request.
 * `POST /api/drafts/{id}/map` body `{version, sheet, definition: {fields, table}, save_template,
   template_name, qty_unit?, pieces_per_unit?, quantity_basis?}` — the unit decision travels as order
   fields (`qty_unit`: `PCS`, `PACK`, or `''` to ask on the review screen; `quantity_basis`: `sample` or
@@ -213,7 +292,7 @@ Shapes the endpoints above settle (the frontend and `tests/test_acceptance.py` r
   runs first: 409 `{detail, rejected: [{field, cell, value, reason, source: "person"}]}` names each wrong
   field and changes nothing (same version, no template). 409 for `PACK` with fewer than 2 pieces per pack.
   On success → the draft; with `save_template`, the template is saved (§6) with the buyer, anchors, unit
-  and basis, and `draft.template` names it.
+  and basis, and `draft.template` names it. The draft's notes about the layout question are cleared.
 * `PUT /api/drafts/{id}` accepts `qty_unit` / `pieces_per_unit` / `quantity_basis` on each order; the
   preview (`POST /api/drafts/{id}/preview`) reports unit questions on `orders.N.qty_unit` and
   `orders.N.pieces_per_unit`, and fields an administrator made required on `orders.N.<key>`.
