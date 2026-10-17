@@ -9,8 +9,8 @@ from decimal import Decimal
 import re
 import time
 from .knowledge import norm
-from .query import compile_intent, QueryError, Dialect
-from .understand import interpret, ai_intent, NotUnderstood, lexicon
+from .query import compile_intent
+from .understand import interpret, ai_intent, NotUnderstood
 
 OPS_TEXT = {'eq': 'is', 'ne': 'is not', 'contains': 'contains', 'starts': 'starts with', 'gt': 'above', 'gte': 'at least',
             'lt': 'below', 'lte': 'at most', 'between': 'between', 'in': 'in'}
@@ -158,10 +158,21 @@ def pick(kb, intent, sources):
     return sources['local' if T.get('source') == 'local' else 'db']
 
 
-def run(intent, kb, sources, *, question='', source='rules', confidence=None):
+def stored_spellings(finder):
+    """(table, column, value) -> how the value index spells that value in that column ('Next', 'NEXT'), so an
+    index-friendly filter on a big table matches the same rows the forgiving match would."""
+    def stored(table, column, value):
+        try:
+            return [h['value'] for h in finder(str(value)) if h.get('table') == table and h.get('column') == column]
+        except Exception:   # the value index is a help, never a reason to fail the question
+            return []
+    return stored
+
+
+def run(intent, kb, sources, *, question='', source='rules', confidence=None, stored=None):
     started = time.perf_counter()
     execute, dialect = pick(kb, intent, sources)
-    comp = compile_intent(intent, kb, dialect)
+    comp = compile_intent(intent, kb, dialect, stored=stored)
     raw = execute(comp['sql'], comp['binds'], comp['limit'] + 1)
     comp['truncated'] = len(raw) > comp['limit']
     rows = [[cell(v) for v in r] for r in raw[:comp['limit']]]
@@ -180,13 +191,14 @@ def run(intent, kb, sources, *, question='', source='rules', confidence=None):
 
 
 def ask(question, kb, sources, *, finder, live_finder=None, examples=(), ai_chat=None, today=None, lex=None):
+    stored = stored_spellings(finder)
     try:
         intent, conf = interpret(question, kb, finder, live_finder, today=today, lex=lex)
-    except NotUnderstood as exc:
+    except NotUnderstood:
         if ai_chat:
             try:
                 intent = ai_intent(question, kb, ai_chat, dict(tables=list(kb.tables)[:0]), list(examples))
-                return run(intent, kb, sources, question=question, source='local AI (checked against the catalog)',
+                return run(intent, kb, sources, question=question, source='local AI (checked against the catalog)', stored=stored,
                            confidence=dict(score=0.55, reasons=['The rules did not understand the question; the local AI proposed this and it was checked.']))
             except Exception:
                 pass
@@ -209,4 +221,4 @@ def ask(question, kb, sources, *, finder, live_finder=None, examples=(), ai_chat
             conf = dict(conf, score=max(conf['score'], 0.6), reasons=conf['reasons'] + ['The local AI refined the question; its plan was validated before running.'])
         except Exception:
             pass
-    return run(intent, kb, sources, question=question, source=source, confidence=conf) | dict(masked=masked, linked_values=conf['values'])
+    return run(intent, kb, sources, question=question, source=source, confidence=conf, stored=stored) | dict(masked=masked, linked_values=conf['values'])

@@ -251,7 +251,6 @@ def compile_intent(intent, kb, dialect, display_references=True, stored=None):
         if op not in OPS:
             raise QueryError('Unsupported filter.')
         r = resolve(f['column'], expand=False)
-        meta = r['meta']
         if has_down(r['steps']):
             # child-table filter: EXISTS keeps one row per base record (no fan-out)
             first = [d for _, d in r['steps']].index('down')

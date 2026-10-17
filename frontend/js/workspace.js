@@ -240,7 +240,7 @@ function orderTab(o, oi) {
 function notesHtml(o, oi) {
   // the unit and basis questions are asked on their fields, so they are not repeated here
   const onField = [o.provenance?.qty_unit?.question, 'Confirm whether these are sample quantities.'];
-  const notes = [...(oi === 0 ? state.draft.notes || [] : []), ...(o.warnings || []).filter(w => !onField.includes(w))];
+  const notes = [...new Set([...(oi === 0 ? state.draft.notes || [] : []), ...(o.warnings || []).filter(w => !onField.includes(w))])];
   return notes.length ? `<details class="notes"><summary class="muted small-text" style="cursor:pointer">Notes from reading the file (${notes.length})</summary><ul class="small-text">${notes.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : '';
 }
 

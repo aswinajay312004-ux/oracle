@@ -427,7 +427,7 @@ details.how > summary::before { content: "▸ "; color: var(--muted); }
 details.how[open] > summary::before { content: "▾ "; }
 .how-body { padding: 0 16px 14px; display: grid; gap: 10px; font-size: 12.5px; }
 .sql { background: #0f1f1e; color: #d5ece8; padding: 10px 12px; border-radius: 8px; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
-.composer { position: sticky; bottom: 0; padding: 12px 0 4px; background: linear-gradient(180deg, rgba(245,247,246,0), var(--bg) 30%); }
+.composer { position: sticky; bottom: 0; z-index: 5; padding: 12px 0 4px; background: linear-gradient(180deg, rgba(245,247,246,0), var(--bg) 30%); }
 .composer form { display: flex; gap: 8px; align-items: flex-end; background: #fff; border: 1px solid #cfd8d6; border-radius: 14px; padding: 8px; box-shadow: 0 8px 30px rgba(9,30,28,.08); }
 .composer textarea { border: 0; box-shadow: none !important; min-height: 40px; max-height: 140px; padding: 9px 10px; font-size: 14px; }
 .composer button { height: 40px; padding: 0 18px; border-radius: 10px; }
@@ -570,9 +570,19 @@ details.ex-more > summary { cursor: pointer; font-weight: 600; font-size: 12.5px
 .ex-rel-table tfoot td { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ex-line { display: inline-grid; place-items: center; min-width: 20px; height: 18px; padding: 0 4px; border-radius: 5px; background: var(--brand-soft); color: var(--brand); font-weight: 750; font-size: 11px; margin-right: 4px; }
 .record-sections { grid-template-columns: minmax(0, 1fr); }
+/* no rows (no match, or a read that failed): a message where the grid would be, never under 179 headers */
+.ex-empty { display: grid; gap: 6px; justify-items: start; max-width: 680px; margin: 14px 16px 18px; padding: 16px 18px; border: 1px dashed #cfd8d6; border-radius: var(--r); background: #fbfcfc; }
+.ex-empty b { font-size: 14px; color: var(--ink); }
+.ex-empty p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink-2); overflow-wrap: anywhere; }
+.ex-empty .row { gap: 8px; margin-top: 4px; }
+.ex-empty .row:empty { display: none; }
+.ex-empty.err { border-style: solid; border-color: var(--err-line); background: var(--err-soft); }
+.ex-more-err { color: var(--err); font-size: 12.5px; font-weight: 550; overflow-wrap: anywhere; }
 
 /* ---------- graph-interactions: zoom, pan and fit for every flowchart (graph.js) ---------- */
-.flow-wrap.gviewport, .gviewport { position: relative; overflow: hidden; overflow: clip; }
+/* isolation: the toolbar's z-index stays inside the diagram, so it never covers app chrome scrolled over it
+   (the sticky Ask AI composer, the approval action bar) */
+.flow-wrap.gviewport, .gviewport { position: relative; overflow: hidden; overflow: clip; isolation: isolate; }
 .gviewport > .gsvg { display: block; width: 100%; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
 .gviewport.panning > .gsvg, .gviewport.panning .gnode, .gviewport.panning .gplus { cursor: grabbing; }
 .gviewport > .gsvg:focus { outline: none; }

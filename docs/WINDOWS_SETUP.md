@@ -7,9 +7,10 @@ Everything runs on the laptop: the browser UI, the Python server, document readi
 | Item | Check |
 |---|---|
 | Docker Desktop running, container `oracle26ai` healthy | `docker ps --filter name=oracle26ai` |
-| Python 3.11+ | `py -3 --version` |
+| Python 3.13, 64-bit, from python.org with the `py` launcher (the release package ships embeddable CPython 3.13.x, see [RESEARCH_DECISIONS.md](RESEARCH_DECISIONS.md); older versions are not supported) | `py -3.13 --version` |
 | Git checkout of this repository | `git pull` on branch `claude/loving-mccarthy-9p0do9` |
 | Optional: Ollama for AI layout suggestions | `ollama --version` |
+| Optional, developers only: the test and lint tools for section 10 (`setup.ps1` installs only what the app needs; `.\setup.ps1 -Dev` adds pytest, ruff and pip-audit) | `.\.venv\Scripts\python.exe -m pytest --version` |
 
 ## 1. Get the latest code
 

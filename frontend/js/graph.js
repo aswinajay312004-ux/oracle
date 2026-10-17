@@ -35,8 +35,17 @@ const views = new WeakMap();   // diagram box -> its live view, so re-drawing th
 let uid = 0;
 const noop = () => {};
 
+// The control that has focus inside the box, as something that can be found again after a redraw.
+function focusKey(el) {
+  const a = document.activeElement;
+  if (!a || a === el || !el.contains(a)) return null;
+  const plus = a.closest('[data-plus]'), node = a.closest('.gnode'), z = a.closest('[data-z]');
+  return plus ? ['plus', plus.dataset.plus] : node ? ['node', node.dataset.id] : z ? ['z', z.dataset.z] : ['svg'];
+}
+
 export function renderGraph(el, model, opts = {}) {
   const prev = views.get(el); prev?.stop(); views.delete(el);
+  const refocus = focusKey(el);   // ＋ expand redraws the whole diagram: keep keyboard focus on the same control
   const W = opts.nodeW || 214, H = opts.nodeH || 76, GX = opts.gapX || 92, GY = opts.gapY || 22, PAD = 26;
   const MW = 184, MH = 62, MG = 12;
   const nodes = model.nodes; const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
@@ -126,14 +135,15 @@ export function renderGraph(el, model, opts = {}) {
     <p class="visually-hidden" id="ghelp-${n0}">Drag to move the diagram. Press plus or minus, or hold Ctrl and scroll, to zoom. Press 0 to fit it in view and the arrow keys to move it.</p>
     <div class="gtools" role="toolbar" aria-label="Diagram view">
       <button type="button" data-z="out" aria-label="Zoom out" title="Zoom out (−)">${icon('out')}</button>
-      <output class="gzoom" aria-live="polite" aria-atomic="true" title="Zoom level"><span class="visually-hidden">Zoom </span><span data-zl>100%</span></output>
+      <span class="gzoom" title="Zoom level"><span class="visually-hidden">Zoom </span><span data-zl>100%</span></span>
       <button type="button" data-z="in" aria-label="Zoom in" title="Zoom in (+, or Ctrl + scroll)">${icon('in')}</button>
       <span class="gsep" aria-hidden="true"></span>
       <button type="button" data-z="fit" aria-label="Fit the whole diagram in view" title="Fit to view (0)">${icon('fit')}</button>
       <button type="button" data-z="reset" aria-label="Reset the view" title="Reset view">${icon('reset')}</button>
-    </div>`;
+    </div><span class="visually-hidden" role="status" aria-live="polite" aria-atomic="true" data-zsay></span>`;
   const svg = el.querySelector('svg'), canvas = svg.querySelector('.gcanvas'), tools = el.querySelector('.gtools');
   const level = tools.querySelector('[data-zl]'), zin = tools.querySelector('[data-z=in]'), zout = tools.querySelector('[data-z=out]');
+  const say = el.querySelector('[data-zsay]');
 
   const focus = id => svg.querySelectorAll('.bandedge').forEach(g => g.classList.toggle('hide', !(id && (g.dataset.a === id || g.dataset.b === id))));
   const select = id => {
@@ -154,6 +164,7 @@ export function renderGraph(el, model, opts = {}) {
       e.stopPropagation();
       const p = pos[b.dataset.plus], v = live.view;   // remember where this table sits so the redraw keeps it there
       live.anchor = { id: b.dataset.plus, sx: v.x + p.x * v.k, sy: v.y + p.y * v.k };
+      if (document.activeElement !== b) b.focus({ preventScroll: true });   // so the redraw puts focus back on this ＋
       opts.onExpand?.(b.dataset.plus);
     };
     b.addEventListener('click', go);
@@ -168,14 +179,14 @@ export function renderGraph(el, model, opts = {}) {
   // mode: 'auto' follows the box width (like a responsive image), 'fit' keeps everything in view, 'manual' = user's zoom
   const live = { view: { k: 1, x: 0, y: 0 }, mode: 'auto', anchor: null, stop };
   views.set(el, live);
-  let box = { w: 0, h: 0 }, minK = ZOOM.min, shown = live.view, anim = 0, raf = 0, lastW = -1;
+  let box = { w: 0, h: 0 }, minK = ZOOM.min, shown = live.view, anim = 0, raf = 0, sayT = 0, said = '100%';
 
   const px = v => (String(v).endsWith('px') ? parseFloat(v) : NaN);
   const corner = () => ({ w: tools.offsetWidth + 16, h: tools.offsetHeight + 16 });   // toolbar corner plus a little air
   const underTools = (v, c = corner()) => Object.values(pos).some(p => v.x + (p.x + p.w) * v.k > box.w - c.w && v.y + (p.y + p.h) * v.k > box.h - c.h);
-  function layout() {   // size the box from the container width; false while the diagram is hidden
+  function layout(outer) {   // size the box for a container this wide; false while the diagram is hidden
     const cs = getComputedStyle(el);
-    const w = el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+    const w = outer - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
     if (w <= 0) return false;
     const extra = ['borderTopWidth', 'borderBottomWidth', 'paddingTop', 'paddingBottom'].reduce((s, p) => s + (parseFloat(cs[p]) || 0), 0);
     const maxH = Number.isNaN(px(cs.maxHeight)) ? Infinity : px(cs.maxHeight) - extra, minH = (px(cs.minHeight) || 0) - extra;
@@ -204,12 +215,20 @@ export function renderGraph(el, model, opts = {}) {
     canvas.setAttribute('transform', `translate(${v.x.toFixed(2)} ${v.y.toFixed(2)}) scale(${v.k.toFixed(4)})`);
     let g = 16 * v.k; while (g < 10) g *= 2;   // the dotted background moves and scales with the picture
     el.style.backgroundSize = `${g}px ${g}px`; el.style.backgroundPosition = `${v.x.toFixed(1)}px ${v.y.toFixed(1)}px`;
-    level.textContent = `${Math.round(v.k * 100)}%`;
   };
-  function set(v, animate = false, mode = 'manual') {
+  // The readout shows the zoom being moved to (not every animation frame); screen readers hear only the
+  // value it settles on, once the user stops zooming, and nothing for a drag or for the diagram's own layout.
+  const readout = (k, quiet) => {
+    const t = `${Math.round(k * 100)}%`;
+    if (level.textContent !== t) level.textContent = t;
+    clearTimeout(sayT);
+    if (quiet) said = t;
+    else if (t !== said) sayT = setTimeout(() => { said = t; say.textContent = `Zoom ${t}`; }, 450);
+  };
+  function set(v, animate = false, mode = 'manual', quiet = false) {
     if (!box.w) return false;
     const from = live.view; v = keep(v);
-    live.view = v; live.mode = mode;
+    live.view = v; live.mode = mode; readout(v.k, quiet);
     zin.setAttribute('aria-disabled', String(v.k >= ZOOM.max - 1e-6)); zout.setAttribute('aria-disabled', String(v.k <= minK + 1e-6));
     cancelAnimationFrame(anim);
     if (!animate || reduced) paint(v);
@@ -232,16 +251,28 @@ export function renderGraph(el, model, opts = {}) {
     const k = clamp(prev.view.k, minK, ZOOM.max), a = prev.anchor && pos[prev.anchor.id] && prev.anchor;
     return [a ? { k, x: a.sx - pos[a.id].x * k, y: a.sy - pos[a.id].y * k } : prev.view, 'manual'];
   };
+  // Classic scrollbars (Windows): when this diagram's height decides whether the page needs a scrollbar, the
+  // scrollbar changes the width, the width changes the height, the scrollbar goes away and it starts again,
+  // every frame. A width that flips straight back by about a scrollbar's width keeps the narrower layout,
+  // which fits either way, until the box really changes size.
+  let lastW = -1, prevW = -1, flipAt = 0, pair = null, laid = -1;
   function refit() {
     if (!svg.isConnected) return stop();   // the box was removed or re-filled by someone else
     const w = el.clientWidth; if (!w || w === lastW) return;
-    const first = lastW < 0 || !box.w; lastW = w;
-    if (!layout()) return;
+    const first = lastW < 0 || !box.w, now = performance.now();
+    if (pair && !pair.includes(w)) pair = null;
+    if (!pair && w === prevW && Math.abs(w - lastW) <= 30 && now - flipAt < 1000) pair = [Math.min(w, lastW), Math.max(w, lastW)];
+    prevW = lastW; lastW = w; flipAt = now;
+    const use = pair ? pair[0] : w;
+    if (use === laid && !first) return;
+    if (!layout(use)) return;
+    laid = use;
     const back = first && restore();
-    if (back) return set(back[0], false, back[1]);
-    set(live.mode === 'fit' ? fitView() : live.mode === 'manual' && !first ? live.view : autoView(), false, first ? 'auto' : live.mode);
+    if (back) return set(back[0], false, back[1], true);
+    set(live.mode === 'fit' ? fitView() : live.mode === 'manual' && !first ? live.view : autoView(), false, first ? 'auto' : live.mode, true);
   }
-  function stop() { ac.abort(); ro.disconnect(); cancelAnimationFrame(anim); cancelAnimationFrame(raf); }
+  let release = null;   // window listeners while a pointer is down (see watchRelease)
+  function stop() { ac.abort(); release?.abort(); ro.disconnect(); cancelAnimationFrame(anim); cancelAnimationFrame(raf); clearTimeout(sayT); }
   // deferred a frame: resizing inside the observer callback would trigger "ResizeObserver loop" warnings
   const ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(refit); });
   if (el.isConnected) refit();
@@ -252,14 +283,25 @@ export function renderGraph(el, model, opts = {}) {
   const local = e => { const b = svg.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
   const regrip = () => { grip = pts.size ? { view: live.view, pts: [...pts.values()] } : null; };
   const capture = id => { try { svg.setPointerCapture(id); } catch (_) { /* pointer already gone */ } };
+  // Capture starts only once a drag passes its threshold (capturing at once would send a table's click to
+  // the svg). Until then a press near the edge can be released outside the diagram, so while any pointer is
+  // down its release is watched on the whole window too; otherwise the picture would follow the bare mouse.
+  const watchRelease = () => {
+    if (release) return;
+    release = new AbortController();
+    const o = { capture: true, signal: release.signal };
+    window.addEventListener('pointerup', lift, o); window.addEventListener('pointercancel', lift, o);
+    window.addEventListener('blur', () => [...pts.keys()].forEach(pointerId => lift({ pointerId })), o);
+  };
   on(svg, 'pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (!pts.size) moved = false;
-    pts.set(e.pointerId, local(e)); regrip();
+    pts.set(e.pointerId, local(e)); regrip(); watchRelease();
     if (pts.size > 1) pts.forEach((_, id) => capture(id));
   });
   on(svg, 'pointermove', e => {
     if (!grip || !pts.has(e.pointerId)) return;
+    if (e.pointerType !== 'touch' && !(e.buttons & 1)) return lift(e);   // released somewhere no event reached us
     pts.set(e.pointerId, local(e));
     const [a, b] = [...pts.values()], [a0, b0] = grip.pts, v = grip.view;
     if (b && b0) {
@@ -274,11 +316,14 @@ export function renderGraph(el, model, opts = {}) {
     if (!moved) { moved = true; capture(e.pointerId); el.classList.add('panning'); }
     set({ k: v.k, x: v.x + dx, y: v.y + dy });
   });
-  const lift = e => {
+  function lift(e) {
     if (!pts.delete(e.pointerId)) return;
     regrip();
-    if (!pts.size) { el.classList.remove('panning'); setTimeout(() => { moved = false; }, 0); }   // after the click that ends a drag
-  };
+    if (!pts.size) {
+      release?.abort(); release = null;
+      el.classList.remove('panning'); setTimeout(() => { moved = false; }, 0);   // after the click that ends a drag
+    }
+  }
   on(svg, 'pointerup', lift); on(svg, 'pointercancel', lift);
   on(svg, 'click', e => { if (moved) { e.stopPropagation(); e.preventDefault(); } }, { capture: true });
   on(svg, 'dblclick', e => { if (!moved && !e.target.closest('.gnode')) zoomBy(ZOOM.step * ZOOM.step, ...local(e)); });
@@ -334,6 +379,14 @@ export function renderGraph(el, model, opts = {}) {
     e.preventDefault();
     const b = btns[(j + btns.length) % btns.length]; btns.forEach(x => { x.tabIndex = x === b ? 0 : -1; }); b.focus();
   });
+
+  if (refocus) {   // the redraw replaced the focused control: focus its counterpart (Tab then carries on from there)
+    const [kind, key] = refocus;
+    const find = (sel, attr) => [...el.querySelectorAll(sel)].find(x => x.dataset[attr] === key);
+    const t = (kind === 'plus' && (find('[data-plus]', 'plus') || find('.gnode', 'id'))) || (kind === 'node' && find('.gnode', 'id')) || (kind === 'z' && find('[data-z]', 'z')) || svg;
+    if (btns.includes(t)) btns.forEach(x => { x.tabIndex = x === t ? 0 : -1; });
+    t.focus({ preventScroll: true });
+  }
 
   return { select, fit, reset, zoomIn: () => zoomBy(ZOOM.step), zoomOut: () => zoomBy(1 / ZOOM.step), destroy: stop };
 }

@@ -137,7 +137,8 @@ def profile(run, table, cols, total, colstats, sample_rows):
     out = {}
     for i in range(0, len(cols), CHUNK):
         part = cols[i:i + CHUNK]
-        got = run(f'{table} fill/distinct', f'SELECT COUNT(*), {", ".join(f"COUNT({q(c["column_name"])}), COUNT(DISTINCT {q(c["column_name"])})" for c in part)} FROM {frm}')
+        counts = ', '.join(f'COUNT({q(c["column_name"])}), COUNT(DISTINCT {q(c["column_name"])})' for c in part)   # no reused quotes: parses on 3.11+
+        got = run(f'{table} fill/distinct', f'SELECT COUNT(*), {counts} FROM {frm}')
         if not got:
             continue
         n, *vals = got[0]

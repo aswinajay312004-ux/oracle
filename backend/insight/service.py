@@ -3,6 +3,8 @@ the knowledge cache, the value index, read-only executors and the local 'uploade
 Sizes and time limits below were measured on a 2.4M / 24M-row replica (docs/PERFORMANCE.md)."""
 from __future__ import annotations
 import json
+import logging
+import math
 import sqlite3
 import threading
 import time
@@ -10,15 +12,27 @@ from datetime import datetime, timezone
 from .. import local_store as store
 from ..config import DATA, OWNER, ROOT, setting
 from .knowledge import build, Knowledge, norm, IDENT
-from .query import Dialect, QueryError
+from .query import FORGIVING_ROWS, QueryError
+
+log = logging.getLogger('poppys.insight')
+TIMEOUT_RANGE_S = (1, 600)   # accepted QUERY_TIMEOUT_S: at least 1 s, at most 10 minutes for one read
 
 
-def _ms(key, default_s):
-    """A time limit in milliseconds from .env.poppys / POPPYS_<KEY> (seconds there), never below 1 s."""
+def _ms(key, default_s, low=TIMEOUT_RANGE_S[0], high=TIMEOUT_RANGE_S[1]):
+    """A time limit in milliseconds from .env.poppys / POPPYS_<KEY> (seconds there). A value that is not a
+    number of seconds between low and high (text, inf, nan, 0, a typo such as 20000) is refused with a log line
+    at startup and the default is used, so a bad setting can neither stop the app nor remove the limit."""
+    raw = setting(key, '')
+    if str(raw).strip() == '':
+        return int(default_s * 1000)
     try:
-        return max(1000, int(float(setting(key, str(default_s))) * 1000))
+        seconds = float(raw)
     except ValueError:
-        return default_s * 1000
+        seconds = math.nan
+    if not (math.isfinite(seconds) and low <= seconds <= high):
+        log.warning('Ignoring %s=%r: use a number of seconds from %g to %g. Using the default, %g s.', key, raw, low, high, default_s)
+        return int(default_s * 1000)
+    return int(seconds * 1000)
 
 
 SNAPSHOT = ROOT / 'docs' / 'live_schema_columns.json'
@@ -26,11 +40,13 @@ CACHE = 'knowledge_physical.json'
 VALUE_META = 'value_index_meta.json'
 VALUE_CAP = 20000          # distinct values indexed per column (the newest ones when a column has more)
 CLOSED_LIST = 1000         # a fully indexed column with at most this many values is a category list (sample type…)
+CODE_SHARE = 0.1           # ...unless more than this share of its values hold a digit: then it is a code column
 BIG_TABLE = 2_000_000      # detail tables bigger than this are looked up live instead of indexed
-SCAN_ROWS = 100_000        # above this, live lookups use index-friendly col = :v only (no UPPER/TRIM full scans)
+SCAN_ROWS = FORGIVING_ROWS  # above this, live lookups use index-friendly col = :v only (no UPPER/TRIM full scans)
 TIMEOUT_MS = _ms('QUERY_TIMEOUT_S', 20)   # any one read-only query (QUERY_TIMEOUT_S=30 in .env.poppys to allow more)
 LOOKUP_MS = 2500           # one live lookup on a big table
-LOOKUP_BUDGET_MS = 6000    # all live lookups for one word together
+LOOKUP_BUDGET_MS = 6000    # all live lookups of one question together, whatever the number of words
+SCAN_RESERVE_MS = 1000     # part of that budget full scans never use, kept for index probes of later words
 TEXT = ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR', 'VARCHAR')
 TIMED_OUT = ('DPY-4024', 'ORA-01013', 'ORA-03156')   # call timeout / cancelled by the time limit
 _memo = {}; _lock = threading.RLock()
@@ -263,11 +279,19 @@ def indexable(kb):
                 yield name, c
 
 
+def _looks_like_words(values):
+    """A category list (BULK ORDER, DEVELOPMENT SAMPLE) rather than codes (PO-150, PK/26-27/S/9001): at most
+    CODE_SHARE of its values contain a digit."""
+    values = [str(v) for v in values]
+    return bool(values) and sum(any(ch.isdigit() for ch in v) for v in values) <= CODE_SHARE * len(values)
+
+
 def refresh_values(kb, execute, dialect):
     """Distinct values of searchable columns, at most VALUE_CAP per column. A column with more distinct values is
     'partial': it keeps the values of its newest rows (read through the record-ID index, so cheap on any size).
-    The value counts saved beside the index tell lookup_plan which columns are short, closed category lists."""
-    rows = []; done = []; skipped = []; partial = []; counts = {}; started = time.time()
+    The value counts saved beside the index, and which columns hold words rather than codes, tell lookup_plan
+    which columns are short, closed category lists."""
+    rows = []; done = []; skipped = []; partial = []; counts = {}; words = []; started = time.time()
     for t, c in indexable(kb):
         meta = kb.table(t); key = meta.get('key')
         try:
@@ -283,11 +307,13 @@ def refresh_values(kb, execute, dialect):
                 if v and len(v) <= 120:
                     rows.append((t, c, v, norm(v), int(n)))
             done.append(f'{t}.{c}'); counts[f'{t}.{c}'] = len(found)
+            if _looks_like_words(v for v, _ in found):
+                words.append(f'{t}.{c}')
         except Exception as exc:
             skipped.append(f'{t}.{c}: {str(exc)[:80]}')
     store.replace_values(rows)
     meta = dict(refreshed_at=datetime.now(timezone.utc).isoformat(timespec='seconds'), complete=sorted(set(done) - set(partial)),
-                partial=partial, counts=counts, seconds=round(time.time() - started, 1))
+                partial=partial, counts=counts, words=sorted(words), seconds=round(time.time() - started, 1))
     try:
         (store.DATA / VALUE_META).write_text(json.dumps(meta), encoding='utf-8')   # beside the value index itself
     except OSError:
@@ -297,14 +323,16 @@ def refresh_values(kb, execute, dialect):
 
 def closed_lists():
     """Columns that are a short list of categories (sample type, order category…) held completely in the value
-    index at the last refresh. Code columns such as order references are never 'closed': they grow with every
-    order saved in Axpert, and the value index does not see those until the next refresh."""
+    index at the last refresh. Code columns such as order references or buyer POs are never 'closed', however
+    few values they had then: they grow with every order saved in Axpert, and the value index does not see
+    those until the next refresh. A column counts as a category list only when the refresh saw words, not codes
+    ('words' in the meta file); a meta file written before that was recorded closes nothing."""
     try:
         meta = json.loads((store.DATA / VALUE_META).read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return set()
-    counts = meta.get('counts') or {}
-    return {c for c in meta.get('complete', []) if counts.get(c, CLOSED_LIST + 1) <= CLOSED_LIST}
+    counts = meta.get('counts') or {}; words = set(meta.get('words') or [])
+    return {c for c in meta.get('complete', []) if c in words and counts.get(c, CLOSED_LIST + 1) <= CLOSED_LIST}
 
 
 def finder(kb):
@@ -361,10 +389,13 @@ def lookup_plan(kb, closed=None):
 
 def live_finder(kb, execute, dialect, budget_ms=LOOKUP_BUDGET_MS):
     """Exact lookups for codes not in the value index yet (e.g. an order saved a minute ago). Never a full scan of
-    a big table with UPPER/TRIM (no index can help that); each big-table lookup has a short time limit and all
-    lookups for one word share one budget, so an unknown word costs seconds at most, not minutes."""
+    a big table with UPPER/TRIM (no index can help that); each big-table lookup has a short time limit, and all
+    lookups made through one finder (one question, however many code-like words it has) share one budget, so
+    unknown words cost seconds at most, not minutes, and do not multiply the load on the client's Oracle.
+    Full scans (tier 3) never use the last SCAN_RESERVE_MS of the budget: a later word still gets its cheap
+    index probes."""
     tiers = lookup_plan(kb)
-    memo = {}
+    memo = {}; budget = dict(left=float(budget_ms)); reserve = min(SCAN_RESERVE_MS, budget_ms / 4)
 
     def probe(t, c, m, token, tolerant, timeout_ms):
         if m['type'] == 'NUMBER':
@@ -388,22 +419,26 @@ def live_finder(kb, execute, dialect, budget_ms=LOOKUP_BUDGET_MS):
             return []
         if token in memo:
             return memo[token]
-        hits = []; deadline = time.time() + budget_ms / 1000
+        hits = []
         for tier, cols in enumerate(tiers):
             if hits:
                 break
             for t, c, m in cols:
-                left = (deadline - time.time()) * 1000
+                left = budget['left'] - (reserve if tier == 2 else 0)
                 if left < 100:
                     find.skipped += 1
                     continue
+                started = time.perf_counter()
                 try:   # small tables get the same limit: statistics can be stale
                     rows = probe(t, c, m, token, tier == 0, int(min(LOOKUP_MS, left)))
                 except Exception:
-                    continue
+                    rows = None
+                finally:
+                    budget['left'] -= (time.perf_counter() - started) * 1000
                 if rows:
                     hits.append(dict(table=t, column=c, value=str(rows[0][0]).strip(), n=1))
         memo[token] = hits
         return hits
     find.skipped = 0
+    find.budget = budget   # what is left of this question's lookup time (ms)
     return find

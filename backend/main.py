@@ -4,6 +4,7 @@ from datetime import datetime
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import threading
@@ -16,7 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
 from . import local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
-from .config import DATA, ROOT, OWNER
+from .config import DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
 from .erp import planner
@@ -39,6 +40,7 @@ DEFAULT_SETTINGS = dict(allow_self_approval=True, company_exporter='POPPYS KNITW
 @asynccontextmanager
 async def lifespan(app):
     store.init()
+    start_value_index()   # background: the server answers at once, the first question does not pay for the build
     yield
 
 app = FastAPI(title='POPPYS AI — Order entry automation', lifespan=lifespan)
@@ -794,10 +796,96 @@ def _require_db(sources):
     return sources['db']
 
 
+# --- value index: built in the background at startup; inside a question only as a fallback -------------------
+VALUES_WAIT_S = 5      # a question asked while the background build runs waits at most this long for it
+VALUES_RETRY_S = 300   # after a build that failed or found no values, a question tries again only after this
+_VALUES = dict(state='not started', source=None, started_at=None, finished_at=None, seconds=None, columns=None, values=None,
+               error=None, at=0.0)
+_values_lock = threading.Lock()
+_values_idle = threading.Event(); _values_idle.set()
+
+
+def value_index_status():
+    """For /api/knowledge: not started | off | building | ready | empty | offline | failed, with when and how many."""
+    with _values_lock:
+        return {k: v for k, v in _VALUES.items() if k != 'at'}
+
+
+def _build_values(source, kb=None, sources=None):
+    """Builds the value index once; a second caller while it runs returns at once. Never raises: a failed build
+    is reported in value_index_status() and the question goes on with the live finder."""
+    with _values_lock:
+        if _VALUES['state'] == 'building':
+            return
+        _VALUES.update(state='building', source=source, started_at=datetime.now().isoformat(timespec='seconds'), finished_at=None,
+                       seconds=None, error=None, at=time.time())
+        _values_idle.clear()
+    started = time.time(); result = dict(state='failed')
+    try:
+        kb = kb or knowledge_base()
+        if not kb.live:
+            result = dict(state='offline', error='Oracle was not reachable, so the data dictionary is the offline snapshot.')
+        elif sources is not None:
+            result = _fill_values(kb, sources)
+        else:
+            with query_sources() as own:
+                result = _fill_values(kb, own)
+    except Exception as exc:   # e.g. Oracle went away in the middle: the next question can try again
+        result = dict(state='failed', error=str(exc)[:200])
+    finally:
+        with _values_lock:
+            _VALUES.update(result, finished_at=datetime.now().isoformat(timespec='seconds'), seconds=round(time.time() - started, 1),
+                           at=time.time())
+        _values_idle.set()
+
+
+def _fill_values(kb, sources):
+    if not sources.get('db'):
+        return dict(state='offline', error='Oracle is not connected.')
+    execute, dialect = sources['db']
+    r = insight.refresh_values(kb, execute, dialect)
+    return dict(state='ready' if r['values'] else 'empty', columns=r['columns'], values=r['values'],
+                error='; '.join(r['skipped'])[:300] or None)
+
+
+def _startup_values():
+    if store.value_stats():
+        with _values_lock:
+            _VALUES.update(state='ready', source='earlier refresh', at=time.time())
+        return
+    _build_values('startup')
+
+
+def start_value_index():
+    """Starts the background build when the value index is empty. VALUE_INDEX_AT_STARTUP=0 in .env.poppys turns
+    it off (the first question then builds it). Off under pytest: a thread outliving a test would write into
+    whichever data folder the next test points at; tests call _build_values themselves."""
+    if setting('VALUE_INDEX_AT_STARTUP', '1').strip().lower() in ('0', 'false', 'no', 'off') or os.environ.get('PYTEST_CURRENT_TEST'):
+        with _values_lock:
+            if _VALUES['state'] == 'not started':
+                _VALUES.update(state='off')
+        return None
+    thread = threading.Thread(target=_startup_values, name='poppys-value-index', daemon=True)
+    thread.start()
+    return thread
+
+
 def _ensure_values(kb, sources):
-    if sources.get('db') and kb.live and not store.value_stats():
-        execute, dialect = sources['db']
-        insight.refresh_values(kb, execute, dialect)
+    """Value linking needs the value index. Normally the startup thread has built it. A question asked while that
+    build runs waits for it at most VALUES_WAIT_S and then goes on without it (codes are still found by the live
+    finder). Only when no build ran (startup build off, Oracle down at startup, index emptied) does the question
+    build it itself, and after a build that failed or found nothing, at most once per VALUES_RETRY_S."""
+    if not (sources.get('db') and kb.live):
+        return
+    if not _values_idle.is_set():
+        _values_idle.wait(VALUES_WAIT_S)
+        return
+    if store.value_stats():
+        return
+    with _values_lock:
+        recent_failure = _VALUES['state'] in ('failed', 'empty') and time.time() - _VALUES['at'] < VALUES_RETRY_S
+    if not recent_failure:
+        _build_values('first question', kb, sources)
 
 
 def _table_meta(kb, name):
@@ -824,7 +912,8 @@ def knowledge_summary(user=Depends(authenticated)):
                    description=t['description'], synonyms=t['synonyms'], source=t.get('source', 'oracle'),
                    links=sum(1 for j in kb.joins if n in (j['child'], j['parent'])))
               for n, t in kb.tables.items()]
-    return dict(summary=kb.summary(), tables=tables, values=store.value_stats(), examples=len(store.examples()))
+    return dict(summary=kb.summary(), tables=tables, values=store.value_stats(), value_index=value_index_status(),
+                examples=len(store.examples()))
 
 
 @app.get('/api/knowledge/tables/{table}')
@@ -1030,9 +1119,10 @@ _counts = {}; _counts_lock = threading.Lock()
 
 
 def _count(execute, dialect, table, meta, cond='', binds=None, timeout_ms=4000):
-    """Exact COUNT(*) unless dictionary statistics say the table is very large (then approximate).
+    """(rows, approximate). Exact COUNT(*) unless dictionary statistics say the table is very large (then approximate).
     A count gets a few seconds at most: a whole-table count that runs out falls back to statistics (≈),
-    a filtered one to None ('not counted'), so a page never waits on counting a big table."""
+    a filtered one to None, so a page never waits on counting a big table. None always means 'count unavailable';
+    the API says so explicitly with rows_known=false, so the page can show that instead of a number."""
     stats = meta.get('rows')
     if stats is not None and stats > BIG_ROWS and not cond:
         return stats, True
@@ -1070,9 +1160,32 @@ def table_counts(kb, sources, tables, budget_ms=8000):
     return out
 
 
+FILTER_COUNT_TTL = 300   # a filtered count is reused by the 'Load more' pages of the same filter for this long
+_filter_counts = {}
+
+
+def _filtered_count(execute, dialect, table, meta, cond, binds, first):
+    """The filtered COUNT(*) is made on the first page and kept, also when it ran out of time (None), so each
+    'Load more' page does not pay up to 4 s again for a count that already timed out. A later page counts only
+    when nothing is kept (expired, or the server restarted). Cleared, like the table counts, after every save."""
+    key = (table, cond, tuple(sorted((k, str(v)) for k, v in (binds or {}).items())))
+    now = time.time()
+    with _counts_lock:
+        hit = _filter_counts.get(key)
+        if hit and now - hit[0] < FILTER_COUNT_TTL and not first:
+            return hit[1:]
+    out = _count(execute, dialect, table, meta, cond, binds)
+    with _counts_lock:
+        if len(_filter_counts) > 500:   # a long session of different filters: keep only the fresh ones
+            for k in [k for k, v in _filter_counts.items() if now - v[0] >= FILTER_COUNT_TTL]:
+                del _filter_counts[k]
+        _filter_counts[key] = (now, *out)
+    return out
+
+
 def clear_counts():
     with _counts_lock:
-        _counts.clear()
+        _counts.clear(); _filter_counts.clear()
 
 
 def _db(sources):
@@ -1201,12 +1314,14 @@ def explorer_rows(table: str, column: str | None = None, value: str | None = Que
             total, approx = len(rows), False   # everything is on this page
         elif where and not exact and big:
             total, approx = None, True         # 'contains' on a very large table: counting would read every row again
+        elif where:   # a filtered count is made once, on the first page; 'Load more' pages reuse it
+            total, approx = _filtered_count(execute, dialect, table, meta, cond, binds, first=not paging and not offset)
         else:
             total, approx = _count(execute, dialect, table, meta, cond, binds)
         decoded = _decode(kb, execute, dialect, table, rows)
     return dict(table=table, business=meta['business'], description=meta['description'], key=key, label=meta.get('label'),
                 display=meta['display'], columns=_columns(meta),
-                total=total, approx=approx, rows=rows, offset=offset, limit=limit, decoded=decoded,
+                total=total, approx=approx, rows_known=total is not None, rows=rows, offset=offset, limit=limit, decoded=decoded,
                 next_after=rows[-1][key] if key and len(rows) == limit else None)
 
 
@@ -1259,7 +1374,7 @@ def explorer_related(table: str, pk: int, user=Depends(authenticated)):
                 continue
             more = len(rows) > limit; rows = rows[:limit]
             total = _count(execute, dialect, other['name'], other, f' WHERE {where}', binds)[0] if more else len(rows)
-            out.append(dict(n, rows=rows, more=more, total=total, key=other.get('key'), label=other.get('label'), display=other['display'], pairs=j['pairs'],
+            out.append(dict(n, rows=rows, more=more, total=total, rows_known=total is not None, key=other.get('key'), label=other.get('label'), display=other['display'], pairs=j['pairs'],
                             columns=_columns(other, cols), decoded=_decode(kb, execute, dialect, other['name'], rows),
                             under=under.get(other['name']) if n['direction'] == 'down' else None,
                             filter=dict(column=conds[0][0], value=conds[0][1]) if len(conds) == 1 else None))

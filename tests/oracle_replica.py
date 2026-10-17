@@ -46,13 +46,16 @@ CHUNK = 250_000   # orders generated per INSERT: CONNECT BY holds every level in
 
 def bulk(cur, n, chunk=CHUNK):
     """Server-side generation of n historic orders: n ORDMAS, 2n ORDSTYLE, 8n ORDSIZE rows, in chunks so any
-    size loads (measured: 300k orders ≈ 35 s, 3M orders ≈ 6 min incl. statistics; see docs/PERFORMANCE.md)."""
+    size loads (measured: 300k orders ≈ 35 s, 3M orders ≈ 6 min incl. statistics; see docs/PERFORMANCE.md).
+    Order references are HX/ plus the order number padded to 7 digits (HX/0123456) and never cut: LPAD cuts a
+    longer string to the given width, so from order 10,000,000 on a fixed width of 7 repeated references.
+    Wider numbers keep all their digits (HX/12000000), so references stay unique at any size."""
     base = 10_000_000
     orders = 'SELECT LEVEL + :s l FROM dual CONNECT BY LEVEL <= :k'
     for start in range(0, n, chunk):
         k = min(chunk, n - start); t = time.time()
         cur.execute(f'''INSERT /*+ APPEND */ INTO ORDMAS (ORDMASID, DOCID, BUYER, STYLENO, STYLEDESC, ODATE, OQTY, BONO, UOM, MERCH, SAMPLETYPE, ORDCATEGORY, CANCEL)
-            SELECT {base} + o.l, 'HX/' || LPAD(o.l, 7, '0'), MOD(o.l, 3) + 1, 11 + MOD(o.l, 3), 21 + MOD(o.l, 2),
+            SELECT {base} + o.l, 'HX/' || LPAD(o.l, GREATEST(7, LENGTH(o.l)), '0'), MOD(o.l, 3) + 1, 11 + MOD(o.l, 3), 21 + MOD(o.l, 2),
                    DATE '2019-01-01' + MOD(o.l * 7, 2800), 400, 'PO-H' || o.l, 51, 61, 'BULK ORDER', 'PRODUCTION ORDER',
                    CASE WHEN MOD(o.l, 50) = 0 THEN 'T' ELSE 'F' END
               FROM ({orders}) o''', s=start, k=k)
