@@ -293,7 +293,9 @@ export function renderGraph(el, model, opts = {}) {
     release = new AbortController();
     const o = { capture: true, signal: release.signal };
     window.addEventListener('pointerup', lift, o); window.addEventListener('pointercancel', lift, o);
-    window.addEventListener('blur', () => [...pts.keys()].forEach(pointerId => lift({ pointerId })), o);
+    // only the WINDOW losing focus ends a drag: with capture, blur events of elements (e.g. the question box
+    // losing focus when the press lands on the diagram) also arrive here and used to cancel every drag at once
+    window.addEventListener('blur', e => { if (e.target === window) [...pts.keys()].forEach(pointerId => lift({ pointerId })); }, o);
   };
   on(svg, 'pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;

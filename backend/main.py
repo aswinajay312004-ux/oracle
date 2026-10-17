@@ -129,7 +129,7 @@ async def http_error(request, exc):
     if exc.status_code == 413:      # the streamed body passed the limit (BodyLimitMiddleware)
         limit = security.body_limit(request.scope)
         logs.security_event('body_too_large', 30, method=request.method, path=request.url.path, limit=limit)
-        return _error(413, security.too_large_message(limit))
+        return _error(413, security.too_large_message(limit, request.scope))
     if exc.status_code in (204, 304) or exc.status_code < 200:
         return Response(status_code=exc.status_code, headers=headers)
     response = _error(exc.status_code, exc.detail)

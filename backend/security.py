@@ -327,17 +327,27 @@ class CSRFMiddleware:
 # --- request body limit -----------------------------------------------------------------------------------------------
 # Starlette's RequestBodyLimitMiddleware counts the bytes as they stream in (chunked bodies too, not only the
 # Content-Length) and stops the request as soon as the limit is passed, so a spooled upload temp file never
-# grows past it. Uploads get 14 MiB (the reader's own cap); every other request 1 MiB.
+# grows past it. Uploads get 14 MiB (the reader's own cap); every other request 1 MiB, except saving edits to a
+# draft. Deviation from the record (1 MiB for everything but uploads): the page sends a draft's whole orders back
+# when it saves, and a measured one-order BOM draft (126 accessories, 30 size rows) was already 178 KB; the
+# server accepts up to 50 orders with 300 accessories each, so 1 MiB would refuse real edits. They get 14 MiB too.
 UPLOAD_LIMIT = 14 * 1024 * 1024
 DEFAULT_LIMIT = 1024 * 1024
 UPLOAD_ROUTES = {('POST', '/api/uploads')}
+_DRAFT_EDIT = re.compile(r'^/api/drafts/[^/]+$')
 
 
 def body_limit(scope):
-    return UPLOAD_LIMIT if (scope.get('method'), scope.get('path')) in UPLOAD_ROUTES else DEFAULT_LIMIT
+    method, path = scope.get('method'), scope.get('path') or ''
+    if (method, path) in UPLOAD_ROUTES or (method == 'PUT' and _DRAFT_EDIT.match(path)):
+        return UPLOAD_LIMIT
+    return DEFAULT_LIMIT
 
 
-def too_large_message(limit):
+def too_large_message(limit, scope=None):
+    if limit >= UPLOAD_LIMIT and scope is not None and scope.get('method') == 'PUT':
+        return (f'These changes are larger than {limit // (1024 * 1024)} MB, so they were not saved. '
+                'Split the workbook into smaller files and upload them one at a time.')
     if limit >= UPLOAD_LIMIT:
         return (f'The file is larger than {limit // (1024 * 1024)} MB, so it was not read. Save only the order sheets '
                 '(delete unused sheets, pictures and blank rows), then upload it again.')
@@ -358,7 +368,7 @@ class BodyLimitMiddleware:
         if declared is not None and declared.strip().isdigit() and int(declared) > limit:
             # Refused before a byte is read (the streamed count below catches bodies without a length).
             logs.security_event('body_too_large', 30, method=scope['method'], path=scope['path'], declared=int(declared), limit=limit)
-            response = JSONResponse({'detail': too_large_message(limit), 'request_id': logs.request_id()}, status_code=413)
+            response = JSONResponse({'detail': too_large_message(limit, scope), 'request_id': logs.request_id()}, status_code=413)
             return await response(scope, receive, send)
         await (self.uploads if limit == UPLOAD_LIMIT else self.others)(scope, receive, send)
 

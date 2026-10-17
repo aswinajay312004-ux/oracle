@@ -111,6 +111,16 @@ def test_other_routes_have_a_1_mib_limit_streamed_or_declared(client):
     assert r.status_code == 422
 
 
+def test_saving_a_large_draft_edit_has_the_upload_limit_not_1_mib(admin):
+    d = admin.post('/api/uploads', files={'file': ('bom.xlsx', merch_bom())}).json()
+    orders = deepcopy(d['orders']); orders[0]['description'] = 'x' * (2 * 1024 * 1024)      # a 2 MiB edit
+    r = admin.put(f'/api/drafts/{d["id"]}', json={'version': d['version'], 'orders': orders})
+    assert r.status_code != 413, r.text
+    r = admin.put(f'/api/drafts/{d["id"]}', content=b'x', headers={'Content-Length': str(15 * 1024 * 1024), 'Content-Type': 'application/json'})
+    assert r.status_code == 413 and 'changes are larger than 14 MB' in r.json()['detail']
+    assert security.body_limit({'method': 'POST', 'path': '/api/drafts/abc/map'}) == security.DEFAULT_LIMIT
+
+
 def test_an_upload_under_the_limit_still_works(admin):
     r = admin.post('/api/uploads', files={'file': ('bom.xlsx', merch_bom())})
     assert r.status_code == 200, r.text

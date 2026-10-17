@@ -178,6 +178,19 @@ def test_drag_moves_the_picture_and_never_counts_as_a_click(page):
     assert page.evaluate('() => picked') == ['B']        # a plain click right after still works
 
 
+def test_drag_still_pans_when_another_field_had_focus(page):
+    """In the app the question box usually has focus: pressing on the diagram moves focus away, and that
+    element blur used to reach the window-level 'blur' watcher and cancel every drag at once."""
+    render(page)
+    page.locator('.composer textarea').focus()
+    before = page.evaluate(VIEW)
+    x, y = centre(node_box(page, 'B'))
+    page.mouse.move(x, y); page.mouse.down(); page.mouse.move(x + 60, y + 10, steps=8); page.mouse.up()
+    page.wait_for_timeout(50)
+    assert page.evaluate(VIEW)[0] > before[0] + 30          # the picture followed the drag
+    assert page.evaluate('() => picked') == []              # and no table preview opened
+
+
 def test_a_press_released_outside_the_diagram_does_not_leave_the_pointer_stuck(page):
     render(page)
     svg = page.locator('#g .gsvg').bounding_box()
