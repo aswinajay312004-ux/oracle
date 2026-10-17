@@ -456,7 +456,7 @@ Not yet run on Windows:
 5. Task Scheduler: a task registered for `S-1-5-19` with LogonType ServiceAccount; "run as soon as possible after a missed start"; the S4U task without the service.
 6. `backup.py` on Windows: replacing files, refusing while the database is open, and the drill's stop of the restored app through the `.venv` launcher.
 7. Section 10 (password rotation), sections 9.1 and 9.2 (Docker auto-start, `docker update --restart`), and the junction-safe release deletion in section 6.
-8. Release packaging (embeddable Python 3.13.16, hashed wheelhouse, SHA256SUMS, Authenticode signing; checklist item 47) does not exist yet. The scripts already verify `SHA256SUMS` and use `python\python.exe` when a release ships them.
+8. Release packaging: `scripts/build_release.py` builds the hashed Windows wheelhouse, `requirements.lock` and `SHA256SUMS` (verified in the cloud: 35 wheels install offline with `--require-hashes`; a modified wheel is refused). Still not done: embeddable Python inside the release (the python.org installer can be bundled with `--python-installer 3.13.x`) and Authenticode signing.
 
 ---
 

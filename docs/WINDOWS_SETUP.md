@@ -152,3 +152,13 @@ $env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q tests\test_
 | Ask AI says "Oracle is not connected" | Start Oracle; questions about uploaded files still work offline |
 | An answer shows "Medium/Low confidence" | Open **How this was answered**. Confirm the link or add a synonym in Setup → Data dictionary, then ask again |
 | Port 8008 busy | Close the other POPPYS window, or end the old `python` process in Task Manager |
+
+## Offline installation (no internet on the laptop)
+
+1. On any computer **with** internet, in a checkout of the release commit: `pip install uv` (only needed on Mac/Linux), then
+   `python scripts\build_release.py --python-installer 3.13.5`. It writes `dist\poppys-ai-<version>.zip`.
+2. Copy the zip to the laptop (USB / LAN share) and unzip it.
+3. If Python 3.13 is not installed: run `installers\python-3.13.5-amd64.exe` (tick "py launcher").
+4. In the unzipped folder: `.\setup.ps1 -Offline`. Packages install only from `wheelhouse\`, each checked against the
+   SHA-256 recorded when the release was built; a changed or missing file stops the install.
+5. Continue with the Oracle steps above (`.\setup.ps1` already created `POPPYS_APP` and `POPPYS_RO`), then `.\start.ps1`.

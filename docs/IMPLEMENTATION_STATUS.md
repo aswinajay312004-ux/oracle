@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-17 (session 2, batch 6) | 388 passed, 0 failed, 18 skipped | Offline release builder |
 | 2026-10-17 (session 2, batch 5) | **388 passed, 0 failed, 18 skipped** | Undo/redo in the review screen |
 | 2026-10-17 (session 2, batch 4) | **388 passed, 0 failed, 18 skipped**; ruff clean | Evidence ledger; docs no longer claim PDF support |
 | 2026-10-17 (session 2, batch 3) | **382 passed, 0 failed, 18 skipped**; ruff clean | Overview + work queue, Ask AI charts, phone layout |
@@ -46,7 +47,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | E2 | Phone layout: no horizontal page scroll on any screen | Fixed (was broken on New order, Database, Overview) | `minmax(0,1fr)` grids in `frontend/styles.css` |
 | B6 | Evidence ledger (REA design): immutable, idempotent, conflict-refusing, atomic bundles, open questions; "Verified" requires a reviewer statement + auto-recorded facts | Implemented, Cloud-tested (dialog exercised in browser) | `backend/evidence.py`, `/api/evidence*`, Setup dialogs, `tests/test_evidence.py` |
 | D1 | Windows service, backup/restore, upgrade/rollback | Implemented, Cloud-tested | `deploy/windows/`, `scripts/backup.py` |
-| D2 | Offline packaging (wheelhouse, no CDN) | Needs check | — |
+| D2 | Offline packaging: hashed Windows wheelhouse + `requirements.lock` + `SHA256SUMS` + zip; `setup.ps1 -Offline` installs with `--require-hashes`; frontend has no CDN | Implemented, Cloud-tested (35 wheels verified offline; tamper refused). Windows run pending | `scripts/build_release.py`, `setup.ps1`, `docs/WINDOWS_SETUP.md` |
 
 ## Next steps (in order)
 

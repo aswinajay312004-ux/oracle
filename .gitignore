@@ -19,3 +19,4 @@ docs/live_sample_records.txt
 
 # downloaded Windows service wrapper (WinSW) and other binaries are never committed
 deploy/windows/*.exe
+dist/
