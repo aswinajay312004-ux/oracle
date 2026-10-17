@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-17 (session 2, batch 5) | **388 passed, 0 failed, 18 skipped** | Undo/redo in the review screen |
 | 2026-10-17 (session 2, batch 4) | **388 passed, 0 failed, 18 skipped**; ruff clean | Evidence ledger; docs no longer claim PDF support |
 | 2026-10-17 (session 2, batch 3) | **382 passed, 0 failed, 18 skipped**; ruff clean | Overview + work queue, Ask AI charts, phone layout |
 | 2026-10-17 (session 2, batch 2) | **381 passed, 0 failed, 18 skipped**; ruff clean | Ask AI, explorer, value index and dictionary harvest moved to the separate read-only account |
@@ -33,6 +34,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | A6 | Approval + roles (admin/approver/operator/viewer), four-eyes option | Implemented, Cloud-tested | `backend/main.py` |
 | A7 | Oracle writer: lock, re-plan, sequence keys, binds, read-back, receipt, rollback | Implemented, replica-tested | `backend/oracle_store.py`, `tests/oracle_replica.py`; needs Local Oracle test |
 | A8 | Field-level error UI | Implemented | `frontend/js/workspace.js` |
+| A9 | Undo / redo of corrections before approval (buttons + Ctrl+Z / Ctrl+Y; typing burst = one step; issues restored with the values) | Implemented, browser-tested on demo server | `frontend/js/workspace.js` |
 | B1 | Knowledge catalog + relationship statuses | Implemented, Cloud-tested | `backend/insight/knowledge.py`, `config/semantic_catalog.json` |
 | B2 | Question → intent → compiled read-only SELECT (no model SQL) | Implemented, Cloud-tested | `backend/insight/understand.py`, `query.py`, `engine.py` |
 | B3 | Local AI (Ollama) fallback for understanding and mapping | Implemented | `backend/ai.py`; needs local Ollama check |
@@ -50,7 +52,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 
 1. ~~Fix the failing tests~~ (done, batch 1).
 2. ~~Remove leftover PDF wording in docs~~ (done, batch 4).
-3. Re-audit gaps against the master prompt; implement missing pieces. Done so far: read-only account, charts, overview. Still open: undo/redo in the draft editor. REA reviewed and its evidence-ledger design adopted (batch 4).
+3. Re-audit gaps against the master prompt; implement missing pieces. Done so far: read-only account, charts, overview. Undo/redo done (batch 5). REA reviewed and its evidence-ledger design adopted (batch 4).
 4. Produce exact local Oracle verification commands and record results here.
 
 ## Local verification

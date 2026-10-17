@@ -36,7 +36,7 @@ function stage(name) {
 }
 
 export function resetWorkspace() {
-  state.draft = null; state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false;
+  state.draft = null; state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false; resetUndo();
   $('#file-input').value = ''; stage('upload'); recent();
 }
 
@@ -61,14 +61,14 @@ export async function upload(file) {
     const form = new FormData(); form.append('file', file);
     try { [state.draft] = await Promise.all([api('/api/uploads', { method: 'POST', form }), loadFields()]); }
     catch (e) { stage('upload'); throw e; }
-    state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false;
+    state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false; resetUndo();
     showReading();
   });
 }
 
 export async function openDraft(draftId) {
   await busy('Opening the saved draft…', async () => {
-    [state.draft] = await Promise.all([api(`/api/drafts/${id(draftId)}`), loadFields()]); state.dirty = false; state.saved = !!state.draft.result; state.tab = {}; state.showMapping = false;
+    [state.draft] = await Promise.all([api(`/api/drafts/${id(draftId)}`), loadFields()]); state.dirty = false; state.saved = !!state.draft.result; state.tab = {}; state.showMapping = false; resetUndo();
     state.planIssues = state.draft.plan?.issues || [];
     if (state.draft.result) return showSaved(state.draft.result);
     renderReview(); stage('review');
@@ -153,7 +153,7 @@ export function renderReview() {
     <div class="card doc-bar"><span class="file-badge">XLS</span>
       <div><span class="name">${esc(d.filename)}</span><small>${d.template ? `Saved layout “${esc(d.template.name)}” (v${esc(d.template.version)})` : esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
       <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? 'Saved to Oracle' : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
-      <button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
+      ${undoButtons()}<button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
     ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}
     ${p && !p.live ? '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected, so existing masters and order numbers could not be checked. Start the database and press <b>Check &amp; continue</b> again.</div></div>' : ''}
     <section id="mapping-panel" class="card" ${needMap || state.showMapping ? '' : 'hidden'} style="margin-bottom:14px"></section>
@@ -441,6 +441,34 @@ function markDirty() {
   if (state.draft.plan) state.draft.plan = { ...state.draft.plan, stale: true };
 }
 
+// Undo / redo of corrections before approval. A snapshot is the orders plus their highlighted issues; a burst of
+// typing in one field is one step. Inside a text box the browser's own Ctrl+Z still applies.
+const MAX_UNDO = 100;
+const undo = { past: [], future: [], key: null, at: 0 };
+export function resetUndo() { undo.past = []; undo.future = []; undo.key = null; }
+function snapshot(key = null) {
+  const now = Date.now();
+  if (key && key === undo.key && now - undo.at < 1500) { undo.at = now; return; }
+  undo.past.push({ orders: clone(state.draft.orders), issues: clone(state.planIssues || []) });
+  if (undo.past.length > MAX_UNDO) undo.past.shift();
+  undo.future = []; undo.key = key; undo.at = now; syncUndo();
+}
+function syncUndo() {
+  $$('[data-act="undo"]').forEach(b => { b.disabled = !undo.past.length; });
+  $$('[data-act="redo"]').forEach(b => { b.disabled = !undo.future.length; });
+}
+function travel(from, to) {
+  if (!from.length || !state.draft || state.saved || state.draft.result) return;
+  to.push({ orders: clone(state.draft.orders), issues: clone(state.planIssues || []) });
+  const s = from.pop(); state.draft.orders = s.orders; state.planIssues = s.issues; undo.key = null;
+  markDirty(); renderReview();
+}
+export const undoEdit = () => travel(undo.past, undo.future);
+export const redoEdit = () => travel(undo.future, undo.past);
+function undoButtons() {
+  return `<button class="ghost small" data-act="undo" ${undo.past.length ? '' : 'disabled'} title="Undo (Ctrl+Z)">↶ Undo</button><button class="ghost small" data-act="redo" ${undo.future.length ? '' : 'disabled'} title="Redo (Ctrl+Y)">↷ Redo</button>`;
+}
+
 function refreshInPlace(el) {
   // update this field's red state and the side panel without re-rendering the whole screen (keeps focus)
   const f = el.closest('.f');
@@ -459,10 +487,12 @@ export function onInput(e) {
   const el = e.target; const d = state.draft; if (!d) return;
   if (el.dataset.groupDesc != null) {
     const o = d.orders[Number(el.dataset.oi)];
+    snapshot('desc:' + el.dataset.groupDesc);
     el.dataset.groupDesc.split(',').forEach(ai => { o.accessories[Number(ai)].description = el.value; clearIssues(`orders.${el.dataset.oi}.accessories.${ai}.description`); });
     el.classList.remove('err', 'warn'); markDirty(); renderSide(); return;
   }
   if (el.dataset.newsize) {   // typing into an empty size cell creates that size for the line
+    snapshot();
     const [oi, li] = el.dataset.newsize.split('|').map(Number); const line = d.orders[oi].lines[li];
     line.sizes.push({ size: el.dataset.size, quantity: el.value === '' ? null : Number(el.value) }); line.declared_total = null;
     el.dataset.path = `orders.${oi}.lines.${li}.sizes.${line.sizes.length - 1}.quantity`; delete el.dataset.newsize;
@@ -472,6 +502,7 @@ export function onInput(e) {
   let v = el.value;
   if (el.type === 'number') v = v === '' ? null : Number(v);
   if (el.dataset.type === 'int') v = v === '' ? null : Number(v);
+  snapshot(el.tagName === 'SELECT' ? null : path);
   setPath(path, v); clearIssues(path); markDirty();
   const m = path.match(/^orders\.(\d+)\.lines\.(\d+)\.sizes\.\d+\.quantity$/);
   if (m) { clearIssues(`orders.${m[1]}.lines.${m[2]}.sizes`); updateTotals(Number(m[1]), Number(m[2])); }
@@ -488,22 +519,28 @@ function updateTotals(oi, li) {
 export function onChange(e) {
   const el = e.target; const d = state.draft; if (!d) return;
   if (el.dataset.sizecol != null) {
-    const oi = Number(el.dataset.sizecol); const old = el.dataset.old; const name = el.value.trim();
+    const oi = Number(el.dataset.sizecol); const old = el.dataset.old; const name = el.value.trim(); snapshot();
     d.orders[oi].lines.forEach(l => l.sizes.forEach(s => { if ((s.size ?? '') === old) s.size = name; }));
     clearIssues(`orders.${oi}.lines`); markDirty(); renderReview(); return;
   }
   if (el.dataset.addsize != null) {
-    const oi = Number(el.dataset.addsize); const name = el.value.trim(); if (!name) return;
+    const oi = Number(el.dataset.addsize); const name = el.value.trim(); if (!name) return; snapshot();
     d.orders[oi].lines.forEach(l => { if (!l.sizes.some(s => s.size === name)) l.sizes.push({ size: name, quantity: null }); l.declared_total = null; });
     markDirty(); renderReview(); return;
   }
   if (el.tagName === 'SELECT' && el.dataset.path) { onInput(e); renderReview(); }
 }
 
+const MUTATING = new Set(['unit', 'basis', 'add-order', 'remove-order', 'add-line', 'remove-line', 'remove-size-col', 'add-fabric',
+  'remove-fabric', 'add-yarn', 'remove-yarn', 'remove-acc']);
+
 export async function onAction(btn) {
   const a = btn.dataset.act; const d = state.draft; if (!a || !d) return false;
   const oi = Number(btn.dataset.oi); const o = d.orders[oi];
   const emptyLine = () => ({ label: '', color: '', declared_total: null, sizes: sizeNames(o || {}).map(s => ({ size: s, quantity: null })) });
+  if (a === 'undo') { undoEdit(); return true; }
+  if (a === 'redo') { redoEdit(); return true; }
+  if (MUTATING.has(a)) snapshot();
   switch (a) {
     case 'tab': state.tab[oi] = btn.dataset.tab; renderReview(); return true;
     case 'next-issue': nextIssue(); return true;
@@ -533,7 +570,7 @@ export async function onAction(btn) {
       break;
     }
     case 'add-order': d.orders.push({ buyer: '', style: '', description: '', po_number: '', order_ref: '', order_date: '', ship_date: '', exporter: state.health?.settings?.company_exporter || '', sample_type: state.health?.settings?.default_sample_type || '', quantity_basis: 'sample', _manual: true, qty_unit: '', pieces_per_unit: null, lines: [{ label: '', color: '', declared_total: null, sizes: [{ size: '', quantity: null }] }], fabrics: [], accessories: [], provenance: {}, warnings: [] }); break;
-    case 'remove-order': if (!await confirmDialog('Remove this order?', '<p>It will not be imported. You can add it back by uploading again.</p>', 'Remove')) return true; d.orders.splice(oi, 1); break;
+    case 'remove-order': if (!await confirmDialog('Remove this order?', '<p>It will not be imported. Undo brings it back.</p>', 'Remove')) { undo.past.pop(); return true; } d.orders.splice(oi, 1); break;
     case 'add-line': o.lines.push(emptyLine()); break;
     case 'remove-line': o.lines.splice(Number(btn.dataset.li), 1); clearIssues(`orders.${oi}.lines`); break;
     case 'remove-size-col': { const s = btn.dataset.size; o.lines.forEach(l => { l.sizes = l.sizes.filter(x => (x.size ?? '') !== s); l.declared_total = null; }); clearIssues(`orders.${oi}.lines`); break; }
@@ -676,6 +713,11 @@ export function bindWorkspace() {
     if (e.target.closest('input, select, textarea')) return;
     const b = e.target.closest('[data-act]'); if (!b) return;
     await onAction(b);
+  });
+  document.addEventListener('keydown', e => {
+    if (!(e.ctrlKey || e.metaKey) || $('#stage-review').hidden || e.target.closest('input, textarea, select, [contenteditable]')) return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoEdit(); } else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redoEdit(); }
   });
   root.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.dataset.addsize != null) { e.preventDefault(); e.target.blur(); }
