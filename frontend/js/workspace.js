@@ -1,7 +1,7 @@
 // New-order workspace: Upload → Review (Axpert-style entry) → Check & approve → Saved.
 // Problems are shown on the field or table cell they belong to (red outline + one short reason),
 // never as a separate list at the bottom of the page.
-import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, confirmDialog, drawer, lastingBox, focusKey, restoreFocus } from './util.js';
+import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, confirmDialog, drawer, lastingBox, focusKey, restoreFocus, dismissErrors } from './util.js';
 import { api, id, orderFields, NOT_RESPONDING } from './api.js';
 import { renderMapping } from './mapping.js';
 import { flowCard, mountFlow } from './flowview.js';
@@ -93,7 +93,7 @@ export async function upload(file) {
       stage('upload', { focus: false }); showUploadError(e.message); $('#dropzone').focus(); throw e;
     }
     Object.assign(state, { dirty: false, saved: false, tab: {}, planIssues: [], showMapping: false, notice: null, shown: null, mappingDirty: false });
-    showReading();
+    dismissErrors(); showReading();
   });
 }
 
@@ -681,7 +681,7 @@ export async function prepare() {
       throw e;
     }
     state.draft.orders.forEach((o, i) => { if (manual[i]) o._manual = true; });
-    const p = state.draft.plan; state.planIssues = p.issues || []; state.notice = null;
+    const p = state.draft.plan; state.planIssues = p.issues || []; state.notice = null; dismissErrors();
     if (p.errors.length) {
       renderReview(); nav = 0;
       notify(`${plural(p.errors.length, 'thing')} to fix — each one is outlined in red where it belongs.`, 'warning');
@@ -774,7 +774,7 @@ export async function approve() {
       let result;
       try { result = await api(`/api/drafts/${id(d.id)}/accept`, { method: 'POST', body: { version: d.version, plan_hash: plan.hash, ...(warned ? { acknowledged_warnings: true } : {}) } }); }
       catch (e) { return acceptFailed(e, d, plan); }
-      d.result = result; state.saved = true; state.dirty = false;
+      d.result = result; state.saved = true; state.dirty = false; dismissErrors();
       await showSaved(result);
     });
   } finally { approve.running = false; }

@@ -25,6 +25,10 @@ export function notify(message, type = '') {
   if (type !== 'error') setTimeout(() => t.remove(), 6000);
 }
 
+// Error toasts stay until dismissed, but not past the next step that worked: an old "not saved" next to a saved
+// order would mislead.
+export function dismissErrors() { $$('#toasts .toast.error').forEach(t => t.remove()); }
+
 // A message that stays where it belongs (on the drop zone, in the approval bar…) until it is dismissed.
 // app.js handles [data-dismiss] for every one of them.
 export function lastingBox(kind, title, text, { id = '', extraHtml = '' } = {}) {
