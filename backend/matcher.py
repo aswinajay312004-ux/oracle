@@ -13,10 +13,13 @@ import re
 from . import fields as F, workbooks as W
 
 SIZE = re.compile(r'^(xxs|xs|s|m|l|xl|xxl|xxxl|[2-6]xl|\d{1,3}\s*(-\s*\d{1,3})?\s*(m|mth|mths|month|months|y|yr|yrs|year|years)?'
-                  r'|up to \d+\s*m\w*|first size|newborn|nb|one size|free size|\d+\s*lb|\d+(\.\d+)?\s*-\s*\d+(\.\d+)?\s*(y|yrs?|years?))$', re.I)
-ABBREVIATIONS = {'qty': 'quantity', 'no': 'number', 'num': 'number', 'dt': 'date', 'col': 'colour', 'clr': 'colour',
-                 'color': 'colour', 'ref': 'reference', 'desc': 'description', 'cust': 'customer', 'del': 'delivery',
-                 'exf': 'ex factory'}
+                  r'|up to \d+\s*m\w*|first size|newborn|nb|one size|free size|\d+\s*lb|\d+(\.\d+)?\s*-\s*\d+(\.\d+)?\s*(y|yrs?|years?)'
+                  r'|\d{1,2}\s*/\s*\d{1,2}\s*(y|yrs?|years?|m|mths?|months?)?|(xxs|xs|s|m|l|xl|xxl)\s*/\s*(xs|s|m|l|xl|xxl|xxxl)|\d{2,3}\s*cm)$', re.I)
+# Garment-file abbreviations and the usual shortenings of them ("Shp Dt", "Colr", "Ord Date", "Sz").
+ABBREVIATIONS = {'qty': 'quantity', 'qnty': 'quantity', 'qnt': 'quantity', 'no': 'number', 'num': 'number', 'dt': 'date',
+                 'col': 'colour', 'clr': 'colour', 'colr': 'colour', 'color': 'colour', 'ref': 'reference', 'desc': 'description',
+                 'cust': 'customer', 'byr': 'buyer', 'del': 'delivery', 'dlv': 'delivery', 'dlvy': 'delivery', 'exf': 'ex factory',
+                 'xf': 'ex factory', 'shp': 'ship', 'ord': 'order', 'sz': 'size', 'sty': 'style', 'shd': 'shade'}
 HIGH, MEDIUM = 0.85, 0.6
 FLOOR = 0.5            # weaker name matches are not shown at all
 MASTER_ROLES = {'buyer': 'buyer', 'color': 'color', 'size': 'size'}
@@ -163,13 +166,20 @@ def evaluate(g, key, r, c, mi=None, label_at=None):
 
 # --- tables ------------------------------------------------------------------------------------
 def _body(g, header, cols, stop_col=None):
-    """Data rows under a header: until a TOTAL row or the first row with nothing in these columns."""
-    rows = []
+    """Data rows under a header: until a TOTAL row or the first row with nothing in these columns. Sub totals
+    are skipped (they add up other rows) and hidden rows are not read."""
+    rows = []; cols = list(cols); span = range(1, max(cols + [3, stop_col or 0]) + 1)
+    heads = {c: W.norm(g.v(header, c)) for c in cols if isinstance(g.v(header, c), str)}
     for r in range(header + 1, min(header + 201, g.rows + 1)):
-        if stop_col and W.norm(g.v(r, stop_col)) in ('total', 'grand total'):
+        if r in g.hidden_rows:
+            continue
+        names = [g.v(r, c) for c in span if isinstance(g.v(r, c), str)]
+        if any(W.is_total(x) for x in names):
+            if any(W.is_subtotal(x) for x in names):
+                continue
             break
-        if any(isinstance(g.v(r, c), str) and W.norm(g.v(r, c)) in ('total', 'grand total') for c in range(1, min(g.cols, 3) + 1)):
-            break
+        if sum(1 for c, h in heads.items() if h and W.norm(g.v(r, c)) == h) >= 2:
+            break                                      # the headings again: a second table starts here
         if all(g.v(r, c) in (None, '') for c in cols):
             if rows:
                 break
@@ -179,9 +189,10 @@ def _body(g, header, cols, stop_col=None):
 
 
 def _numbers(g, rows, cols):
+    """Filled cells, the ones holding a quantity (numbers, "1,500", "1,500 pcs") and the first negative one."""
     filled = [(r, c, g.v(r, c)) for r in rows for c in cols if g.v(r, c) not in (None, '')]
-    numeric = [x for x in filled if is_number(x[2])]
-    negative = next((x for x in numeric if W.number(x[2]) < 0), None)
+    numeric = [(r, c, W.qty_value(v)[0]) for r, c, v in filled if W.qty_value(v)[0] is not None]
+    negative = next((x for x in numeric if x[2] < 0), None)
     return filled, numeric, negative
 
 
@@ -206,12 +217,14 @@ def matrix_at(g, r, mi):
     run = max(runs, key=lambda x: (sum(isinstance(v, str) for _, v in x), len(x)))
     first, last = run[0][0], run[-1][0]
     texts = sum(isinstance(v, str) for _, v in run)
-    left = [(c, v) for c, v in filled if c < first and isinstance(v, str)]
+    # Headings of a two-row header are often merged over both rows ("Colour" in A4:A5 above sizes in row 5).
+    left = [(c, g.head(r, c)) for c in range(1, first) if isinstance(g.head(r, c), str)]
     color = next((c for c, v in left if name_score(v, g.fields.aliases('color'))[0] >= HIGH), None)
     names = g.fields.aliases('style') + g.fields.aliases('description') + ['garment', 'garment style']
     label = next((c for c, v in left if c != color and name_score(v, names)[0] >= HIGH), None)
-    total = next((c for c, v in filled if c > last and isinstance(v, str) and
-                  (W.norm(v).startswith('total') or W.strip_units(W.norm(v)) in {W.norm(a) for a in g.fields.aliases('quantity')})), None)
+    right = [(c, g.head(r, c)) for c in range(last + 1, g.cols + 1) if isinstance(g.head(r, c), str)]
+    total = next((c for c, v in right if W.norm(v).startswith('total') or
+                  W.strip_units(W.norm(v)) in {W.norm(a) for a in g.fields.aliases('quantity')}), None)
     # ≥ 3 text headings, or numeric sizes (28, 30, 32) named as a table by a colour/style/total heading —
     # otherwise this is a row of quantities, not headings.
     if texts < 3 and not (color or label or total) or sum(isinstance(v, str) for _, v in filled) < 2:
@@ -224,9 +237,9 @@ def matrix_at(g, r, mi):
     evidence = [f'{len(sizes)} size headings in row {r}: {", ".join(sizes[:8])}{"…" if len(sizes) > 8 else ""}',
                 f'row{"s" if len(rows) > 1 else ""} {rows[0]}{"–" + str(rows[-1]) if len(rows) > 1 else ""} hold numbers under the sizes']
     if color:
-        evidence.append(f'“{W.text(g.v(r, color))}” heads the colour column')
+        evidence.append(f'“{W.text(g.head(r, color))}” heads the colour column')
     if total:
-        evidence.append(f'“{W.text(g.v(r, total))}” heads the total column')
+        evidence.append(f'“{W.text(g.head(r, total))}” heads the total column')
     conf = 'high' if texts >= 3 else 'medium'
     return dict(definition=dict(type='matrix', header_row=r, label_col=label, color_col=color, first_size_col=first,
                                 last_size_col=last, total_col=total),
@@ -250,19 +263,27 @@ def flat_at(g, r):
                     ns, alias = 1.0, stripped
             if ns >= HIGH:
                 scored.append((ns, -c, key, c, v, alias))
+    others = {}
     for ns, _, key, c, v, alias in sorted(scored, reverse=True):
-        if key in cols or c in cols.values():
+        if c in cols.values():
+            continue
+        if key in cols:
+            if ns == 1.0:
+                others.setdefault(key, []).append((c, v))      # a second column with the same heading meaning
             continue
         cols[key] = c
         evidence.append(f'“{W.text(v)}” heads the {Fv.label(key).lower()} column' + ('' if ns == 1.0 else f' (like “{alias}”, {ns:.2f})'))
     if not {'size', 'quantity'} <= cols.keys():
         return None
+    for key, alts in others.items():
+        evidence.append(f'{" and ".join(f"column {letter(c)} (“{W.text(v)}”)" for c, v in alts)} also name{"s" if len(alts) == 1 else ""} '
+                        f'the {Fv.label(key).lower()} — column {letter(cols[key])} is proposed; check which one is meant')
     rows = _body(g, r, list(cols.values()), cols.get('style'))
     cells, numeric, negative = _numbers(g, rows, [cols['quantity']])
     if not numeric or len(numeric) < 0.8 * len(cells) or negative:
         return None
     evidence.append(f'{len(numeric)} of {len(cells)} rows under “{W.text(g.v(r, cols["quantity"]))}” hold numbers')
-    conf = 'high' if all(x[0] == 1.0 for x in scored if x[2] in ('size', 'quantity')) else 'medium'
+    conf = 'high' if all(x[0] == 1.0 for x in scored if x[2] in ('size', 'quantity')) and not others else 'medium'
     return dict(definition=dict(type='flat', header_row=r, columns=cols),
                 info=dict(type='flat', header_row=r, confidence=conf, evidence=evidence, source='matcher'),
                 rows=(r, rows[-1]), score=(2 if conf == 'high' else 1) + 0.01 * len(cols))
@@ -282,7 +303,7 @@ def header_proposals(g, mi=None, skip_rows=()):
     """{field: proposal} with one-to-one assignment (best scores first; a cell is used once), plus the
     label-confirmed fields whose value cannot be that field (rejected with the reason)."""
     Fv = g.fields; cands = []; rejected = []
-    for cell in sorted(g.sheet['cells'], key=lambda x: (x['row'], x['col'])):
+    for cell in sorted(g.cells.values(), key=lambda x: (x['row'], x['col'])):       # hidden cells are never proposed
         r, c, v = cell['row'], cell['col'], cell['value']
         if r > LABEL_ROWS or r in skip_rows or not isinstance(v, str) or is_number(v) or is_date(v):
             continue
@@ -291,15 +312,23 @@ def header_proposals(g, mi=None, skip_rows=()):
             continue
         targets = [t for t in (g.right(r, c), g.below(r, c)) if t and t[0] not in skip_rows]
         targets = [t for t in targets if not W.looks_like_label(g.v(*t), Fv)]
+        caption = _caption_under_value(g, r, c, targets, skip_rows)
+        if caption:
+            targets = [t for t in targets if t != caption[1]] + [caption[0]]
         for key in Fv.header_keys:
             ns, _ = name_score(v, Fv.aliases(key))
             if ns < FLOOR:
                 continue
             for t in targets:
                 p = evaluate(g, key, *t, mi, label_at=(r, c))
+                if caption and t == caption[0] and p['value_score']:
+                    # captions under their values: the value may be above or below — shown, never pre-selected
+                    p['score'] = min(p['score'], 0.59); p['confidence'] = 'low'
+                    p['evidence'].append(f'“{W.text(v)}” sits under “{show(g.v(*t))}” and above “{show(g.v(*caption[1]))}”: '
+                                         'labels here may be written under their values — pick the cell')
                 if p['value_score'] == 0:
                     if ns >= HIGH:
-                        rejected.append(dict(field=key, cell=p['cell'], value=p['value'], source='matcher',
+                        rejected.append(dict(field=key, cell=p['cell'], value=p['value'], source='matcher', label_cell=p['label_cell'],
                                              reason=f'{p["cell"]} holds “{show(p["value"])}”, which is {_not(Fv.kind(key))}'))
                     continue
                 cands.append((p['score'], -r, -c, key, p))
@@ -308,8 +337,23 @@ def header_proposals(g, mi=None, skip_rows=()):
         if key in chosen or p['cell'] in used or p['label_cell'] in used:
             continue
         chosen[key] = p; used |= {p['cell'], p['label_cell']}
-    rejected = [x for x in rejected if (chosen.get(x['field']) or {}).get('cell') != x['cell']]
-    return chosen, list({(x['field'], x['cell']): x for x in rejected}.values())
+    # A label whose value was found (to its right) is not also reported for the other cell next to it (below).
+    rejected = [x for x in rejected if (chosen.get(x['field']) or {}).get('cell') != x['cell']
+                and (chosen.get(x['field']) or {}).get('label_cell') != x['label_cell']]
+    return chosen, list({(x['field'], x['cell']): {k: v for k, v in x.items() if k != 'label_cell'} for x in rejected}.values())
+
+
+def _caption_under_value(g, r, c, targets, skip_rows=()):
+    """((above), (below)) when the label at (r, c) is a caption written under its value: a value directly above,
+    no value to the right, and the cell below it sits right above the next caption (value / caption / value /
+    caption stacks). Then the cell below belongs to the next caption, not to this one."""
+    above, below = (r - 1, c), (r + 1, c)
+    if r < 2 or below not in targets or (r - 1) in skip_rows or g.right(r, c) in targets:
+        return None
+    up = g.v(*above)
+    if up in (None, '') or W.looks_like_label(up, g.fields):
+        return None
+    return (above, below) if W.looks_like_label(g.v(r + 2, c), g.fields) else None
 
 
 def _not(kind):
@@ -342,7 +386,7 @@ def check(sheet, definition, fields=None, masters=None, source=None):
         if r > g.rows or c > g.cols:
             reject(key, cell, None, f'{cell} is outside the sheet (it ends at {end})'); continue
         if v in (None, ''):
-            reject(key, cell, None, f'{cell} is empty'); continue
+            reject(key, cell, None, f'{cell} is in a hidden row or column of the file' if (r, c) in g.hidden else f'{cell} is empty'); continue
         if cell in used:
             reject(key, cell, v, f'{cell} is already used for {Fv.label(used[cell])}'); continue
         if isinstance(v, str) and (W.norm(v) in Fv.label_words or W.norm(v) in W.OTHER_LABELS):
@@ -359,6 +403,45 @@ def check(sheet, definition, fields=None, masters=None, source=None):
     t = d.get('table')
     d['table'] = _check_table(g, t, Fv, mi, reject) if t else None
     return d, rejected
+
+
+def _sample(values, n=3):
+    return ', '.join(f'“{show(v)}”' for v in list(dict.fromkeys(values))[:n])
+
+
+def _not_sizes(g, hr, cols, mi):
+    """Why the flat size column cannot be the sizes, or None. Sizes are written many ways, so only a clear sign
+    refuses it: the colour (or style) column holds the sizes instead — swapped headings — or its values are
+    colours of the colour master."""
+    rows = _body(g, hr, list(cols.values()), cols.get('style'))
+    def values(c):
+        return [g.v(r, c) for r in rows if g.v(r, c) not in (None, '')]
+    sizes = values(cols['size'])
+    if not sizes or sum(size_like(v, mi) for v in sizes) >= 0.5 * len(sizes):
+        return None
+    head = W.text(g.v(hr, cols['size']))
+    for key in ('color', 'style'):
+        other = values(cols[key]) if key in cols else []
+        if other and sum(size_like(v, mi) for v in other) >= 0.8 * len(other):
+            return (f'column {letter(cols["size"])} (“{head}”) holds {_sample(sizes)}, which are not sizes, while column '
+                    f'{letter(cols[key])} (“{W.text(g.v(hr, cols[key]))}”) holds the sizes ({_sample(other)}) — the headings look swapped')
+    colours = (mi or {}).get('color') or set()
+    if colours and sum(W.norm(v) in colours for v in sizes) >= 0.8 * len(sizes):
+        return f'column {letter(cols["size"])} (“{head}”) holds colours of the colour master ({_sample(sizes)}), not sizes'
+    return None
+
+
+def _size_left_out(g, hr, first, last, rows, mi):
+    """A column right next to the chosen size columns whose heading is another size with quantities under it
+    (an extra "XXL" on this file), or None. A size already inside the range starts a second block instead."""
+    inside = {W.norm(g.v(hr, c)) for c in range(first, last + 1)}
+    for step, start in ((1, last + 1), (-1, first - 1)):
+        c = start
+        while 1 <= c <= g.cols and size_like(g.v(hr, c), mi) and not isinstance(g.v(hr, c), bool) and W.norm(g.v(hr, c)) not in inside:
+            if any(W.qty_value(g.v(r, c))[0] for r in rows):
+                return c
+            c += step
+    return None
 
 
 def _check_table(g, t, Fv, mi, reject):
@@ -393,6 +476,10 @@ def _check_table(g, t, Fv, mi, reject):
                 problem = f'column {letter(q)} (“{name}”) is not numbers: {len(numeric)} of {len(filled)} filled rows hold a quantity'
             if problem:
                 reject('quantity', head, g.v(hr, q), problem); del cols['quantity']
+        if 'size' in cols:
+            problem = _not_sizes(g, hr, cols, mi)
+            if problem:
+                reject('size', W.address(cols['size'], hr), g.v(hr, cols['size']), problem); del cols['size']
         return dict(t, columns=cols)
     if t.get('type') == 'matrix':
         first, last = t.get('first_size_col'), t.get('last_size_col')
@@ -427,6 +514,12 @@ def _check_table(g, t, Fv, mi, reject):
         if problem:
             reject('quantity', span, None, problem)
             return None
+        left_out = _size_left_out(g, hr, first, last, rows, mi)
+        if left_out:
+            reject('size', W.address(left_out, hr), g.v(hr, left_out),
+                   f'{W.address(left_out, hr)} holds the size “{show(g.v(hr, left_out))}” right next to the size columns '
+                   f'{letter(first)}–{letter(last)}; its quantities would be left out')
+            return None
         return out
     reject('table', None, t.get('type'), 'choose a table type: one row per size, or sizes across columns')
     return None
@@ -444,8 +537,9 @@ def anchors(sheet, definition, fields=None):
     t = d.get('table') or {}; hr = t.get('header_row')
     cols = (t.get('columns') or {}) if t.get('type') == 'flat' else {k: t.get(k) for k in ('label_col', 'color_col', 'total_col')}
     for key, col in cols.items():
-        if isinstance(hr, int) and isinstance(col, int) and isinstance(g.v(hr, col), str):
-            out[f'table.{key}'] = dict(cell=W.address(col, hr), label_cell=W.address(col, hr), label=W.text(g.v(hr, col)))
+        if isinstance(hr, int) and isinstance(col, int) and isinstance(g.head(hr, col), str):
+            at = g.head_at(hr, col)                 # a merged two-row heading is anchored at its top-left cell
+            out[f'table.{key}'] = dict(cell=W.address(col, hr), label_cell=W.address(at[1], at[0]), label=W.text(g.head(hr, col)))
     return out
 
 
@@ -484,6 +578,9 @@ def suggest(sheet, fields=None, masters=None):
     table = found['info'] if found and ok['table'] else None
     if table and ok['table']['type'] == 'flat' and 'style' not in ok['table']['columns'] and 'style' not in ok['fields']:
         table['evidence'] = table['evidence'] + ['no style column or style label was found — pick the style cell']
+    if table and any(b['field'] in ('size', 'quantity', 'table') for b in bad):
+        table['confidence'] = 'low'                    # a column of it was refused: the person picks it
+        table['evidence'] = table['evidence'] + [f'refused: {b["reason"]}' for b in bad if b['field'] in ('size', 'quantity', 'table')]
     if not props and not table:
         return None
     return dict(sheet=sheet['name'], definition=ok, fields=props, table=table, rejected=rejected,

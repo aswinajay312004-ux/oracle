@@ -52,6 +52,7 @@ import json
 import logging
 import math
 import os
+import posixpath
 import re
 import struct
 import sys
@@ -71,8 +72,11 @@ MAX_PART = 40 * 1024 * 1024            # one part: a sheet's XML, the shared str
 MAX_JSON_DEPTH = 20
 MAX_MERGE_AREA = 10_000        # cells in one merged range; larger ranges are ignored
 MAX_MERGES = 20_000            # merged ranges kept per sheet
+MAX_MERGED_CELLS = 250_000     # cells covered by all kept merged ranges of one sheet
 MAX_SPAN_CELLS = 1_000_000     # cells covered by row-spans in one HTML page
+MAX_TEXT = 32 * 1024 * 1024    # characters of text (values, formulas, formats) in one file's cell model
 EXCEL_ROWS, EXCEL_COLS = 1_048_576, 16_384
+TEXT_NAMES = ('.csv', '.tsv', '.txt')
 
 
 def _env_int(name, default, low, high):
@@ -133,8 +137,14 @@ MSG_ODT = ('This is an OpenDocument text document, not a spreadsheet. Copy the o
            'as .xlsx or .ods and upload that.')
 MSG_NUMBERS = 'This is an Apple Numbers file. In Numbers choose File > Export To > Excel, then upload the .xlsx file.'
 MSG_ZIP = 'This file is a zip archive, not an Excel workbook. Unzip it and upload the Excel file inside.'
-MSG_XLS_PASSWORD = ('This .xls workbook is password-protected, so it cannot be read. Open it in Excel, remove the '
-                    'password (File > Info > Protect Workbook > Encrypt with Password), save it and upload again.')
+# Some .xls files are encrypted with Excel's built-in default password, so Excel opens them without asking.
+MSG_XLS_PASSWORD = ('This .xls workbook is password-protected (encrypted), so it cannot be read. Open it in Excel, remove the '
+                    'password if there is one (File > Info > Protect Workbook > Encrypt with Password), then save it as '
+                    '.xlsx and upload that.')
+MSG_ODS_PASSWORD = ('This spreadsheet is password-protected, so it cannot be read. Open it in LibreOffice, choose File > '
+                    'Save As, clear "Save with password", save it and upload again.')
+MSG_TOO_MUCH_TEXT = ('This file holds more than 32 million characters of text, far more than an order needs, so it was not '
+                     'read. Delete unused sheets, long notes and repeated text, save it and upload again.')
 MSG_XLS_DAMAGED = 'This .xls workbook could not be read. Open it in Excel, save it as .xlsx and upload again.'
 MSG_CANNOT_OPEN = 'This workbook could not be opened. Open it in Excel, save it again as an Excel Workbook (.xlsx) and upload.'
 MSG_BACKUP_READER = 'Read with the backup reader because the main reader could not open this workbook ({why}).'
@@ -143,8 +153,8 @@ WORKER_MESSAGES = {
                 'unused sheets and empty formatted rows, save it as .xlsx and upload again.'),
     'memory': ('This file needs more memory to read than is safe on this computer, so it was stopped. Delete unused '
                'sheets, pictures and empty formatted rows, save it and upload again.'),
-    'crashed': ('The reader stopped unexpectedly while opening this file, which usually means the file is damaged. '
-                'Open it in Excel, save it again as .xlsx and upload.'),
+    'crashed': ('The reader stopped unexpectedly while opening this file, usually because the file is damaged or needs '
+                'more memory than is safe. Open it in Excel, save it again as .xlsx and upload.'),
     'busy': 'Other files are being read right now. Wait a minute and upload again.',
     'too_large': 'This file holds too much data to show. Split it into smaller workbooks and upload them one at a time.',
 }
@@ -325,10 +335,14 @@ class Builder:
     """Collects cells for one sheet with limits and the shared cell format."""
 
     def __init__(self, name, hidden=False, capabilities=None, reader=''):
-        self.name = str(name)[:120] or 'Sheet1'; self.hidden = bool(hidden); self.cells = {}; self.merged = []
+        self.name = str(name)[:120] or 'Sheet1'; self.hidden = bool(hidden); self.cells = {}; self.merged = set()
         self.hidden_rows = _Spans(EXCEL_ROWS); self.hidden_cols = _Spans(EXCEL_COLS)
         self.capabilities = dict(capabilities if capabilities is not None else VALUES_ONLY)
-        self.reader = reader; self.notes = []; self.dropped_merges = 0
+        self.reader = reader; self.notes = []
+        self.dropped_merges = 0      # merged ranges larger than MAX_MERGE_AREA
+        self.excess_merges = 0       # merged ranges past MAX_MERGES / MAX_MERGED_CELLS
+        self.bad_merges = 0          # merged-range references that could not be read
+        self.merged_area = 0; self.outside = 0
 
     def put(self, row, col, value, formula=None, error=False, **extra):
         if isinstance(value, float) and not math.isfinite(value):
@@ -343,6 +357,9 @@ class Builder:
         self._add(row, col, None, formula, False, {})
 
     def _add(self, row, col, value, formula, error, extra):
+        if not (1 <= row <= EXCEL_ROWS and 1 <= col <= EXCEL_COLS):
+            self.outside += 1             # Excel itself cannot show it (HTML, JSON and text have no grid limit)
+            return
         if len(self.cells) >= MAX_CELLS and (row, col) not in self.cells:
             raise Unreadable(f'{self.name}: sheet exceeds {MAX_CELLS:,} filled cells; trim it and upload again.')
         cell = dict(cell=address(col, row), row=row, col=col, value=value, formula=formula, error=bool(error))
@@ -357,10 +374,16 @@ class Builder:
         r0, c0, r1, c1 = max(1, r0), max(1, c0), min(r1, EXCEL_ROWS), min(c1, EXCEL_COLS)
         if r1 < r0 or c1 < c0 or (r0 == r1 and c0 == c1):
             return
-        if (r1 - r0 + 1) * (c1 - c0 + 1) > MAX_MERGE_AREA or len(self.merged) >= MAX_MERGES:
-            self.dropped_merges += 1
+        box = (r0, c0, r1, c1)
+        if box in self.merged:
             return
-        self.merged.append(f'{address(c0, r0)}:{address(c1, r1)}')
+        area = (r1 - r0 + 1) * (c1 - c0 + 1)
+        if area > MAX_MERGE_AREA:
+            self.dropped_merges += 1
+        elif len(self.merged) >= MAX_MERGES or self.merged_area + area > MAX_MERGED_CELLS:
+            self.excess_merges += 1      # what the merged areas cover is bounded, not only their number
+        else:
+            self.merged.add(box); self.merged_area += area
 
     def sheet(self):
         rows = max((r for r, _ in self.cells), default=0); cols = max((c for _, c in self.cells), default=0)
@@ -369,8 +392,16 @@ class Builder:
         notes = list(self.notes)
         if self.dropped_merges:
             notes.append(f'{self.dropped_merges:,} merged areas larger than {MAX_MERGE_AREA:,} cells were ignored.')
+        if self.excess_merges:
+            notes.append(f'{self.excess_merges:,} merged areas were ignored because the sheet has too many (the limit is '
+                         f'{MAX_MERGES:,} areas covering {MAX_MERGED_CELLS:,} cells).')
+        if self.bad_merges:
+            notes.append(f'{self.bad_merges:,} merged areas could not be read and were ignored.')
+        if self.outside:
+            notes.append(f'{self.outside:,} cells beyond Excel\'s last row ({EXCEL_ROWS:,}) or column ({EXCEL_COLS:,}) were ignored.')
         caps = {k: self.capabilities.get(k, False) for k in CAPABILITY_KEYS}
-        return dict(name=self.name, hidden=self.hidden, rows=rows, cols=cols, merged=self.merged, cells=cells,
+        merged = [f'{address(c0, r0)}:{address(c1, r1)}' for r0, c0, r1, c1 in sorted(self.merged)]
+        return dict(name=self.name, hidden=self.hidden, rows=rows, cols=cols, merged=merged, cells=cells,
                     capabilities=caps, reader=self.reader, notes=notes)
 
 
@@ -405,7 +436,9 @@ def _zip_entry_count(content):
 
 def _zip_infos(content):
     count = _zip_entry_count(content)
-    if count is not None and count > MAX_ZIP_ENTRIES:
+    # zipfile ignores the declared count and builds every central-directory record it finds, so the
+    # records themselves are counted too (a cheap scan; a stray match in compressed data is harmless).
+    if (count is not None and count > MAX_ZIP_ENTRIES) or content.count(b'PK\x01\x02') > MAX_ZIP_ENTRIES:
         raise Unreadable(f'This workbook has more than {MAX_ZIP_ENTRIES:,} internal parts, so it cannot be read safely. '
                          'Open it in Excel, save it again and upload.')
     try:
@@ -434,6 +467,8 @@ def _zip_kind(content):
         except Exception as exc:
             raise Unsupported(MSG_DAMAGED) from exc
         if declared.startswith(ODS_MIME):
+            if _odf_encrypted(content, names.get('meta-inf/manifest.xml')):
+                raise Unsupported(MSG_ODS_PASSWORD)
             return 'ods'
         if declared.startswith(b'application/vnd.oasis.opendocument.text'):
             raise Unsupported(MSG_ODT)
@@ -446,6 +481,17 @@ def _zip_kind(content):
     if 'index/document.iwa' in names or 'index.xml' in names:
         raise Unsupported(MSG_NUMBERS)
     raise Unsupported(MSG_ZIP)
+
+
+def _odf_encrypted(content, manifest):
+    """True when an OpenDocument file was saved with a password: its manifest lists encryption data."""
+    if manifest is None or manifest.file_size > 1024 * 1024:
+        return False
+    try:
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            return b'encryption-data' in archive.read(manifest)
+    except Exception:
+        return False
 
 
 def _ole_kind(content):
@@ -627,16 +673,29 @@ def _root_element(text):
     return prefix, local, attrs
 
 
-def _markup_kind(head, content):
+SS_WORKBOOK = re.compile(r'<(?:[A-Za-z_][\w.\-]*:)?Workbook\b[^>]{0,4000}?urn:schemas-microsoft-com:office:spreadsheet')
+HTML_TABLE = re.compile(r'<\s*table[\s>]', re.I)
+HTML_CELL = re.compile(r'<\s*t[dh][\s>/]', re.I)
+
+
+def _markup_kind(head, content, filename=''):
     root = _root_element(head)
+    if root is None and len(content) > 8192:          # a prolog (comments, DOCTYPE) longer than the sniffed head
+        root = _root_element(_decode_head(content[:1 << 20]))
     if root:
         prefix, local, attrs = root
         namespace = attrs.get(f'xmlns:{prefix.lower()}' if prefix else 'xmlns')
         if local == 'Workbook' and namespace == SS_NS:
             return 'xml2003'
     wide = content[:2] in (b'\xff\xfe', b'\xfe\xff') or _utf16_guess(content[:4096])
-    if re.search(r'<\s*table[\s>]', _decode(content), re.I) if wide else re.search(rb'<\s*table[\s>]', content, re.I):
+    text = _decode(content) if wide else content.decode('latin-1')     # latin-1: every byte, one char, for searching
+    if root is None and SS_WORKBOOK.search(text[:1 << 20]):
+        return 'xml2003'          # a SpreadsheetML root we could not reach: its reader refuses DTDs plainly
+    # SpreadsheetML's <Table> is not an HTML table: an HTML table always has <td> or <th> cells.
+    if HTML_TABLE.search(text) and HTML_CELL.search(text):
         return 'html'
+    if filename.lower().endswith(TEXT_NAMES) and any(d in head for d in DELIMITERS):
+        return 'csv'              # a text export whose first value starts with '<'
     raise Unsupported('This XML/HTML file contains no spreadsheet table. Upload the buyer file as .xlsx, .xls, .csv or .json.')
 
 
@@ -644,6 +703,8 @@ def sniff(content, filename=''):
     """The real format of the bytes: ooxml, xls, xlsb, ods, xml2003, html, mhtml, csv or json."""
     if not content:
         raise Unsupported(MSG_EMPTY)
+    if len(content) > MAX_BYTES:     # the server reads MAX_BYTES + 1: a cut-off zip must not be called "damaged"
+        raise Unreadable(MSG_TOO_BIG)
     try:
         return _sniff(bytes(content), str(filename or ''))
     except (Unsupported, Unreadable):
@@ -674,10 +735,13 @@ def _sniff(content, filename):
     if _is_mime(head):
         return 'mhtml'
     if head[:1] in ('{', '['):
-        return 'json'
+        return 'json'             # a text file that only starts like JSON is retried as CSV (_read_inline)
     if head.startswith('<'):
-        return _markup_kind(head, content)
-    if filename.lower().endswith(('.csv', '.tsv', '.txt')) or any(d in head for d in ('\t', ',', ';', '|')):
+        return _markup_kind(head, content, filename)
+    text_name = filename.lower().endswith(TEXT_NAMES)
+    if not text_name and HTML_TABLE.search(head) and HTML_CELL.search(head):
+        return 'html'             # an "Excel" web export that starts with a line of text before its <table>
+    if text_name or any(d in head for d in DELIMITERS):
         return 'csv'
     raise Unsupported(MSG_NOT_EXCEL)
 
@@ -733,7 +797,12 @@ def _read_inline(content, filename=''):
         raise Unreadable(MSG_TOO_BIG)
     kind = sniff(content, filename)
     try:
-        sheets = READERS[kind](bytes(content))
+        try:
+            sheets = READERS[kind](bytes(content))
+        except _NotJson:
+            if not filename.lower().endswith(TEXT_NAMES):
+                raise
+            kind, sheets = 'csv', read_csv(bytes(content))    # "[PO No],[Style]" in a .csv is a CSV header
     except (Unsupported, Unreadable):
         raise
     except MemoryError:
@@ -752,7 +821,20 @@ def _read_inline(content, filename=''):
         raise Unreadable(f'The workbook has more than {MAX_SHEETS} sheets. Delete the sheets that are not part of the order, save it and upload again.')
     if sum(len(s['cells']) for s in sheets) > MAX_TOTAL_CELLS:
         raise Unreadable(f'The workbook has more than {MAX_TOTAL_CELLS:,} filled cells. Split it into smaller workbooks and upload them one at a time.')
+    if _text_size(sheets) > MAX_TEXT:
+        raise Unreadable(MSG_TOO_MUCH_TEXT)
     return kind, sheets
+
+
+def _text_size(sheets):
+    """Characters of text in the cell model. A tiny workbook can make one long shared string (or format
+    code) appear in every cell; the server would receive a copy per cell, so the total is bounded."""
+    total = 0
+    for s in sheets:
+        for c in s['cells']:
+            value = c['value']
+            total += (len(value) if isinstance(value, str) else 0) + len(c['formula'] or '') + len(c.get('fmt') or '')
+    return total
 
 
 # --- zip containers: real sizes before any parser runs --------------------------------------------------
@@ -828,24 +910,171 @@ def _zip_part(content, wanted, limit=4096):
 
 
 # --- .xlsx .xlsm .xltx .xltm ---------------------------------------------------------------------------
+def _column_number(letters):
+    n = 0
+    for ch in letters:
+        n = n * 26 + ord(ch) - 64
+    return n
+
+
+def _merge_box(ref):
+    """(r0, c0, r1, c1) for one merged-range reference as files write it - 'A1:C3', '$A$1:$C$3', 'C3:A1',
+    LibreOffice's whole rows '1:3' and whole columns 'A:C' - clamped to Excel's grid; None if unreadable."""
+    parts = ref.replace('$', '').strip().upper().split(':')
+    if len(parts) == 1:
+        parts *= 2
+    if len(parts) != 2:
+        return None
+    found = [re.fullmatch(r'([A-Z]{0,3})(\d{0,7})', p) for p in parts]
+    if not all(found) or any(not (m.group(1) or m.group(2)) for m in found):
+        return None
+    (ca, ra), (cb, rb) = found[0].groups(), found[1].groups()
+    if bool(ca) != bool(cb) or bool(ra) != bool(rb):
+        return None                                          # 'A1:3' mixes the two forms
+    c0, c1 = (_column_number(ca), _column_number(cb)) if ca else (1, EXCEL_COLS)
+    r0, r1 = (int(ra), int(rb)) if ra else (1, EXCEL_ROWS)
+    r0, r1 = sorted((r0, r1)); c0, c1 = sorted((c0, c1))
+    if r0 < 1 or c0 < 1 or r0 > EXCEL_ROWS or c0 > EXCEL_COLS:
+        return None
+    return r0, c0, min(r1, EXCEL_ROWS), min(c1, EXCEL_COLS)
+
+
+def _merge_block(xml):
+    """(start, end, prefix) of a worksheet's <mergeCells> element (any namespace prefix), or None."""
+    at = 0
+    while True:
+        i = xml.find(b'mergeCells', at)
+        if i < 0:
+            return None
+        at = i + 10
+        lt = xml.rfind(b'<', max(0, i - 64), i)
+        m = re.fullmatch(rb'<((?:[A-Za-z_][\w.\-]*:)?)', xml[lt:i]) if lt >= 0 else None
+        if not m:
+            continue
+        prefix = m.group(1); gt = xml.find(b'>', i)
+        if gt < 0:
+            return None
+        if xml[gt - 1:gt] == b'/':
+            return lt, gt + 1, prefix
+        close = xml.find(b'</' + prefix + b'mergeCells', gt)
+        end = xml.find(b'>', close) if close >= 0 else -1
+        return (lt, end + 1, prefix) if end >= 0 else None
+
+
+def _sanitize_merges(xml):
+    """(new sheet XML or None when nothing changes, {'large', 'excess', 'bad'} counts). openpyxl turns every
+    cell of a merged range into an object while it loads (A1:XFD1048576 is 17 billion of them), and
+    openpyxl and calamine both refuse a whole workbook over one reference such as LibreOffice's '1:1'.
+    Ranges are normalised and kept by the same rules as Builder.merge, before either library runs."""
+    counts = dict(large=0, excess=0, bad=0)
+    block = _merge_block(xml)
+    if block is None:
+        return None, counts
+    start, end, prefix = block
+    refs = [m.group(2).decode('ascii', 'replace') for m in re.finditer(rb'\bref\s*=\s*(["\'])([^"\']{0,400})\1', xml[start:end])]
+    kept, seen, area_total, changed = [], set(), 0, False
+    for ref in refs:
+        pieces = ref.split() or ['']                        # 'A1:B2 D1:E2' (a list) is two ranges
+        changed = changed or pieces != [ref]
+        for one in pieces:
+            box = _merge_box(one)
+            if box is None:
+                counts['bad'] += 1; changed = True; continue
+            r0, c0, r1, c1 = box
+            area = (r1 - r0 + 1) * (c1 - c0 + 1)
+            if area == 1 or box in seen:
+                changed = True; continue
+            if area > MAX_MERGE_AREA:
+                counts['large'] += 1; changed = True; continue
+            if len(kept) >= MAX_MERGES or area_total + area > MAX_MERGED_CELLS:
+                counts['excess'] += 1; changed = True; continue
+            normal = f'{address(c0, r0)}:{address(c1, r1)}'
+            changed = changed or normal != one
+            kept.append(normal); seen.add(box); area_total += area
+    if not changed:
+        return None, counts
+    p = prefix.decode('ascii')
+    new = (f'<{p}mergeCells count="{len(kept)}">' + ''.join(f'<{p}mergeCell ref="{r}"/>' for r in kept) + f'</{p}mergeCells>') if kept else ''
+    return xml[:start] + new.encode('ascii') + xml[end:], counts
+
+
+def _ooxml_sheet_names(archive, names):
+    """{normalised worksheet part name: sheet name} from the workbook part and its relationships."""
+    from defusedxml.ElementTree import fromstring
+    local = lambda tag: tag.rsplit('}', 1)[-1]
+    try:
+        targets = {el.get('Id'): el.get('Target') or '' for el in fromstring(archive.read(names['xl/_rels/workbook.xml.rels'])).iter()
+                   if local(el.tag) == 'Relationship'}
+        out = {}
+        for el in fromstring(archive.read(names['xl/workbook.xml'])).iter():
+            if local(el.tag) == 'sheet':
+                rid = next((v for k, v in el.attrib.items() if local(k) == 'id'), None)
+                target = targets.get(rid, '').replace('\\', '/')
+                if target:
+                    path = target.lstrip('/') if target.startswith('/') else 'xl/' + target
+                    out[_zname(posixpath.normpath(path))] = el.get('name') or ''
+        return out
+    except Exception:            # the reader itself reports a damaged workbook; this map only places notes
+        return {}
+
+
+def _ooxml_prepare(content):
+    """(content for the readers, {sheet name: merge counts}) after checking each worksheet part: absurd
+    cell counts are refused before openpyxl spends a minute on them, and merged ranges are made safe."""
+    replaced, counts = {}, {}
+    with zipfile.ZipFile(BytesIO(content)) as archive:
+        infos = archive.infolist()
+        names = {_zname(i.filename): i for i in infos}
+        sheet_names = None
+        for info in infos:
+            name = _zname(info.filename)
+            if not (name.startswith('xl/worksheets/') and name.endswith('.xml')):
+                continue
+            xml = archive.read(info)
+            if sheet_names is None:
+                sheet_names = _ooxml_sheet_names(archive, names)
+            label = sheet_names.get(name) or name.rsplit('/', 1)[-1]
+            if xml.count(b'<c ') + xml.count(b'<c>') + xml.count(b':c ') > MAX_CELLS * 4:
+                raise Unreadable(f'{label}: sheet is too large; trim unused formatting and upload again.')
+            new, found = _sanitize_merges(xml)
+            if new is not None:
+                replaced[info.filename] = new
+            if any(found.values()):
+                counts[label[:120]] = found
+        if not replaced:
+            return content, counts
+        out = BytesIO()
+        with zipfile.ZipFile(out, 'w', zipfile.ZIP_STORED) as rebuilt:     # stored: no CPU spent compressing
+            for info in infos:
+                rebuilt.writestr(info.filename, replaced[info.filename] if info.filename in replaced else archive.read(info))
+    return out.getvalue(), counts
+
+
+def _apply_merge_counts(builder, counts):
+    found = counts.get(builder.name) or {}
+    builder.dropped_merges += found.get('large', 0); builder.excess_merges += found.get('excess', 0)
+    builder.bad_merges += found.get('bad', 0)
+
+
 def read_ooxml(content):
     _zip_guard(content)
+    content, merges = _ooxml_prepare(content)
     head = _zip_part(content, 'xl/workbook.xml') or b''
     if b'purl.oclc.org/ooxml' in head or b'conformance="strict"' in head:
-        return _calamine_fallback(content, 'it is saved as Strict Open XML')
+        return _calamine_fallback(content, 'it is saved as Strict Open XML', merges)
     try:
-        sheets = _openpyxl_sheets(content)
+        sheets = _openpyxl_sheets(content, merges)
     except (Unsupported, Unreadable):
         raise
     except Exception as exc:     # openpyxl raises many types for damaged files
         log.info('openpyxl could not read the workbook (%s: %s); trying calamine', type(exc).__name__, str(exc)[:200])
-        return _calamine_fallback(content, 'the file is damaged or was written by an unusual program')
+        return _calamine_fallback(content, 'the file is damaged or was written by an unusual program', merges)
     if not sheets:
-        return _calamine_fallback(content, 'the main reader found no worksheets')
+        return _calamine_fallback(content, 'the main reader found no worksheets', merges)
     return sheets
 
 
-def _openpyxl_sheets(content):
+def _openpyxl_sheets(content, merges=None):
     from openpyxl import load_workbook
     from openpyxl.utils import column_index_from_string
     with warnings.catch_warnings():
@@ -867,6 +1096,7 @@ def _openpyxl_sheets(content):
             if len(stored) > MAX_CELLS * 4:
                 raise Unreadable(f'{ws.title}: sheet is too large; trim unused formatting and upload again.')
             b = Builder(ws.title, ws.sheet_state != 'visible', FULL_CAPS, 'openpyxl')
+            _apply_merge_counts(b, merges or {})
             for r, d in ws.row_dimensions.items():
                 if d.hidden or d.ht == 0:                # a zero-height row is hidden too
                     b.hidden_rows.add(r)
@@ -899,9 +1129,9 @@ def _openpyxl_sheets(content):
         raw.close(); cached.close()
 
 
-def _calamine_fallback(content, why):
+def _calamine_fallback(content, why, merges=None):
     try:
-        return read_calamine(content, note=MSG_BACKUP_READER.format(why=why))
+        return read_calamine(content, note=MSG_BACKUP_READER.format(why=why), merges=merges)
     except Unsupported:
         raise
     except Exception as exc:
@@ -995,11 +1225,11 @@ def _xls_value(book, cell, xlrd):
 INTERRUPTS = (KeyboardInterrupt, SystemExit, GeneratorExit)
 
 
-def _calamine_builders(content, note=None):
+def _calamine_builders(content, note=None, merges=None):
     """Builders for every worksheet calamine reads. A panic inside the Rust library (pyo3's
     PanicException derives from BaseException, not Exception) becomes a plain refusal."""
     try:
-        return _calamine_sheets(content, note)
+        return _calamine_sheets(content, note, merges or {})
     except INTERRUPTS:
         raise
     except Exception:
@@ -1009,7 +1239,7 @@ def _calamine_builders(content, note=None):
         raise Unreadable(MSG_CANNOT_OPEN) from exc
 
 
-def _calamine_sheets(content, note):
+def _calamine_sheets(content, note, merge_counts):
     import python_calamine as pc
     try:
         book = pc.CalamineWorkbook.from_filelike(BytesIO(content))
@@ -1032,6 +1262,7 @@ def _calamine_sheets(content, note):
                         dict(VALUES_ONLY, merged=merges is not None), 'calamine')
             if note:
                 b.notes.append(note)
+            _apply_merge_counts(b, merge_counts)
             for r, row in enumerate(ws.to_python(skip_empty_area=False), 1):
                 for c, value in enumerate(row, 1):
                     if value is not None and value != '':
@@ -1048,8 +1279,8 @@ def _calamine_sheets(content, note):
     return builders
 
 
-def read_calamine(content, note=None):
-    return [b.sheet() for b in _calamine_builders(content, note)]
+def read_calamine(content, note=None, merges=None):
+    return [b.sheet() for b in _calamine_builders(content, note, merges)]
 
 
 def read_zip_calamine(content):
@@ -1208,10 +1439,15 @@ def _ods_layout(content):
                     elif tag in (CELL, COVERED):
                         n = _repeat(el.get(T + 'number-columns-repeated'), EXCEL_COLS)
                         if tag == CELL and row < EXCEL_ROWS and col < EXCEL_COLS:
+                            # A repeated row repeats its cells too (calamine expands their values), so its
+                            # merges and number formats apply to every repetition, within the caps.
+                            repeats = min(repeat_rows, EXCEL_ROWS - row)
                             across = _repeat(el.get(T + 'number-columns-spanned'), EXCEL_COLS)
                             down = _repeat(el.get(T + 'number-rows-spanned'), EXCEL_ROWS)
-                            if (across > 1 or down > 1) and len(current['merges']) < MAX_MERGES * 2:
-                                current['merges'].append((row + 1, col + 1, min(row + down, EXCEL_ROWS), min(col + across, EXCEL_COLS)))
+                            if across > 1 or down > 1:
+                                for k in range(min(repeats, MAX_MERGES * 2 - len(current['merges']))):
+                                    first = row + 1 + k
+                                    current['merges'].append((first, col + 1, min(first + down - 1, EXCEL_ROWS), min(col + across, EXCEL_COLS)))
                             if el.get(ODF_OFFICE + 'value-type') == 'float' and len(current['formats']) < MAX_CELLS:
                                 style = el.get(T + 'style-name') or row_style
                                 if not style:
@@ -1220,8 +1456,10 @@ def _ods_layout(content):
                                         style = current['colstyles'][i][1]
                                 code = code_for(style) if style else None
                                 if code:
-                                    for k in range(min(n, EXCEL_COLS - col, MAX_CELLS - len(current['formats']))):
-                                        current['formats'][(row + 1, col + 1 + k)] = code
+                                    budget = MAX_CELLS - len(current['formats'])
+                                    for r_k in range(min(repeats, budget)):
+                                        for k in range(min(n, EXCEL_COLS - col, MAX_CELLS - len(current['formats']))):
+                                            current['formats'][(row + 1 + r_k, col + 1 + k)] = code
                         col = min(col + n, EXCEL_COLS)
                 else:
                     stack.pop()
@@ -1296,7 +1534,7 @@ def read_xml2003(content):
         table = ws.find(ss + 'Table')
         if table is None:
             sheets.append(b.sheet()); continue
-        column_styles = {}; col = 0; outside = False
+        column_styles = []; col = 0; outside = False
         for column in table.findall(ss + 'Column'):
             col = _index(column.get(ss + 'Index'), col)
             if col > EXCEL_COLS:
@@ -1304,9 +1542,15 @@ def read_xml2003(content):
             span = _count(column.get(ss + 'Span'), EXCEL_COLS - col)
             if column.get(ss + 'Hidden') == '1' or column.get(ss + 'Width') in ('0', '0.0'):
                 b.hidden_cols.add(col, col + span)
-            if column.get(ss + 'StyleID') and len(column_styles) < 1000:
-                column_styles[(col, col + span)] = column.get(ss + 'StyleID')
+            if column.get(ss + 'StyleID') and len(column_styles) < MAX_STYLES:
+                column_styles.append((col, col + span, column.get(ss + 'StyleID')))
             col += span
+        column_styles.sort(key=lambda s: s[0])             # looked up by bisection: one step per cell
+        column_starts = [s[0] for s in column_styles]
+
+        def column_style(c):
+            i = bisect.bisect_right(column_starts, c) - 1
+            return column_styles[i][2] if i >= 0 and c <= column_styles[i][1] else None
         r = 0
         for row in table.findall(ss + 'Row'):
             r = _index(row.get(ss + 'Index'), r)
@@ -1331,8 +1575,7 @@ def read_xml2003(content):
                     extras = {}
                     if kind == 'Number':
                         value = typed(text) if NUMBER.match(text.strip() or 'x') else _float(text)
-                        style = cell.get(ss + 'StyleID') or row_style or next(
-                            (s for (a, z), s in column_styles.items() if a <= c <= z), None) or 'Default'
+                        style = cell.get(ss + 'StyleID') or row_style or column_style(c) or 'Default'
                         value, extras = _formatted(value, styles.get(style))
                     elif kind == 'DateTime':
                         value = _iso(text)
@@ -1606,8 +1849,21 @@ def _html_sheet(text, name='Sheet1', css=''):
     return parser.b.sheet()
 
 
+def _own_sheet_name(text):
+    """The sheet name in a page that is one Excel worksheet (its <x:ExcelWorksheet> block names no other page)."""
+    head = text[:200_000]
+    lower = head.lower()
+    if lower.count('<x:excelworksheet>') != 1 or 'worksheetsource' in lower:
+        return None
+    m = re.search(r'<x:Name>([^<]{1,200})</x:Name>', head, re.I)
+    if not m:
+        return None
+    return unescape(m.group(1)).strip() or None
+
+
 def read_html(content):
-    sheet = _html_sheet(_decode_html(content))
+    text = _decode_html(content)
+    sheet = _html_sheet(text, _own_sheet_name(text) or 'Sheet1')
     if not sheet['cells']:
         raise Unsupported('This HTML file has no table data. Upload the buyer file as .xlsx, .xls, .csv or .json.')
     return [sheet]
@@ -1660,7 +1916,7 @@ def read_mhtml(content):
             continue                            # Excel's frameset and tab-strip pages hold no order data
         if not re.search(r'<\s*table[\s>]', text, re.I):
             continue
-        sheet = _html_sheet(text, names.get(key) or f'Sheet{len(sheets) + 1}', '\n'.join(css))
+        sheet = _html_sheet(text, names.get(key) or _own_sheet_name(text) or f'Sheet{len(sheets) + 1}', '\n'.join(css))
         if sheet['cells']:
             sheets.append(sheet)
     if not sheets:
@@ -1698,11 +1954,10 @@ def _delimiter(sample):
             rows = [r for r in csv.reader(StringIO(sample), delimiter=d) if any(x.strip() for x in r)][:200]
         except csv.Error:
             continue
-        if not rows:
+        widths = Counter(len(r) for r in rows if len(r) >= 2)     # title and ruler lines have one value
+        if not widths:
             continue
-        width, count = max(Counter(len(r) for r in rows).items(), key=lambda kv: (kv[1], kv[0]))
-        if width < 2:
-            continue
+        width, count = max(widths.items(), key=lambda kv: (kv[1], kv[0]))
         cells = [x for r in rows for x in r]
         score = (count / len(rows)) * (sum(_looks_typed(x, d) for x in cells) / len(cells))
         if score > best[0] + 1e-9 or (abs(score - best[0]) <= 1e-9 and width > best[1]):
@@ -1710,10 +1965,18 @@ def _delimiter(sample):
     return best[2]
 
 
-def _csv_value(raw):
+# Files written with a decimal comma (Europe: 12,50) group thousands with dots, so 1.500 there is fifteen
+# hundred, not one and a half; 1,500 may be one and a half. Such values are kept as text and flagged.
+EU_DECIMAL = re.compile(r'^[-+]?(\d+,\d{1,2}|\d{1,3}(\.\d{3})+,\d+)$')
+EU_AMBIGUOUS = re.compile(r'^[-+]?(\d{1,3}(\.\d{3})+|\d{1,3},\d{3})$')
+
+
+def _csv_value(raw, decimal_comma=False):
     m = EXCEL_TEXT.match(raw.strip())
     if m:
         return m.group(1).replace('""', '"'), {}
+    if decimal_comma and EU_AMBIGUOUS.match(raw.strip()):
+        return clean(raw), {'flag': 'decimal_comma'}
     return _text_value(raw)
 
 
@@ -1722,19 +1985,27 @@ def read_csv(content):
     delimiter = delimiter or _delimiter(text[:20000])
     b = Builder('Sheet1', capabilities=TEXT_CAPS, reader='csv')
     reader = csv.reader(StringIO(text), delimiter=delimiter)
+    found, filled = [], 0
     try:
         for r, row in enumerate(reader, 1):
             if r > MAX_CELLS:
                 raise Unreadable('The text file has too many rows. Split it into smaller files and upload them one at a time.')
             for c, raw in enumerate(row, 1):
-                value, extras = _csv_value(raw)
-                b.put(r, c, value, **extras)
+                if raw and not raw.isspace():         # ERP exports pad rows with thousands of empty fields
+                    filled += 1
+                    if filled > MAX_CELLS:
+                        raise Unreadable(f'Sheet1: sheet exceeds {MAX_CELLS:,} filled cells; trim it and upload again.')
+                    found.append((r, c, raw))
     except csv.Error as exc:
         limit = 'larger than field limit' in str(exc)
         raise Unreadable(f'Line {reader.line_num} of this text file could not be read'
                          + (' because one value is longer than any spreadsheet cell, usually because a quotation mark is not closed. '
                             if limit else f' ({str(exc)[:80]}). ')
                          + 'Open the file in Excel, check that line, save it again as CSV and upload.') from exc
+    decimal_comma = delimiter == ';' or any(EU_DECIMAL.match(raw.strip()) for _, _, raw in found)
+    for r, c, raw in found:
+        value, extras = _csv_value(raw, decimal_comma)
+        b.put(r, c, value, **extras)
     return [b.sheet()]
 
 
@@ -1744,6 +2015,10 @@ META_KEYS = {'count', 'total', 'total_count', 'page', 'pages', 'page_size', 'per
              'previous', 'prev', 'status', 'success', 'ok', 'message', 'error', 'errors', 'meta', 'links', 'version',
              'generated', 'generated_at', 'timestamp', 'columns', 'fields', 'schema', 'index'}
 JSON_CAPS = dict(merged=None, hidden_rows=None, hidden_cols=None, number_formats=None, formulas=None)
+
+
+class _NotJson(Unreadable):
+    """The text is not JSON at all (a .csv whose first value starts with '[' is retried as CSV)."""
 
 
 def _no_constants(name):
@@ -1812,7 +2087,7 @@ def read_json(content):
         data = _ndjson(text) if 'Extra data' in str(exc) else None
         if data is None:
             reason = 'a number has more than 4,300 digits' if 'integer string conversion' in str(exc) else getattr(exc, 'msg', str(exc))[:80]
-            raise Unreadable(f'This JSON file is not valid JSON ({reason}). Fix it or export the data again, and upload.') from exc
+            raise _NotJson(f'This JSON file is not valid JSON ({reason}). Fix it or export the data again, and upload.') from exc
     _depth(data)
     if isinstance(data, dict) and isinstance(data.get('sheets'), list):
         return [_json_sheet(s) for s in data['sheets'][:MAX_SHEETS + 1] if isinstance(s, dict)]
@@ -1864,15 +2139,31 @@ def _json_sheet(spec):
     return b.sheet()
 
 
+def _key_columns(records):
+    """{key: column} in first-seen order. Records are then laid out by their own keys, so records with
+    many different keys cost what they hold, not records x keys."""
+    columns = {}
+    for x in records:
+        for k in x:
+            if k not in columns:
+                columns[k] = len(columns) + 1
+    return columns
+
+
+def _put_records(b, records, header_row):
+    columns = _key_columns(records)
+    for k, c in columns.items():
+        b.put(header_row, c, str(k))
+    for r, x in enumerate(records, header_row + 1):
+        for k, v in x.items():
+            b.put(r, columns[k], _scalar(v))
+    return header_row + len(records)
+
+
 def _grid_from(name, rows):
     b = Builder(name, capabilities=JSON_CAPS, reader='json')
     if rows and all(isinstance(x, dict) for x in rows):
-        keys = list(dict.fromkeys(k for x in rows for k in x))
-        for c, k in enumerate(keys, 1):
-            b.put(1, c, str(k))
-        for r, x in enumerate(rows, 2):
-            for c, k in enumerate(keys, 1):
-                b.put(r, c, _scalar(x.get(k)))
+        _put_records(b, rows, 1)
     else:
         for r, row in enumerate(rows, 1):
             for c, v in enumerate(row if isinstance(row, list) else [row], 1):
@@ -1893,14 +2184,7 @@ def _write_document(b, doc, cursor, title=None):
             cursor[0] += 1; _write_document(b, v, cursor, str(k))
         elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
             cursor[0] += 2; b.put(cursor[0], 1, str(k))
-            keys = list(dict.fromkeys(kk for x in v for kk in x))
-            cursor[0] += 1
-            for c, kk in enumerate(keys, 1):
-                b.put(cursor[0], c, str(kk))
-            for x in v:
-                cursor[0] += 1
-                for c, kk in enumerate(keys, 1):
-                    b.put(cursor[0], c, _scalar(x.get(kk)))
+            cursor[0] = _put_records(b, v, cursor[0] + 1)
         elif isinstance(v, list):
             cursor[0] += 1; b.put(cursor[0], 1, str(k))
             for c, x in enumerate(v, 2):

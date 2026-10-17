@@ -313,7 +313,7 @@ def test_damaged_xlsx_falls_back_to_calamine_instead_of_failing():
 
 
 def test_openpyxl_finding_no_worksheets_falls_back(monkeypatch):
-    monkeypatch.setattr(readers, '_openpyxl_sheets', lambda content: [])
+    monkeypatch.setattr(readers, '_openpyxl_sheets', lambda content, merges=None: [])
     assert read_one(LAYOUT['xlsx'], 'x.xlsx')['reader'] == 'calamine'
 
 

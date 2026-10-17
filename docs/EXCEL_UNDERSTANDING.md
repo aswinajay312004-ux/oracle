@@ -66,9 +66,13 @@ planner all use the effective fields.
 
 API:
 
-* `GET /api/fields` → `[{key, label, kind, where, aliases, default_aliases, locked, required}]`
+* `GET /api/fields` → `[{key, label, kind, where, aliases, default_aliases, locked, required, column,
+  changed_by, changed_at}]` (`column`: the field can also be a flat-table column)
 * `PUT /api/fields/{key}` body `{required?: bool, aliases?: [str]}` (role with `mapping` permission)
   → updated field; 409 when an alias is used by another field, 409 when un-requiring a locked field.
+  `aliases` is the full new list: at most 50, each 1–60 characters, de-duplicated after normalising.
+  404 for an unknown key, 403 for roles without `mapping`. Audit: `field_changed` with
+  `{required, added, removed}`.
 
 ## 3. Field matcher (unknown layouts)
 
@@ -77,8 +81,11 @@ spreadsheet-schema-matching; no code copied):
 
 1. **Label candidates**: short text cells near the top or left of the sheet that are not numbers or
    dates. **Value** of a label = first non-empty cell to the right (up to 3 cells) or below (up to 2).
-2. **Table candidates**: rows with ≥ 3 text cells followed by rows containing numbers. A *matrix*
-   header has ≥ 3 size-like cells; a *flat* header has size + quantity columns.
+2. **Table candidates**: header rows followed by rows containing numbers. A *matrix* header has a run
+   of ≥ 3 size-like cells (text sizes; numeric sizes such as 28, 30, 32 only when a colour, style or
+   total heading names the row as a table); a *flat* header has size + quantity headings (a quantity
+   heading may carry its unit, "Qty (pcs)"). The numbers under the sizes / quantity must pass the
+   quantity rule of §4.
 3. **Name score** for (label, field): 1.0 for an exact alias after normalisation; otherwise the best of
    token Jaccard and character-trigram Dice against every alias, after expanding abbreviations
    (`qty→quantity`, `no/num/#→number`, `dt→date`, `col/clr→colour`, `ref→reference`, `desc→description`,
@@ -87,8 +94,9 @@ spreadsheet-schema-matching; no code copied):
    size → matches the size pattern or a known Oracle size; colour → text, not numeric; code → short
    alphanumeric; text → not a number or date; master overlap → the value exists in the matching Oracle
    master (buyer, colour, size), which adds confidence.
-5. **Score** = 0.6 × name + 0.4 × value (value 0 → rejected for that field). Confidence: high ≥ 0.85,
-   medium ≥ 0.6, else low (shown, never pre-selected).
+5. **Score** = 0.6 × name + 0.4 × value (value 0 → rejected for that field; when the label is a strong
+   match, name ≥ 0.85, the rejection is listed in `rejected` with its reason). Name matches below 0.5
+   are not shown. Confidence: high ≥ 0.85, medium ≥ 0.6, else low (shown, never pre-selected).
 6. **One-to-one assignment**: best scores first; a cell or column is used once.
 
 Output (also stored as `draft.suggestion`):
@@ -104,6 +112,14 @@ Output (also stored as `draft.suggestion`):
  "unit": {"value": "", "evidence": "the quantity header says only \"Qty\""},
  "explanation": "one sentence"}
 ```
+
+As built, the shape also carries: top-level `source` (`matcher` or `matcher + local AI`); per field
+`name_score` and `value_score`; `table.source`; `unit.pieces_per_unit` and `unit.cell`. A `rejected`
+entry's `source` is `matcher`, `ai` or (in a `/map` 409) `person`. On upload the suggestion is the
+matcher's (with the heuristic as fallback, no AI, so uploads stay fast and offline); the local AI is
+asked only through `POST /api/drafts/{id}/suggest`. Master names (buyer, colour, size) come from Oracle
+when it is reachable; each of those three masters is read on its own, so one master too large to list
+does not hide the others.
 
 ## 4. Validator (acceptance test D)
 
@@ -129,11 +145,20 @@ Each order has `qty_unit` = `PCS`, `PACK` or empty, plus `pieces_per_unit`.
 * The planner enforces the same rules (server side), with paths `orders.N.qty_unit` and
   `orders.N.pieces_per_unit`. Drafts saved before this feature derive the unit from `pieces_per_unit`.
 * A confirmed unit is stored in the buyer template and restored next time.
+* Also asked, never guessed: a file that names both units ("Qty (pcs/packs)"); a merch BOM whose size
+  table total differs from its `QTY(IN PIECES)` (the question quotes both numbers); a file whose unit
+  contradicts the template's (the question names both). `PCS` with a stale pieces-per-pack is an error
+  on `orders.N.pieces_per_unit`, never multiplied in.
+* `provenance.qty_unit = {sheet?, cell?, value?, evidence, said?, reason, question?}` with `reason` one
+  of `file`, `silent`, `both`, `mismatch`, `conflict`, `template`, `person`; `question` is present
+  only while `qty_unit` is empty and is the text shown on the field.
 
 ## 6. Buyer templates (acceptance tests A and B)
 
 Template = `{id, name, buyer, version, signature, labels, definition, anchors, unit, quantity_basis,
-created_by, created_at, uses, active}`; `anchors[field] = {cell, label_cell, label}`.
+created_by, created_at, uses, active}`; `anchors[field] = {cell, label_cell, label}`, plus
+`anchors["table.<column>"]` for each table heading the definition relies on (flat columns; a matrix's
+colour, style and total headings).
 
 * Saving a layout with the same name (or the same signature for the same buyer) creates version n+1
   and deactivates the previous version; history is kept and visible in Setup → Layout templates.
@@ -141,6 +166,15 @@ created_by, created_at, uses, active}`; `anchors[field] = {cell, label_cell, lab
   the same normalised label, **and** the validator accepts the definition on this sheet. If any check
   fails the template is not applied and the reason is recorded in the draft notes.
 * Applying restores `qty_unit`, `pieces_per_unit` and `quantity_basis`.
+* The signature and labels cover the layout only: the cells the definition reads as values, the size
+  headings and everything below the table header are left out, so the buyer's next file (new style,
+  PO, colours) still matches. Templates saved before anchors existed keep their whole-sheet signature.
+* A refusal reads, in `draft.notes`: *Saved layout “ZEN KIDS PO” (version 1) was not used on sheet
+  “PO”: A8 now says “ETD”, not “Ship Date”. The file was read as a new layout.* The matcher's
+  suggestion is then computed for that sheet.
+* A unit or quantity basis answered on the review screen of a draft read with a template that did not
+  know it yet is saved into that template (audited `template_unit_learned`); a saved decision is never
+  overwritten that way.
 
 ## 7. Dates
 
@@ -159,3 +193,33 @@ day-first and reported in the notes and the field's source chip.
 | D — wrong mapping | An AI/matcher/person proposal maps Ship date to a cell holding "NEXT" and Quantity to a text column | Those fields are rejected with reasons; the rest of the proposal is kept; `/map` returns 409 for the wrong person mapping |
 | E — approved order | A reviewed order is approved | One transaction; every row read back equal (stand-in Oracle in CI; real Oracle with `POPPYS_TEST_ORACLE=1`) |
 | F — visual verification | An order reference is searched in Database | The order record opens with its linked ORDSTYLE lines and ORDSIZE size rows and decoded masters |
+
+## 9. API as built
+
+Shapes the endpoints above settle (the frontend and `tests/test_acceptance.py` rely on them).
+
+* `POST /api/uploads` → the draft, which also carries `notes` (draft-level reasons such as a refused
+  template), `templates_refused: [{id, name, version, sheet, reasons}]`, `template: {id, name, version}`
+  or `null`, and `suggestion` (§3 shape; set when no order was read or a template was refused). Each
+  order carries `qty_unit` (`PCS`, `PACK` or empty), `pieces_per_unit` (1 for `PCS`; ≥ 2 or `null` for
+  `PACK`; `null` while undecided), `quantity_basis` and `provenance.qty_unit` (§5). A draft read with a
+  template has `format` = `Template: <name>`.
+* `POST /api/drafts/{id}/suggest` body `{sheet}` → a §3 suggestion (matcher, plus the local AI when it
+  is running, cross-checked; heuristic when no table was found); 409 when nothing reliable is found.
+* `POST /api/drafts/{id}/map` body `{version, sheet, definition: {fields, table}, save_template,
+  template_name, qty_unit?, pieces_per_unit?, quantity_basis?}` — the unit decision travels as order
+  fields (`qty_unit`: `PCS`, `PACK`, or `''` to ask on the review screen; `quantity_basis`: `sample` or
+  `order_demo`). `header_row` + `columns` instead of `definition` still map a flat table. The validator
+  runs first: 409 `{detail, rejected: [{field, cell, value, reason, source: "person"}]}` names each wrong
+  field and changes nothing (same version, no template). 409 for `PACK` with fewer than 2 pieces per pack.
+  On success → the draft; with `save_template`, the template is saved (§6) with the buyer, anchors, unit
+  and basis, and `draft.template` names it.
+* `PUT /api/drafts/{id}` accepts `qty_unit` / `pieces_per_unit` / `quantity_basis` on each order; the
+  preview (`POST /api/drafts/{id}/preview`) reports unit questions on `orders.N.qty_unit` and
+  `orders.N.pieces_per_unit`, and fields an administrator made required on `orders.N.<key>`.
+* `GET /api/templates` → every version, newest first per layout: `[{id, name, buyer, version, family,
+  signature, labels, definition, anchors, unit: {qty_unit, pieces_per_unit} | null, quantity_basis,
+  created_by, created_at, uses, active}]`. `POST /api/templates/{id}/active` body `{active}` (role with
+  `templates` permission) → the same list; activating a version deactivates the layout's other versions.
+* `matcher.check(sheet, definition, fields)` takes a sheet of the cell model (`draft.sheets[i]`) and the
+  effective fields as `GET /api/fields` returns them (or none for the defaults).

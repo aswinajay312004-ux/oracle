@@ -7,6 +7,7 @@ mutable state.
 """
 from __future__ import annotations
 import re
+import unicodedata
 
 KINDS = ('text', 'code', 'date', 'number', 'size', 'quantity', 'colour', 'unit')
 
@@ -49,8 +50,20 @@ DEFAULTS = (
 MAX_ALIASES = 50
 
 
+_ASCII_NORM = re.compile(r'[^a-z0-9]+')
+
+
 def norm(value):
-    return re.sub(r'[^a-z0-9]+', ' ', str(value or '').lower()).strip()
+    """The words of a label, lower-case, punctuation as single spaces. Letters, digits and vowel signs of
+    every script are kept (NFKC first), so Tamil labels such as “வாங்குபவர்” stay distinct words instead of
+    all normalising to the same empty text."""
+    s = str(value or '')
+    if s.isascii():
+        return _ASCII_NORM.sub(' ', s.lower()).strip()
+    s = unicodedata.normalize('NFKC', s).lower()
+    if s.isascii():
+        return _ASCII_NORM.sub(' ', s).strip()
+    return ' '.join(''.join(ch if ch.isalnum() or unicodedata.category(ch)[0] == 'M' else ' ' for ch in s).split())
 
 
 def effective(saved=None):

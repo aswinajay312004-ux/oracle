@@ -38,8 +38,7 @@ ACC_COLUMNS = {
 PORTIONS = ('BODY', 'BINDING', 'RIB', 'COLLAR', 'CUFF', 'POCKET', 'HOOD', 'LINING', 'TAPE', 'PIPING')
 
 
-def norm(value):
-    return re.sub(r'[^a-z0-9]+', ' ', str(value or '').lower()).strip()
+norm = F.norm      # one normalisation for labels everywhere (keeps the letters of every script)
 
 
 def scalar(cell):
@@ -55,15 +54,64 @@ def text(value):
     return '' if value is None else str(value).strip()
 
 
+# Plain numbers, and Western (1,500,000) or Indian lakh (1,20,000) digit grouping. A comma anywhere else is not
+# a thousands separator: "1,5" is a decimal comma (or a typo) and is never read as 15.
+_PLAIN = re.compile(r'[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?')
+_GROUPED = re.compile(r'[-+]?(\d{1,3}(,\d{3})+|\d{1,2}(,\d{2})+,\d{3})(\.\d+)?')
+
+
 def number(value):
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float)):
         return value
-    try:
-        return float(str(value).replace(',', '').strip())
-    except ValueError:
-        return None
+    t = str(value).strip()
+    if _PLAIN.fullmatch(t):
+        return float(t)
+    if _GROUPED.fullmatch(t):
+        return float(t.replace(',', ''))
+    return None
+
+
+_QTY_TEXT = re.compile(r'([-+]?[\d,]*\.?\d+)\s*(pcs|pc|pieces|piece|nos|packs|pack|pks|pk|sets|set)?\.?', re.I)
+
+
+def qty_value(value):
+    """(number, 'PCS' | 'PACK' | None) of a quantity cell: 1500 → (1500, None), '1,500' → (1500, None),
+    '1,500 pcs' → (1500, 'PCS'), '20 packs' → (20, 'PACK'); anything else → (None, None)."""
+    if isinstance(value, bool) or value is None:
+        return None, None
+    if isinstance(value, (int, float)):
+        return value, None
+    m = _QTY_TEXT.fullmatch(str(value).strip())
+    n = number(m.group(1)) if m else None
+    if n is None:
+        return None, None
+    n = int(n) if float(n).is_integer() else n
+    word = (m.group(2) or '').lower()
+    return n, ('PACK' if word.startswith(('pack', 'pk', 'set')) else 'PCS' if word else None)
+
+
+def quantity_of(value):
+    """A quantity as the order keeps it: numbers written as text ("1,500", "1,500 pcs") become the number;
+    anything else is kept as it is, so the planner names it."""
+    n, _ = qty_value(value)
+    return n if n is not None and isinstance(value, str) else value
+
+
+# A row that adds up other rows: "Total", "TOTAL PCS", "Sub-Total", "Subtotal", "G.Total", "Grand Total:".
+# Words after the total word may only be quantity/unit words, so a colour such as "TOTAL ECLIPSE" is not one.
+_TOTAL = re.compile(r'(?:sub|grand|g|overall|net)?\s*totals?(?:\s+(?:qty|quantity|quantities|pcs|pc|pieces|packs?|pks?|sets?|'
+                    r'units?|nos|order|all|in|of))*')
+_TOTAL_WORD = re.compile(r'\b(?:sub|grand|g)?\s*totals?\b')
+
+
+def is_total(value):
+    return isinstance(value, str) and bool(_TOTAL.fullmatch(norm(value)))
+
+
+def is_subtotal(value):
+    return is_total(value) and norm(value).startswith('sub')
 
 
 def source(sheet, address, value, formula=None):
@@ -150,6 +198,8 @@ def template_score(sheet, t):
         mine = labels(sheet)
     else:
         mine = layout_labels(sheet, t.get('definition'))
+    if not mine:        # a sheet with no layout labels is not recognisably any buyer's layout
+        return 0.0
     return 1.0 if signature_of(mine) == t['signature'] else similarity(mine, t['labels'])
 
 
@@ -163,15 +213,46 @@ def match_template(sheet, templates, threshold=0.8):
 
 
 # --- cell helpers ----------------------------------------------------------------
+MERGE_LOOKUP_AREA = 64      # merged headings are small; larger merged areas are not expanded for lookups
+
+
 class Grid:
+    """One sheet of the cell model for reading. Cells in hidden rows or columns are never read (they often hold
+    an older revision); `hidden_rows` / `hidden_cols` name them so the order can say what was left out."""
+
     def __init__(self, sheet, fields=None):
         self.sheet = sheet
         self.fields = F.resolve(fields)
-        self.cells = {(c['row'], c['col']): c for c in sheet['cells']}
+        self.cells = {(c['row'], c['col']): c for c in sheet['cells'] if not c.get('hidden')}
+        hidden = [c for c in sheet['cells'] if c.get('hidden')]
+        self.hidden = {(c['row'], c['col']) for c in hidden}
+        rows = {c['row'] for c in sheet['cells'] if not c.get('hidden')}
+        cols = {c['col'] for c in sheet['cells'] if not c.get('hidden')}
+        self.hidden_cols = {c['col'] for c in hidden} - cols
+        self.hidden_rows = {c['row'] for c in hidden if c['col'] not in self.hidden_cols} - rows
         self.rows = sheet['rows']; self.cols = sheet['cols']
+        self.merge_top = {}
+        for rng in sheet.get('merged') or ():
+            try:
+                a, b = (cell_ref(x) for x in str(rng).split(':', 1))
+            except ValueError:
+                continue
+            if (b[0] - a[0] + 1) * (b[1] - a[1] + 1) <= MERGE_LOOKUP_AREA:
+                for r in range(a[0], b[0] + 1):
+                    for c in range(a[1], b[1] + 1):
+                        if (r, c) != a:
+                            self.merge_top[(r, c)] = a
 
     def v(self, r, c):
         return self.cells.get((r, c), {}).get('value')
+
+    def head_at(self, r, c):
+        """(row, col) holding the heading shown at (r, c): the cell itself, or the top-left of its merged area."""
+        return self.merge_top.get((r, c), (r, c)) if self.v(r, c) in (None, '') else (r, c)
+
+    def head(self, r, c):
+        """The heading shown at (r, c): a two-row header merges "Colour" over both rows."""
+        return self.v(*self.head_at(r, c))
 
     def p(self, r, c):
         cell = self.cells.get((r, c), {})
@@ -179,9 +260,30 @@ class Grid:
 
     def find(self, aliases, rows=None, first=True):
         names = {norm(a) for a in aliases}
-        hits = sorted((c['row'], c['col']) for c in self.sheet['cells']
+        hits = sorted((c['row'], c['col']) for c in self.cells.values()
                       if norm(c['value']) in names and (rows is None or c['row'] in rows))
         return (hits[0] if hits else None) if first else hits
+
+    def hidden_note(self):
+        """Plain note naming hidden rows / columns that hold data (they were not read), or None."""
+        def spans(nums, word):
+            nums = sorted(nums); out = []
+            for n in nums:
+                if out and n == out[-1][1] + 1:
+                    out[-1][1] = n
+                else:
+                    out.append([n, n])
+            text = ', '.join(word(a) if a == b else f'{word(a)}–{word(b)}' for a, b in out[:6])
+            return text + ('…' if len(out) > 6 else '')
+        parts = []
+        if self.hidden_rows:
+            parts.append(f'row{"s" if len(self.hidden_rows) > 1 else ""} {spans(self.hidden_rows, str)}')
+        if self.hidden_cols:
+            parts.append(f'column{"s" if len(self.hidden_cols) > 1 else ""} {spans(self.hidden_cols, lambda c: address(c, 1)[:-1])}')
+        if not parts:
+            return None
+        return (f'Hidden {" and ".join(parts)} on “{self.sheet["name"]}” hold data and were not read. '
+                'Unhide them in Excel and upload again if they belong to the order.')
 
     def right(self, r, c, span=3):
         for cc in range(c + 1, c + span + 1):
@@ -313,9 +415,24 @@ def unit_evidence(g, table, role=None):
         heads += [(hr, int(table[k]), 'size table heading') for k in ('total_col', 'label_col', 'color_col') if table.get(k)]
     found = []
     for r, c, what in heads:
-        v = g.v(r, c); u, per = unit_words(v)
+        v = g.head(r, c); u, per = unit_words(v)
         if u:
-            found.append(dict(unit=u, per=per, cell=address(c, r), value=v, evidence=f'the {what} says “{text(v)}”'))
+            at = g.head_at(r, c)
+            found.append(dict(unit=u, per=per, cell=address(at[1], at[0]), value=v, evidence=f'the {what} says “{text(v)}”'))
+    # Quantities written with their unit ("1,500 pcs", "20 packs"): the cells say it themselves.
+    qcols = ([int(table['columns']['quantity'])] if table.get('type') == 'flat' and (table.get('columns') or {}).get('quantity') else
+             list(range(int(table['first_size_col']), int(table['last_size_col']) + 1)) if table.get('type') == 'matrix'
+             and table.get('first_size_col') and table.get('last_size_col') else [])
+    said_units = {}
+    for r in range(hr + 1, min(hr + 501, g.rows + 1)) if hr else ():
+        for c in qcols:
+            v = g.v(r, c)
+            if isinstance(v, str):
+                u = qty_value(v)[1]
+                if u and u not in said_units:
+                    said_units[u] = (r, c, v)
+    for u, (r, c, v) in said_units.items():
+        found.append(dict(unit=u, per=None, cell=address(c, r), value=v, evidence=f'the quantities say “{text(v)}” ({address(c, r)})'))
     for hit in g.find(g.fields.aliases('qty_unit'), range(1, max(2, hr)), first=False):
         t = g.right(*hit)
         if t:
@@ -395,7 +512,7 @@ def matrix_blocks(g):
         tcol = next((c for c in range((ccol or gcol) + 1, g.cols + 1) if norm(g.v(r, c)) == 'total'), None)
         if ccol is None or tcol is None or tcol - ccol < 2:
             continue
-        end = next((x for x in range(r + 1, min(r + 101, g.rows + 1)) if norm(g.v(x, gcol)) in ('total', 'grand total')), None)
+        end = next((x for x in range(r + 1, min(r + 101, g.rows + 1)) if is_total(g.v(x, gcol)) and not is_subtotal(g.v(x, gcol))), None)
         role = norm(g.v(r + 1, ccol))
         blocks.append(dict(header=r, end=end, gcol=gcol, ccol=ccol, tcol=tcol,
                            role=role if role in ('sample', 'summary') else 'order'))
@@ -405,7 +522,7 @@ def matrix_blocks(g):
 def matrix_lines(g, header, end, label_col, color_col, first_size, total_col):
     result = []
     for r in range(header + 1, end):
-        if g.v(r, label_col) is None and g.v(r, color_col) is None:
+        if g.v(r, label_col) is None and g.v(r, color_col) is None or is_total(g.v(r, label_col)) or is_total(g.v(r, color_col)):
             continue
         result.append(dict(label=text(g.v(r, label_col)), color=text(g.v(r, color_col)),
             declared_total=g.v(r, total_col) if total_col else None, provenance={'color': g.p(r, color_col)},
@@ -480,7 +597,7 @@ def buyer_contract(g, sheet):
         return None
     orders = []
     for cell in sheet['cells']:
-        if norm(cell['value']) != 'item number':
+        if norm(cell['value']) != 'item number' or cell.get('hidden'):
             continue
         r, c = cell['row'], cell['col']; o = base_order()
         def setval(k, rr, cc):
@@ -674,20 +791,72 @@ def iso_date(value):
         return None, None
 
 
-def finish(o):
+CODE_NAMES = {'style': 'style number', 'po_number': 'PO number', 'order_ref': 'order reference'}
+
+
+def reads_like_text(value):
+    """A code cell holding a sentence ("BABY GIRLS ROMPER WITH FRILL AND HOOD") rather than a code."""
+    t = text(value)
+    return len(t.split()) >= 5 or len(t) > 40
+
+
+def date_order(raw):
+    """'dmy' or 'mdy' when a numeric d/m/y date can be read only one way (20/12/2026, 12/20/2026), else None."""
+    m = re.fullmatch(r'\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\s*', raw) if isinstance(raw, str) else None
+    if not m:
+        return None
+    a, b = int(m.group(1)), int(m.group(2))
+    return 'dmy' if a > 12 >= b else 'mdy' if b > 12 >= a else None
+
+
+def month_first_example(raws):
+    """A raw date that proves the file writes month first — only when no date in it is unmistakably day-first."""
+    kinds = {date_order(r) for r in raws} - {None}
+    return next((r for r in raws if date_order(r) == 'mdy'), None) if kinds == {'mdy'} else None
+
+
+def _both_readings(raw):
+    m = re.fullmatch(r'\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\s*', raw)
+    a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3)); y += 2000 if y < 100 else 0
+    names = ('January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December')
+    return f'{a} {names[b - 1]} {y}', f'{b} {names[a - 1]} {y}'
+
+
+def finish(o, month_first=None):
+    """Dates to YYYY-MM-DD and the last checks on the values read. month_first: a raw date elsewhere in the
+    file that can be read only month first ("12/20/2026"); an ambiguous date ("10/01/2026") is then not read
+    day-first but left empty and asked. Without it, the order's own dates are the evidence."""
     o['workbook_pieces'] = sum(int(number(s.get('quantity')) or 0) for l in o.get('order_lines', []) for s in l.get('sizes', [])) or None
+    month_first = month_first or month_first_example([o.get(k) for k in DATE_FIELDS])
     for key in DATE_FIELDS:
         raw = o.get(key)
         if raw in (None, ''):
             continue
         iso, note = iso_date(raw)
-        if iso and iso != raw:
+        name = key.replace('_', ' ')
+        if iso and iso != raw and note and 'day/month' in note and month_first:
+            first, second = _both_readings(raw)
+            ask = f'“{raw}” could be {first} or {second}; this file writes “{month_first}” month first — enter the {name}.'
+            o.setdefault('provenance', {}).setdefault(key, {}).update(question=ask, derivation=f'"{raw}" not converted: day and month are unclear')
+            o.setdefault('warnings', []).append(f'{name.capitalize()}: {ask}')
+            o[key] = ''
+        elif iso and iso != raw:
             o[key] = iso
             o.setdefault('provenance', {}).setdefault(key, {})['derivation'] = note or f'"{raw}" converted to {iso}'
             if note and 'day/month' in note:
-                o.setdefault('warnings', []).append(f'{key.replace("_", " ").capitalize()}: {note} — check it.')
+                o.setdefault('warnings', []).append(f'{name.capitalize()}: {note} — check it.')
         elif not iso:
-            o.setdefault('warnings', []).append(f'{key.replace("_", " ").capitalize()} "{raw}" is not a date this product can read — enter it.')
+            o.setdefault('warnings', []).append(f'{name.capitalize()} "{raw}" is not a date this product can read — enter it.')
+            o[key] = ''
+    for key, name in CODE_NAMES.items():
+        v = o.get(key)
+        if isinstance(v, str) and reads_like_text(v):
+            # e.g. a "Style" column that holds descriptions: never created as a new style number
+            p = o.setdefault('provenance', {}).setdefault(key, {})
+            where = f'{p["cell"]} ' if p.get('cell') else ''
+            ask = f'{where}holds “{v[:60]}{"…" if len(v) > 60 else ""}”, which reads like a description, not a {name} — enter the {name}.'
+            p.update(question=ask, doubt=v)
+            o.setdefault('warnings', []).append(ask[0].upper() + ask[1:])
             o[key] = ''
     return o
 
@@ -700,19 +869,22 @@ def parse(content, templates=(), filename='', fields=None):
 
 
 def flat_headers(g):
-    """(header row, {field: column}) for each row that heads a one-row-per-size table: size and quantity
-    headings (a quantity heading may carry its unit, "Qty (pcs)"); style is a column or a header field."""
+    """(header row, {field: column}, {field: [columns]}) for each row that heads a one-row-per-size table: size
+    and quantity headings (a quantity heading may carry its unit, "Qty (pcs)"); style is a column or a header
+    field. The third item names fields headed by two or more columns ("Order Qty" and "Sample Qty"): such a row
+    is never read automatically, because which column is meant is the person's decision."""
     Fv = g.fields; names = {k: {norm(a) for a in Fv.aliases(k)} for k in Fv.column_keys}
     quantity = names.get('quantity', set())
     for row in range(1, min(g.rows, 80) + 1):
         cells = [(c, norm(g.v(row, c))) for c in range(1, g.cols + 1) if isinstance(g.v(row, c), str)]
-        hit = {key: c for c, n in cells for key in Fv.column_keys if n in names[key]}
-        if 'quantity' not in hit:
-            q = next((c for c, n in cells if strip_units(n) != n and strip_units(n) in quantity), None)
-            if q:
-                hit['quantity'] = q
+        hits = {}
+        for c, n in cells:
+            for key in Fv.column_keys:
+                if n in names[key] or (key == 'quantity' and strip_units(n) != n and strip_units(n) in quantity):
+                    hits.setdefault(key, []).append(c)
+        hit = {k: cs[0] for k, cs in hits.items()}
         if {'size', 'quantity'} <= hit.keys():
-            yield row, hit
+            yield row, hit, {k: cs for k, cs in hits.items() if len(cs) > 1}
 
 
 AUTO_NOTES = ('Confirm whether these are sample quantities', 'Confirm whether the source quantities', 'The file says',
@@ -807,7 +979,7 @@ def restore_from_template(orders, t):
 def parse_sheets(sheets, templates=(), fields=None):
     from . import matcher
     Fv = F.resolve(fields)
-    orders = []; formats = []; used = []; notes = []; refusals = []
+    orders = []; formats = []; used = []; notes = []; refusals = []; origin = []
     for sheet in sheets:
         if sheet['hidden']:
             continue
@@ -830,8 +1002,15 @@ def parse_sheets(sheets, templates=(), fields=None):
             if found is not None:
                 formats.append('Buyer contract')
         if not found:
-            refused_tables = []
-            for row, cols in flat_headers(g):
+            # The first size/quantity table with a style is read, or refused with the reason; after a refusal no
+            # later table on the sheet is read instead (which table is the order is then the person's decision).
+            for row, cols, dups in flat_headers(g):
+                lead = f'The size/quantity table on “{sheet["name"]}” row {row} was not read automatically: '
+                if dups:
+                    mine.append(lead + '; '.join(
+                        ' and '.join(f'{address(c, row)} “{text(g.v(row, c))}”' for c in cs) + f' both name the {Fv.label(k).lower()} column'
+                        for k, cs in dups.items()) + ' — choose the column to use.')
+                    break
                 d = dict(fields={}, table=dict(type='flat', header_row=row, columns=cols))
                 if 'style' not in cols:
                     at = header_value(g, 'style', row)
@@ -840,19 +1019,26 @@ def parse_sheets(sheets, templates=(), fields=None):
                     d['fields']['style'] = address(at[1], at[0])
                 _, rejected = matcher.check(sheet, d, Fv)
                 if rejected:
-                    refused_tables.append(f'The size/quantity table on “{sheet["name"]}” row {row} was not read automatically: '
-                                          + '; '.join(r['reason'] for r in rejected) + '.')
-                    continue
-                found = apply_template(sheets, sheet, d, Fv); formats.append('Tabular orders')
+                    mine.append(lead + '; '.join(r['reason'] for r in rejected) + '.')
+                    break
+                try:
+                    found = apply_template(sheets, sheet, d, Fv)
+                except ValueError as exc:          # e.g. a line without a style: asked on the mapping screen
+                    mine.append(lead + str(exc).rstrip('.') + '.')
+                    found = None
+                    break
+                formats.append('Tabular orders')
                 for o in found:
                     header_fields(g, o, row, only_missing=True)
                 break
-            if not found:
-                mine += refused_tables
+        hidden = g.hidden_note()
+        if hidden:
+            mine.append(hidden)
         notes += mine
         if found:
             for o in found:
                 o['warnings'] += [n for n in mine if n not in o['warnings']]
+                rival_dates(g, o)
             attach_bom(g, found)
             uncalculated = [c['cell'] for c in sheet['cells'] if c.get('formula') and c.get('value') is None]
             if uncalculated:
@@ -860,49 +1046,161 @@ def parse_sheets(sheets, templates=(), fields=None):
                 for o in found:
                     o['warnings'].insert(0, f'{len(uncalculated)} formula cells on "{sheet["name"]}" have no calculated value '
                                             f'(e.g. {", ".join(uncalculated[:4])}). Open the file in Excel, save it, and upload again.')
-            orders.extend(finish(o) for o in found)
+            origin += [(sheet['name'], o) for o in found]
+    # One date convention per file: a date that can only be month first makes ambiguous ones a question.
+    month_first = month_first_example([o.get(k) for _, o in origin for k in DATE_FIELDS])
+    orders = [finish(o, month_first) for _, o in origin]
+    same_order_on_two_sheets(origin)
     return dict(sheets=sheets, orders=orders, format=', '.join(dict.fromkeys(formats)) or 'Needs column mapping',
                 templates_used=used, notes=notes, templates_refused=refusals)
 
 
+def rival_dates(g, o):
+    """Another label that also names a date of this order ("Revised Ship Date", "Delivery Date 2", or both
+    "Ship Date" and "ETD") with a different date next to it: the order says which cell it read and asks."""
+    for key in DATE_FIELDS:
+        chosen = ((o.get('provenance') or {}).get(key) or {}).get('cell')
+        mine = iso_date(o.get(key))[0]
+        if not chosen or not mine:
+            continue
+        phrases = [n for n in (norm(a) for a in g.fields.aliases(key)) if n]
+        for cell in sorted(g.cells.values(), key=lambda x: (x['row'], x['col'])):
+            n = norm(cell['value']) if isinstance(cell['value'], str) and cell['row'] <= 60 else ''
+            if not n or not any(f' {a} ' in f' {n} ' for a in phrases):
+                continue
+            t = g.right(cell['row'], cell['col'])
+            if not t or address(t[1], t[0]) == chosen:
+                continue
+            other = iso_date(g.v(*t))[0]
+            if other and other != mine:
+                o.setdefault('warnings', []).append(
+                    f'{cell["cell"]} “{text(cell["value"])}” says {other}, but the {key.replace("_", " ")} was read from {chosen} '
+                    f'({mine}) — check which date is meant.')
+
+
+def same_order_on_two_sheets(origin):
+    """The same style and PO read from two sheets (often "PO rev1" and "PO rev2"): both orders say so."""
+    seen = {}
+    for sheet, o in origin:
+        if o.get('style'):
+            seen.setdefault((canon(o['style']), canon(o.get('po_number'))), []).append((sheet, o))
+    for (_, po), items in seen.items():
+        names = list(dict.fromkeys(s for s, _ in items))
+        if len(names) > 1:
+            first = items[0][1]
+            note = (f'Sheets {" and ".join(f"“{s}”" for s in names)} both hold style {first["style"]}'
+                    + (f' and PO {first["po_number"]}' if po else '') + ' — if one is an older copy, remove that order before saving.')
+            for _, o in items:
+                o['warnings'].append(note)
+
+
+def canon(value):
+    """Grouping form of a key value: 'Zen Kids' and 'ZEN KIDS ' are the same buyer (the masters agree)."""
+    return ' '.join(text(value).upper().split())
+
+
+def _below_note(g, stop, qcols):
+    """Rows under the end of a table that still hold quantities: named, never added to the order."""
+    if not stop:
+        return None
+    rows = []; width = range(1, max(qcols) + 1)
+    for r in range(stop, min(stop + 500, g.rows + 1)):
+        if r > stop and all(g.v(r, c) in (None, '') for c in width):
+            break                                      # this block ends; tables further down are other tables
+        if r not in g.hidden_rows and any(qty_value(g.v(r, c))[0] is not None for c in qcols):
+            rows.append(r)
+    if not rows:
+        return None
+    first = next((text(g.v(stop, c)) for c in range(1, g.cols + 1) if g.v(stop, c) not in (None, '')), '')
+    span = f'row {rows[0]}' if len(rows) == 1 else f'rows {rows[0]}–{rows[-1]}'
+    return (f'The table on “{g.sheet["name"]}” ends at row {stop}' + (f' (“{first[:40]}”)' if first else '') +
+            f'; quantities in {span} below it were not read. Map them separately if they belong to the order.')
+
+
+def _total_note(g, totals, read):
+    """The file's own grand total against the quantities read (catches missing, hidden or extra rows)."""
+    grand = [(r, label, q) for r, label, q, sub in totals if not sub and q is not None]
+    if len(grand) != 1:
+        return None
+    r, label, q = grand[0]
+    if abs(q - read) < 1e-9:
+        return None
+    return (f'Row {r} (“{label}”) on “{g.sheet["name"]}” says the total is {q:g}, but the rows read add up to {read:g} — '
+            'check for missing, hidden or extra rows before saving.')
+
+
 def parse_mapping(sheets, mapping, fields=None):
+    """Orders from a one-row-per-size table (mapping: sheet, header_row, columns, and optionally fixed = {field:
+    cell} for a value written once above the table, such as the style). The table ends where it ends: total
+    rows are left out and their figure is checked against the rows read, hidden rows are not read, and a row
+    that is not an order line (a title, a note, the headings of a second table) ends it — quantities below
+    are named in the order's notes, never added."""
     Fv = F.resolve(fields)
     sheet = next((s for s in sheets if s['name'] == mapping['sheet']), None)
     if not sheet:
         raise ValueError('Select a worksheet.')
-    row = int(mapping['header_row']); columns = mapping['columns']
-    if not {'style', 'size', 'quantity'} <= columns.keys():
+    row = int(mapping['header_row']); columns = dict(mapping['columns']); fixed = dict(mapping.get('fixed') or {})
+    if not {'size', 'quantity'} <= columns.keys() or not ('style' in columns or 'style' in fixed):
         raise ValueError('Map style, size and quantity columns at minimum.')
     if any(k not in Fv.column_keys or not isinstance(c, int) or c < 1 or c > sheet['cols'] for k, c in columns.items()):
         raise ValueError('Invalid column mapping.')
-    cells = {(c['row'], c['col']): c for c in sheet['cells']}; groups = {}
-    for r in range(row + 1, sheet['rows'] + 1):
-        fields = {k: cells.get((r, c), {}).get('value') for k, c in columns.items()}
-        if not any(x is not None for x in fields.values()):
+    g = Grid(sheet, Fv); groups = {}; totals = []; stop = None; read = 0
+    heads = {k: norm(g.v(row, c)) for k, c in columns.items()}
+    constant = {k: (g.v(*cell_ref(ref)), g.p(*cell_ref(ref))) for k, ref in fixed.items()}
+
+    def cell(r, k):
+        """(value, (row, col)) of a mapped column; a merged style/colour block covering this row gives its value."""
+        c = columns[k]; v = g.v(r, c)
+        top = g.merge_top.get((r, c))
+        if v in (None, '') and k not in ('size', 'quantity') and top and top[0] > row:
+            return g.v(*top), top
+        return v, (r, c)
+
+    for r in range(row + 1, g.rows + 1):
+        if r in g.hidden_rows:
+            continue                                   # named by the sheet's hidden-rows note
+        got = {k: cell(r, k) for k in columns}
+        vals = {k: v for k, (v, _) in got.items()}
+        if all(v in (None, '') for v in vals.values()):
             continue
-        if norm(fields.get('style')) in ('total', 'grand total'):
+        size, qty = vals.get('size'), vals.get('quantity')
+        names = [v for v in vals.values() if isinstance(v, str)] + [g.v(r, c) for c in range(1, min(g.cols, 3) + 1) if isinstance(g.v(r, c), str)]
+        label = next((x for x in names if is_total(x)), None) if not is_total(size) else size
+        if label is None and size in (None, ''):
+            label = next((x for x in names if _TOTAL_WORD.search(norm(x))), None)
+        if label is not None:                          # TOTAL / Sub Total rows add up other rows
+            totals.append((r, text(label), qty_value(qty)[0], norm(label).startswith('sub')))
             continue
+        if sum(1 for k, v in vals.items() if isinstance(v, str) and heads.get(k) and norm(v) == heads[k]) >= 2:
+            stop = r; break                            # the headings again: a second table starts here
+        if size in (None, '') and qty in (None, ''):
+            stop = r; break                            # a title or a note, not an order line: the table has ended
+        for k, (v, _) in constant.items():
+            vals.setdefault(k, v)
         # Blank styles cannot safely be forward-filled across unrelated sections.
-        if not fields.get('style'):
+        if not vals.get('style'):
             raise ValueError(f"{sheet['name']} row {r}: style is missing. Fill it or choose the correct header.")
-        key = tuple(text(fields.get(k)) for k in ('buyer', 'style', 'po_number', 'order_ref', 'ship_date'))
+        key = tuple(canon(vals.get(k)) for k in ('buyer', 'style', 'po_number', 'order_ref', 'ship_date'))
         o = groups.setdefault(key, base_order())
-        for k, value in fields.items():
+        for k, value in vals.items():
             if k not in ('size', 'quantity', 'color'):
-                if o.get(k) and o[k] != text(value):
+                if o.get(k) and canon(o[k]) != canon(value):
                     raise ValueError(f'Conflicting {k} in row {r}.')
+                if o.get(k):
+                    continue                           # the first spelling is kept
                 o[k] = text(value)
-                c = cells.get((r, columns[k]), {})
-                o['provenance'][k] = source(sheet['name'], c.get('cell', ''), value, c.get('formula'))
-        color = text(fields.get('color'))
-        line = next((x for x in o['lines'] if x['color'] == color), None)
+                o['provenance'][k] = g.p(*got[k][1]) if k in got else constant[k][1]
+        color = text(vals.get('color'))
+        line = next((x for x in o['lines'] if canon(x['color']) == canon(color)), None)
         if line is None:
             line = dict(label=o['style'], color=color, declared_total=None, sizes=[], provenance={}); o['lines'].append(line)
-        qc = cells.get((r, columns['quantity']), {})
-        line['sizes'].append(dict(size=text(fields.get('size')), quantity=fields.get('quantity'),
-                                 source=source(sheet['name'], qc.get('cell', ''), fields.get('quantity'), qc.get('formula'))))
+            if 'color' in columns:
+                line['provenance']['color'] = g.p(*got['color'][1])
+        qn = qty_value(qty)[0]; read += qn or 0
+        line['sizes'].append(dict(size=text(size), quantity=quantity_of(qty), source=g.p(r, columns['quantity'])))
+    notes = [n for n in (_total_note(g, totals, read), _below_note(g, stop, [columns['quantity']])) if n]
     for o in groups.values():
-        o['warnings'] = ['Confirm whether the source quantities represent pieces or packs, and whether they are sample quantities.']
+        o['warnings'] = ['Confirm whether the source quantities represent pieces or packs, and whether they are sample quantities.'] + notes
         o['order_lines'] = deepcopy(o['lines'])
     return list(groups.values())
 
@@ -933,40 +1231,52 @@ def validate_definition(sheet, d, fields=None):
     return d
 
 
+def matrix_order(g, t):
+    """One order from a size matrix (sizes across columns). Total rows are left out — a sub total is skipped, a
+    grand total ends the table and its figure is checked against the lines read — hidden rows are not read, and
+    the table ends at the first row without quantities under the sizes (a row with text there is named)."""
+    header = int(t['header_row']); first, last = int(t['first_size_col']), int(t['last_size_col'])
+    label_col = int(t.get('label_col') or 0) or None; color_col = int(t.get('color_col') or 0) or None
+    total_col = int(t.get('total_col') or 0) or None
+    sizes = range(first, last + 1); heads = {c: norm(g.v(header, c)) for c in sizes}
+    o = base_order(); lines = []; totals = []; stop = None; read = 0
+    for r in range(header + 1, min(header + 201, g.rows + 1)):
+        if r in g.hidden_rows:
+            continue                                   # named by the sheet's hidden-rows note
+        names = [g.v(r, c) for c in range(1, first) if isinstance(g.v(r, c), str)]
+        total = next((x for x in names if is_total(x)), None)
+        if total is not None:
+            q = sum(qty_value(g.v(r, c))[0] or 0 for c in sizes) or (qty_value(g.v(r, total_col))[0] if total_col else None)
+            totals.append((r, text(total), q, is_subtotal(total)))
+            if is_subtotal(total):
+                continue
+            break                                      # the grand total ends the table
+        if all(g.v(r, c) in (None, '') for c in sizes):
+            stop = r if names else None                # a title or a colour without quantities ends the table: named below
+            break
+        if sum(1 for c in sizes if heads[c] and norm(g.v(r, c)) == heads[c]) >= 2:
+            stop = r; break                            # the size headings again: a second table starts here
+        read += sum(qty_value(g.v(r, c))[0] or 0 for c in sizes if g.v(header, c) is not None)
+        lines.append(dict(label=text(g.v(r, label_col)) if label_col else '', color=text(g.v(r, color_col)) if color_col else '',
+                          declared_total=quantity_of(g.v(r, total_col)) if total_col else None,
+                          provenance={'color': g.p(r, color_col)} if color_col else {},
+                          sizes=[dict(size=text(g.v(header, c)), quantity=quantity_of(g.v(r, c)), source=g.p(r, c), size_source=g.p(header, c))
+                                 for c in sizes if g.v(header, c) is not None]))
+    o['lines'] = lines; o['order_lines'] = deepcopy(lines)
+    o['warnings'] = [n for n in (_total_note(g, totals, read), _below_note(g, stop, list(sizes))) if n]
+    return o
+
+
 def apply_template(sheets, sheet, d, fields=None):
     Fv = F.resolve(fields)
     validate_definition(sheet, d, Fv)
     g = Grid(sheet, Fv); fields = d.get('fields') or {}; t = d['table']
     if t['type'] == 'flat':
         cols = {k: int(v) for k, v in t['columns'].items()}
-        if 'style' not in cols:
-            # Header style applies to all rows: synthesise a constant column via the grouping key below.
-            r, c = cell_ref(fields['style']); style = text(g.v(r, c))
-            temp = deepcopy(sheet); temp['cols'] += 1
-            temp['cells'] = temp['cells'] + [dict(row=rr, col=temp['cols'], cell=f'{fields["style"]}', value=style, formula=None)
-                                             for rr in range(int(t['header_row']) + 1, sheet['rows'] + 1)
-                                             if any(g.v(rr, cc) not in (None, '') for cc in (cols['size'], cols['quantity']))]
-            cols['style'] = temp['cols']
-            orders = parse_mapping([temp], dict(sheet=sheet['name'], header_row=int(t['header_row']), columns=cols), Fv)
-        else:
-            orders = parse_mapping(sheets, dict(sheet=sheet['name'], header_row=int(t['header_row']), columns=cols), Fv)
+        fixed = {} if 'style' in cols else {'style': fields['style']}    # a style written once above the table
+        orders = parse_mapping([sheet], dict(sheet=sheet['name'], header_row=int(t['header_row']), columns=cols, fixed=fixed), Fv)
     else:
-        header = int(t['header_row']); last = int(t['last_size_col'])
-        label_col = int(t.get('label_col') or 0) or None; color_col = int(t.get('color_col') or 0) or None
-        total_col = int(t.get('total_col') or 0) or None
-        anchor = label_col or color_col or int(t['first_size_col']) - 1
-        end = next((r for r in range(header + 1, min(header + 201, g.rows + 2))
-                    if norm(g.v(r, anchor)) in ('total', 'grand total') or all(g.v(r, c) in (None, '') for c in range(int(t['first_size_col']), last + 1))), g.rows + 1)
-        o = base_order()
-        lines = []
-        for r in range(header + 1, end):
-            lines.append(dict(label=text(g.v(r, label_col)) if label_col else '', color=text(g.v(r, color_col)) if color_col else '',
-                              declared_total=g.v(r, total_col) if total_col else None,
-                              provenance={'color': g.p(r, color_col)} if color_col else {},
-                              sizes=[dict(size=text(g.v(header, c)), quantity=g.v(r, c), source=g.p(r, c), size_source=g.p(header, c))
-                                     for c in range(int(t['first_size_col']), last + 1) if g.v(header, c) is not None]))
-        o['lines'] = lines; o['order_lines'] = deepcopy(lines)
-        orders = [o]
+        orders = [matrix_order(g, t)]
     unit = unit_evidence(g, t)
     for o in orders:
         for k, ref in fields.items():

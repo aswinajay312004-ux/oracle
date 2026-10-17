@@ -36,7 +36,7 @@ log = logging.getLogger('poppys.isolation')
 
 TIMEOUT = 60.0                       # seconds of wall-clock time per parse
 MEMORY = 1536 * 1024 * 1024          # bytes: address space (POSIX) / committed memory (Windows)
-MAX_RESULT = 512 * 1024 * 1024       # bytes of JSON the parent accepts from a worker
+MAX_RESULT = 384 * 1024 * 1024       # bytes of JSON the parent accepts: 1M cells x ~160 B + 32M characters of text
 WORKERS = max(1, int(os.environ.get('POPPYS_PARSE_WORKERS', '2') or 2))
 _slots = threading.BoundedSemaphore(WORKERS)
 _job = None                          # the worker's Windows Job Object handle, kept open for its life
@@ -162,7 +162,9 @@ def _child(conn, target, args, memory, cpu, passthrough):
                 payload = {'failed': 'error', 'detail': f'{type(exc).__name__}: {str(exc)[:300]}'}
         payload['notes'] = notes
         try:
-            data = json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(',', ':')).encode('ascii')
+            # UTF-8, not \uXXXX escapes: a third of the size for Indic text. 'surrogatepass' keeps a lone
+            # surrogate from a damaged file intact; json.loads() on bytes decodes it the same way.
+            data = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8', 'surrogatepass')
         except MemoryError:
             data = b'{"failed":"memory"}'
         except (TypeError, ValueError) as exc:

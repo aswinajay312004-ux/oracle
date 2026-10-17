@@ -430,3 +430,247 @@ def test_master_names_for_matching_survive_one_oversized_master(monkeypatch):
     monkeypatch.setattr(oracle_store, 'current_mapping', lambda: mapping.effective())
     assert main.master_labels() == {'buyer': ['BUYMAS NAME'], 'color': [], 'size': ['SIZE_MAS NAME']}
     assert sorted(asked) == ['BUYMAS', 'COLORMAS', 'SIZE_MAS']
+
+
+# --- adversarial buyer files (each test pins one bug found by trying to make the engine guess) -------------
+def book(rows, title='Orders', at=None):
+    """A one-sheet workbook from rows (appended), plus {cell: value} written afterwards."""
+    wb = Workbook(); ws = wb.active; ws.title = title
+    for r in rows:
+        ws.append(list(r))
+    for ref, v in (at or {}).items():
+        ws[ref] = v
+    return wb, ws
+
+
+def lines_of(o):
+    return [(l['color'], [(s['size'], s['quantity']) for s in l['sizes']]) for l in o['lines']]
+
+
+def test_total_and_subtotal_rows_are_never_sizes_or_lines():
+    # flat: "Sub Total" in the size column and a "TOTAL" row without colour used to become sizes (1100 instead of 400)
+    wb, _ = book([['Style No', 'T-9'], [], ['Colour', 'Size', 'Qty'], ['RED', 'S', 100], ['RED', 'M', 200], ['RED', 'Sub Total', 300],
+                  ['BLUE', 'S', 50], ['BLUE', 'M', 50], ['', 'TOTAL', 400]])
+    o = workbooks.parse(save(wb))['orders'][0]
+    assert lines_of(o) == [('RED', [('S', 100), ('M', 200)]), ('BLUE', [('S', 50), ('M', 50)])]
+    assert not any('says the total' in w for w in o['warnings'])          # the file's total agrees
+    wb, ws = book([['Style No', 'T-9'], [], ['Colour', 'Size', 'Qty'], ['RED', 'S', 100], ['RED', 'M', 200], ['Total', '', 310]])
+    o = workbooks.parse(save(wb))['orders'][0]
+    assert sum(s['quantity'] for l in o['lines'] for s in l['sizes']) == 300
+    assert any('Row 6 (“Total”) on “Orders” says the total is 310, but the rows read add up to 300' in w for w in o['warnings'])
+    # matrix: "TOTAL PCS" and a "Sub Total" written in another column used to double the order (225 instead of 75)
+    wb, ws = book([['Customer', 'ZEN KIDS'], ['Article No', 'ZK-7'], [], ['Colour', 'Remark', 'S', 'M', 'L', 'Total'],
+                   ['NAVY', '', 10, 20, 30, 60], ['GREY', '', 5, 5, 5, 15], ['', 'Sub Total', 15, 25, 35, 75], ['TOTAL PCS', '', 15, 25, 35, 75]], 'PO')
+    sheet = sheet_of(save(wb)); s = matcher.suggest(sheet)
+    o = workbooks.apply_template([sheet], sheet, s['definition'])[0]
+    assert lines_of(o) == [('NAVY', [('S', 10), ('M', 20), ('L', 30)]), ('GREY', [('S', 5), ('M', 5), ('L', 5)])]
+    assert workbooks.is_total('G.Total') and workbooks.is_total('Grand Total:') and workbooks.is_subtotal('Sub-Total')
+    assert not workbooks.is_total('TOTAL ECLIPSE')                        # a colour name is not a total row
+
+
+def test_hidden_rows_are_not_read_and_are_named(env):
+    wb, ws = book([['Style', 'Colour', 'Size', 'Qty'], ['H-1', 'RED', 'S', 10], ['H-1', 'RED', 'M', 20],
+                   ['H-1', 'RED', 'S', 999], ['H-1', 'OLD GREEN', 'L', 888], ['H-1', 'RED', 'L', 5]])
+    ws.row_dimensions[4].hidden = True; ws.row_dimensions[5].hidden = True    # an older revision, hidden
+    content = save(wb); d = workbooks.parse(content)
+    o = d['orders'][0]
+    assert lines_of(o) == [('RED', [('S', 10), ('M', 20), ('L', 5)])]
+    note = 'Hidden rows 4–5 on “Orders” hold data and were not read. Unhide them in Excel and upload again if they belong to the order.'
+    assert note in d['notes'] and note in o['warnings']
+    c = env                                                                # a person mapping a hidden cell is told why
+    up = upload(c, content)
+    r = c.post(f'/api/drafts/{up["id"]}/map', json={'version': up['version'], 'sheet': 'Orders', 'definition': {
+        'fields': {'buyer': 'B4'}, 'table': {'type': 'flat', 'header_row': 1, 'columns': {'style': 1, 'color': 2, 'size': 3, 'quantity': 4}}}})
+    assert r.status_code == 409 and r.json()['rejected'][0]['reason'] == 'B4 is in a hidden row or column of the file'
+
+
+def test_ai_is_never_shown_hidden_cells(monkeypatch):
+    wb, ws = book([['Style', 'Colour', 'Size', 'Qty'], ['H-1', 'RED', 'S', 10], ['SECRET-OLD', 'RED', 'S', 999]])
+    ws.row_dimensions[3].hidden = True
+    sent = []
+    monkeypatch.setattr(ai, '_chat', lambda messages, **k: sent.append(messages[1]['content']) or '{}')
+    ai.ai_proposal(sheet_of(save(wb)))
+    assert 'H-1' in sent[0] and 'SECRET-OLD' not in sent[0]
+
+
+def test_flat_table_ends_before_a_second_block_and_the_upload_still_works(env):
+    # used to fail the whole upload ("row 7: style is missing") — or, without the title, add the cancelled block
+    wb, _ = book([['Style No', 'TT-1'], [], ['Colour', 'Size', 'Qty'], ['RED', 'S', 10], ['RED', 'M', 20], [],
+                  ['PREVIOUS ORDER (CANCELLED)'], ['Colour', 'Size', 'Qty'], ['RED', 'S', 500], ['RED', 'M', 500]])
+    d = upload(env, save(wb))
+    o = d['orders'][0]
+    assert d['format'] == 'Tabular orders' and lines_of(o) == [('RED', [('S', 10), ('M', 20)])]
+    assert any('ends at row 7 (“PREVIOUS ORDER (CANCELLED)”); quantities in rows 9–10 below it were not read' in w for w in o['warnings'])
+    wb, _ = book([['Style', 'Colour', 'Size', 'Qty'], ['A-1', 'RED', 'S', 10], ['Style', 'Colour', 'Size', 'Qty'], ['A-1', 'RED', 'S', 700]])
+    o = workbooks.parse(save(wb))['orders'][0]                            # headings repeated: a second table
+    assert lines_of(o) == [('RED', [('S', 10)])] and any('rows' in w or 'row 4' in w for w in o['warnings'])
+
+
+def test_two_columns_naming_one_field_are_asked_not_picked():
+    # "Order Qty" and "Sample Qty": the rightmost used to win silently
+    wb, _ = book([['Style', 'Colour', 'Size', 'Order Qty', 'Sample Qty'], ['DQ-1', 'RED', 'S', 1000, 2], ['DQ-1', 'RED', 'M', 1200, 2]])
+    d = workbooks.parse(save(wb))
+    assert d['orders'] == [] and 'D1 “Order Qty” and E1 “Sample Qty” both name the quantity column' in d['notes'][0]
+    s = matcher.suggest(d['sheets'][0])
+    assert s['table']['confidence'] == 'medium' and s['definition']['table']['columns']['quantity'] == 4
+    assert any('column E (“Sample Qty”) also names the quantity' in e for e in s['table']['evidence'])
+
+
+def test_swapped_size_and_colour_headings_are_refused():
+    wb, _ = book([['Style', 'Size', 'Colour', 'Qty'], ['SW-1', 'RED', 'S', 10], ['SW-1', 'BLUE', 'M', 12]])
+    d = workbooks.parse(save(wb))
+    assert d['orders'] == [] and 'the headings look swapped' in d['notes'][0]
+    ok, rejected = matcher.check(d['sheets'][0], {'fields': {}, 'table': {'type': 'flat', 'header_row': 1,
+                                                                            'columns': {'style': 1, 'size': 2, 'color': 3, 'quantity': 4}}})
+    assert [r['field'] for r in rejected] == ['size'] and 'size' not in ok['table']['columns']
+    ok, rejected = matcher.check(d['sheets'][0], {'fields': {}, 'table': {'type': 'flat', 'header_row': 1,
+                                                                            'columns': {'style': 1, 'size': 3, 'color': 2, 'quantity': 4}}})
+    assert not rejected                                                    # the person maps them the right way round
+
+
+def test_code_fields_holding_descriptions_are_asked():
+    # a "Style" column of descriptions used to be created as a new style number in STYLENUM
+    wb, _ = book([['Style', 'Colour', 'Size', 'Qty'], ['BABY GIRLS ROMPER WITH FRILL AND HOOD', 'RED', 'S', 5]])
+    o = workbooks.parse(save(wb))['orders'][0]
+    assert o['style'] == '' and o['provenance']['style']['doubt'] == 'BABY GIRLS ROMPER WITH FRILL AND HOOD'
+    assert 'A2 holds “BABY GIRLS ROMPER WITH FRILL AND HOOD”, which reads like a description, not a style number — enter the style number.' in o['warnings']
+    assert workbooks.finish(dict(workbooks.base_order(), style='ZK-1001 BLUE'))['style'] == 'ZK-1001 BLUE'
+
+
+def test_unicode_labels_keep_buyer_templates_apart():
+    assert F.norm('வாங்குபவர்') and F.norm('வாங்குபவர்') != F.norm('விற்பனையாளர்') and F.norm('Ｑｔｙ') == 'qty'
+    def tamil(labels, values):
+        wb, ws = book([], 'PO')
+        for r, (l, v) in enumerate(zip(labels, values), 1):
+            ws.cell(r, 1, l); ws.cell(r, 2, v)
+        for c, h in enumerate(['Colour', 'S', 'M', 'L'], 1):
+            ws.cell(6, c, h)
+        ws.append(['RED', 1, 2, 3])
+        return save(wb)
+    a = sheet_of(tamil(['வாங்குபவர்', 'Style No', 'கப்பல் தேதி'], ['சென்னை கிட்ஸ்', 'TA-1', '15/01/2027']))
+    d = {'fields': {'buyer': 'B1', 'style': 'B2', 'ship_date': 'B3'}, 'table': {'type': 'matrix', 'header_row': 6, 'color_col': 1,
+                                                                                'first_size_col': 2, 'last_size_col': 4}}
+    t = dict(id='t', name='TAMIL A', version=1, signature=workbooks.layout_signature(a, d), labels=sorted(workbooks.layout_labels(a, d)),
+             definition=d, anchors=matcher.anchors(a, d), unit=None, quantity_basis=None)
+    # buyer B: "seller" and "order date" captions in the same cells — used to be read as buyer A's buyer and ship date
+    other = workbooks.parse(tamil(['விற்பனையாளர்', 'Style No', 'ஆர்டர் தேதி'], ['மதுரை டிரேடர்ஸ்', 'TB-1', '01/10/2026']), [t])
+    assert other['orders'] == [] and other['templates_used'] == []
+    again = workbooks.parse(tamil(['வாங்குபவர்', 'Style No', 'கப்பல் தேதி'], ['சென்னை கிட்ஸ்', 'TA-2', '20/01/2027']), [t])
+    assert again['templates_used'] == ['t'] and again['orders'][0]['style'] == 'TA-2'
+    blank = dict(t, signature=workbooks.signature_of(set()), labels=[], anchors={})
+    assert workbooks.template_score({'name': 'X', 'rows': 1, 'cols': 1, 'cells': [dict(row=1, col=1, cell='A1', value=5)]}, blank) == 0.0
+
+
+def test_matrix_template_never_drops_an_extra_size_column(env):
+    def po(extra=False):
+        wb, ws = book([], 'PO')
+        for r, (l, v) in enumerate([('Customer', 'ZEN KIDS'), ('Article No', 'ZK-2'), ('Ship Date', '15/01/2027')], start=1):
+            ws.cell(r, 1, l); ws.cell(r, 2, v)
+        for c, h in enumerate(['Colour', 'S', 'M', 'L'] + (['XL'] if extra else []), 1):
+            ws.cell(5, c, h)
+        ws.append(['NAVY', 10, 20, 30] + ([40] if extra else []))
+        return save(wb)
+    c = env
+    d = upload(c, po())
+    definition = {'fields': {'buyer': 'B1', 'style': 'B2', 'ship_date': 'B3'},
+                  'table': {'type': 'matrix', 'header_row': 5, 'color_col': 1, 'first_size_col': 2, 'last_size_col': 4}}
+    assert c.post(f'/api/drafts/{d["id"]}/map', json=dict(version=d['version'], sheet='PO', definition=definition,
+                                                          save_template=True, template_name='ZEN no total')).status_code == 200
+    d = upload(c, po(extra=True))                                       # XL (40 pieces) used to be dropped silently
+    assert d['template'] is None and d['orders'] == []
+    assert any('E5 holds the size “XL” right next to the size columns B–D; its quantities would be left out' in n for n in d['notes'])
+    assert d['suggestion']['definition']['table']['last_size_col'] == 5
+
+
+def test_captions_under_values_are_never_preselected():
+    # value / caption stacks: "Style No" used to take the colour "NAVY" below it as the style (high confidence)
+    wb, ws = book([['ZEN KIDS', None, 'ZK-88'], ['Buyer', None, 'Style No'], [datetime(2027, 3, 1), None, 'NAVY'], ['Ship Date', None, 'Colour'],
+                   [], [], ['Colour', 'S', 'M', 'L'], ['NAVY', 10, 20, 30]], 'PO')
+    s = matcher.suggest(sheet_of(save(wb)))
+    assert s['fields']['style']['cell'] == 'C1' and s['fields']['style']['confidence'] == 'low'
+    assert s['fields']['buyer']['cell'] == 'A1' and 'style' not in s['definition']['fields'] and 'buyer' not in s['definition']['fields']
+    assert any('may be written under their values' in e for e in s['fields']['style']['evidence'])
+
+
+def test_merged_two_row_header_keeps_the_colour_column(env):
+    def po(style='MG-1'):
+        wb, ws = book([], 'PO')
+        ws['A1'], ws['C1'], ws['A2'], ws['C2'] = 'Customer', 'ZEN KIDS', 'Style No', style
+        ws.merge_cells('A1:B1'); ws.merge_cells('A2:B2')
+        ws['A4'], ws['B4'], ws['F4'] = 'Colour', 'Sizes', 'Total'
+        ws.merge_cells('A4:A5'); ws.merge_cells('B4:E4'); ws.merge_cells('F4:F5')
+        for c, h in enumerate(['S', 'M', 'L', 'XL'], 2):
+            ws.cell(5, c, h)
+        ws.append(['NAVY', 1, 2, 3, 4, 10]); ws.append(['RED', 5, 5, 5, 5, 20])
+        return save(wb)
+    sheet = sheet_of(po()); s = matcher.suggest(sheet)
+    t = s['definition']['table']
+    assert (t['header_row'], t['color_col'], t['first_size_col'], t['last_size_col'], t['total_col']) == (5, 1, 2, 5, 6)
+    assert matcher.anchors(sheet, s['definition'])['table.color_col'] == {'cell': 'A5', 'label_cell': 'A4', 'label': 'Colour'}
+    o = workbooks.apply_template([sheet], sheet, s['definition'])[0]
+    assert [l['color'] for l in o['lines']] == ['NAVY', 'RED']           # colours used to be lost (every line blank)
+    c = env; d = upload(c, po())
+    assert c.post(f'/api/drafts/{d["id"]}/map', json=dict(version=d['version'], sheet='PO', definition=s['definition'],
+                                                          save_template=True, template_name='Merged')).status_code == 200
+    nxt = upload(c, po('MG-2'))                                          # the anchor is the merged heading: still applies
+    assert nxt['format'] == 'Template: Merged' and nxt['orders'][0]['style'] == 'MG-2'
+
+
+def test_month_first_file_does_not_guess_an_ambiguous_date():
+    wb, _ = book([['Style', 'MD-1'], ['Order Date', '10/01/2026'], ['Ship Date', '12/20/2026'], [], ['Size', 'Qty'], ['M', 5]])
+    o = workbooks.parse(save(wb))['orders'][0]
+    assert o['ship_date'] == '2026-12-20' and o['order_date'] == ''      # was 2026-01-10 (day-first) with only a note
+    assert o['provenance']['order_date']['question'] == ('“10/01/2026” could be 10 January 2026 or 1 October 2026; this file writes '
+                                                         '“12/20/2026” month first — enter the order date.')
+    wb, _ = book([['Style', 'MD-2'], ['Order Date', '10/01/2026'], ['Ship Date', '20/12/2026'], [], ['Size', 'Qty'], ['M', 5]])
+    o = workbooks.parse(save(wb))['orders'][0]                            # a day-first file keeps the documented rule
+    assert o['order_date'] == '2026-01-10' and any('read as day/month/year' in w for w in o['warnings'])
+
+
+def test_a_second_label_for_the_same_date_is_named():
+    wb, _ = book([['Style', 'TD-1', None, 'Revised Ship Date', datetime(2027, 2, 1)], ['Order Date', datetime(2026, 10, 2)],
+                  ['Ship Date', datetime(2027, 1, 15)], [], ['Colour', 'Size', 'Qty'], ['RED', 'S', 5]])
+    o = workbooks.parse(save(wb))['orders'][0]
+    assert o['ship_date'] == '2027-01-15'
+    assert 'D1 “Revised Ship Date” says 2027-02-01, but the ship date was read from B3 (2027-01-15) — check which date is meant.' in o['warnings']
+
+
+def test_quantities_written_as_text_with_grouping_or_units():
+    assert workbooks.number('1,5') is None and workbooks.number('1,20,000') == 120000 and workbooks.number('nan') is None
+    assert workbooks.qty_value('1,500 pcs') == (1500, 'PCS') and workbooks.qty_value('20 Packs') == (20, 'PACK')
+    wb, _ = book([['Style', 'Colour', 'Size', 'Qty'], ['Q-1', 'RED', 'S', '1,500 pcs'], ['Q-1', 'RED', 'M', '2,000 pcs']])
+    o = workbooks.parse(save(wb))['orders'][0]                            # used to be refused: "0 of 2 rows hold a quantity"
+    assert lines_of(o) == [('RED', [('S', 1500), ('M', 2000)])] and o['lines'][0]['sizes'][0]['source']['value'] == '1,500 pcs'
+    assert (o['qty_unit'], o['pieces_per_unit']) == ('PCS', 1) and 'the quantities say “1,500 pcs”' in o['provenance']['qty_unit']['evidence']
+    assert not errors(plan(dict(o, buyer='B', description='D', po_number='P', order_ref='R/9', order_date='2026-10-01',
+                                ship_date='2026-11-01', quantity_basis='sample')))
+    wb, _ = book([['Style', 'Colour', 'Size', 'Qty'], ['Q-2', 'RED', 'S', '1,500'], ['Q-2', 'RED', 'M', '1,5']])
+    d = workbooks.parse(save(wb))                                         # "1,5" is never read as 15
+    assert d['orders'] == [] and '1 of 2 filled rows hold a quantity' in d['notes'][0]
+
+
+def test_one_buyer_in_two_spellings_and_merged_style_cells_are_one_order():
+    wb, ws = book([['Buyer', 'Style', 'Colour', 'Size', 'Qty'], ['Zen Kids', 'CS-1', 'RED', 'S', 10], ['ZEN KIDS ', None, 'RED', 'M', 12],
+                   [None, None, 'RED', 'L', 14]])
+    ws.merge_cells('B2:B4'); ws.merge_cells('A3:A4'); ws['A3'] = 'ZEN KIDS '
+    d = workbooks.parse(save(wb))                                         # used to split into two orders, or fail on the blank style
+    assert len(d['orders']) == 1 and d['orders'][0]['buyer'] == 'Zen Kids'
+    assert lines_of(d['orders'][0]) == [('RED', [('S', 10), ('M', 12), ('L', 14)])]
+
+
+def test_same_style_and_po_on_two_sheets_is_flagged():
+    wb = Workbook(); a = wb.active; a.title = 'PO rev1'; b = wb.create_sheet('PO rev2')
+    for ws, qty in ((a, (100, 100)), (b, (120, 80))):
+        for row in [['Style No', 'R-5'], ['PO No', 'R/PO/5'], [], ['Colour', 'Size', 'Qty'], ['RED', 'S', qty[0]], ['RED', 'M', qty[1]]]:
+            ws.append(row)
+    d = workbooks.parse(save(wb))
+    note = 'Sheets “PO rev1” and “PO rev2” both hold style R-5 and PO R/PO/5 — if one is an older copy, remove that order before saving.'
+    assert len(d['orders']) == 2 and all(note in o['warnings'] for o in d['orders'])
+
+
+def test_garment_abbreviations_and_typos():
+    assert matcher.name_score('Shp Dt', F.DEFAULT.aliases('ship_date'))[0] == 1.0
+    assert matcher.name_score('Colr', F.DEFAULT.aliases('color'))[0] == 1.0 and matcher.name_score('Sz', F.DEFAULT.aliases('size'))[0] == 1.0
+    assert matcher.name_score('Ord Date', F.DEFAULT.aliases('order_date'))[0] == 1.0
+    assert matcher.name_score('Byer', F.DEFAULT.aliases('buyer'))[0] < matcher.FLOOR     # an unknown typo is not a match
+    assert all(matcher.size_like(x) for x in ('2/3Y', 'S/M', '110 cm', '3-6M'))
