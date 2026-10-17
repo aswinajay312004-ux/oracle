@@ -148,7 +148,7 @@ def test_xls_upload_and_non_excel_refused(env):
 def test_offline_preview_is_marked_and_cannot_be_approved(env, monkeypatch):
     c, _ = env
     from backend import oracle_store
-    def down():
+    def down(*a, **k):
         raise RuntimeError('down')
     monkeypatch.setattr(oracle_store, 'connect', down)
     d = upload(c); p = ready(c, d)

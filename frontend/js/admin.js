@@ -186,22 +186,27 @@ async function fields(body) {
 async function users(body) {
   const list = await api('/api/users');
   const roles = ['operator', 'approver', 'admin', 'viewer'];
-  body.innerHTML = `<section class="card"><div class="card-head"><div><h2>People</h2><div class="sub">Operators prepare entries · Approvers save to Oracle · Admins manage setup</div></div></div>
+  body.innerHTML = `<section class="card"><div class="card-head"><div><h2>People</h2><div class="sub">Operators prepare entries · Approvers save to Oracle · Admins manage setup</div></div>
+      <button class="secondary small" data-signout-all title="Ends every signed-in session except yours, for example after a shared password became known">Sign out everyone else</button></div>
     <div class="tbl-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
     ${list.map(u => `<tr><td><strong>${esc(u.username)}</strong></td><td><select data-role="${esc(u.username)}">${roles.map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
-      <td>${u.active ? '<span class="pill ok">active</span>' : '<span class="pill">disabled</span>'}</td>
-      <td><button class="ghost small" data-active-user="${esc(u.username)}" data-active="${!u.active}">${u.active ? 'Disable' : 'Enable'}</button> <button class="ghost small" data-reset="${esc(u.username)}">Reset password</button></td></tr>`).join('')}
+      <td>${u.active ? '<span class="pill ok">active</span>' : '<span class="pill">disabled</span>'}${u.locked_until ? ` <span class="pill err" title="Too many wrong passwords">locked until ${esc(new Date(u.locked_until).toLocaleTimeString())}</span>` : ''}</td>
+      <td><button class="ghost small" data-active-user="${esc(u.username)}" data-active="${!u.active}">${u.active ? 'Disable' : 'Enable'}</button> <button class="ghost small" data-reset="${esc(u.username)}">Reset password</button>${u.locked_until ? ` <button class="secondary small" data-unlock="${esc(u.username)}">Unlock</button>` : ''}</td></tr>`).join('')}
     </tbody></table></div>
     <div class="card-body"><h3 class="mb-8">Add a person</h3>
     <form id="add-user" class="form-row"><label>Username<input name="username" required minlength="2" maxlength="50" pattern="[A-Za-z0-9._@\-]+"></label>
-      <label>Temporary password<input name="password" type="password" required minlength="10" autocomplete="new-password"></label>
+      <label>Temporary password<input name="password" type="password" required minlength="12" autocomplete="new-password" title="At least 12 characters, not a common password, not the username"></label>
       <label>Role<select name="role">${roles.map(r => `<option>${r}</option>`).join('')}</select></label><button class="primary">Add</button></form></div></section>`;
   $('#add-user').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); busy('Adding…', async () => { await api('/api/users', { method: 'POST', body: Object.fromEntries(f) }); notify('Person added.', 'success'); await users(body); }); };
   body.onchange = e => { const s = e.target.closest('[data-role]'); if (s) busy('Saving…', async () => { await api(`/api/users/${id(s.dataset.role)}`, { method: 'PATCH', body: { role: s.value } }); notify('Role updated.', 'success'); await users(body); }); };
   body.onclick = e => {
     const a = e.target.closest('[data-active-user]'); const r = e.target.closest('[data-reset]');
     if (a) busy('Saving…', async () => { await api(`/api/users/${id(a.dataset.activeUser)}`, { method: 'PATCH', body: { active: a.dataset.active === 'true' } }); await users(body); });
-    if (r) { const pw = prompt(`New password for ${r.dataset.reset} (10+ characters)`); if (pw) busy('Saving…', async () => { await api(`/api/users/${id(r.dataset.reset)}`, { method: 'PATCH', body: { password: pw } }); notify('Password reset. Their sessions were signed out.', 'success'); }); }
+    const un = e.target.closest('[data-unlock]'); const all = e.target.closest('[data-signout-all]');
+    if (un) busy('Unlocking…', async () => { await api(`/api/users/${id(un.dataset.unlock)}/unlock`, { method: 'POST' }); notify(`${un.dataset.unlock} can sign in again.`, 'success'); await users(body); });
+    if (all) confirmDialog('Sign out everyone else?', '<p>Every other signed-in session ends now. People sign in again with their own password.</p>', 'Sign them out')
+      .then(ok => ok && busy('Signing out…', async () => { const res = await api('/api/sessions/sign-out-everyone', { method: 'POST' }); notify(`${res.sessions_ended} session${res.sessions_ended === 1 ? '' : 's'} ended.`, 'success'); }));
+    if (r) { const pw = prompt(`New password for ${r.dataset.reset} (12+ characters, not a common password)`); if (pw) busy('Saving…', async () => { await api(`/api/users/${id(r.dataset.reset)}`, { method: 'PATCH', body: { password: pw } }); notify('Password reset. Their sessions were signed out.', 'success'); }); }
   };
 }
 
@@ -209,16 +214,27 @@ const ACTIONS = { upload: 'Uploaded a file', edit: 'Corrected values', preview: 
   mapping_applied: 'Applied a layout', template_saved: 'Saved a layout template', mapping_status: 'Changed column mapping', login: 'Signed in', login_failed: 'Failed sign-in',
   user_created: 'Added a person', user_changed: 'Changed a person', settings_changed: 'Changed settings', setup: 'Created the workspace', template_active: 'Changed a template',
   field_changed: 'Changed an order field', template_unit_learned: 'A layout template learned its quantity unit',
-  knowledge_edit: 'Edited the data dictionary', knowledge_refresh: 'Refreshed the data dictionary', chat_feedback: 'Rated an AI answer', example_deleted: 'Removed a confirmed answer' };
+  login_locked: 'Account locked after wrong passwords', user_unlocked: 'Unlocked an account', sessions_revoked: 'Signed everyone else out',
+  audit_verified: 'Checked the audit history', knowledge_edit: 'Edited the data dictionary', knowledge_refresh: 'Refreshed the data dictionary', chat_feedback: 'Rated an AI answer', example_deleted: 'Removed a confirmed answer' };
 
 async function audit(body) {
   const list = await api('/api/audit');
-  body.innerHTML = `<section class="card"><div class="card-head"><div><h2>Audit history</h2><div class="sub">Latest 300 events · stored locally; Oracle saves are also logged in PP_IMPORT_LOG</div></div></div>
+  body.innerHTML = `<section class="card"><div class="card-head"><div><h2>Audit history</h2><div class="sub">Latest 300 events · stored locally, cannot be edited or deleted; Oracle saves are also logged in PP_IMPORT_LOG</div></div>
+      ${can('users') ? '<button class="secondary small" data-verify-audit title="Recomputes the chain of fingerprints that links every entry to the one before">Verify history is untouched</button>' : ''}</div>
     <div class="tbl-wrap max-h-70vh"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead><tbody>
     ${list.map(a => `<tr><td class="nowrap">${esc(new Date(a.at).toLocaleString())}</td><td>${esc(a.actor)}</td><td>${esc(ACTIONS[a.action] || a.action)}</td>
       <td class="evidence">${a.detail.changes ? a.detail.changes.slice(0, 6).map(c => `<div><code>${esc(c.field)}</code>: ${esc(show(c.before))} → <b>${esc(show(c.after))}</b></div>`).join('') + (a.detail.changes.length > 6 ? `<div>…${a.detail.changes.length - 6} more</div>` : '')
         : esc(Object.entries(a.detail).filter(([, v]) => v != null).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v).slice(0, 120) : v}`).join(' · '))}</td></tr>`).join('')}
     </tbody></table></div></section>`;
+  body.onclick = e => {
+    if (!e.target.closest('[data-verify-audit]')) return;
+    busy('Checking every entry…', async () => {
+      const r = await api('/api/audit/verify');
+      if (r.ok) notify(`The audit history is untouched: ${r.rows} entries checked.`, 'success');
+      else notify(`The audit history was changed near entry ${r.row ?? '?'}. Keep the database file and tell your administrator.`, 'error');
+      await audit(body);
+    });
+  };
 }
 
 async function settings(body) {

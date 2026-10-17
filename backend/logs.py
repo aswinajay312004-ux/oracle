@@ -66,6 +66,7 @@ def current_user():
     ctx = CONTEXT.get()
     return ctx['user'] if ctx else None
 
+
 MAX_BYTES = 10 * 1024 * 1024
 BACKUPS = 8
 FILENAME = 'app.jsonl'
@@ -116,7 +117,7 @@ def redact(value, key=None, depth=0):
 
 
 class JsonFormatter(logging.Formatter):
-    """One JSON object per record. Runs in the logging thread, so the request's context variables apply."""
+    """One JSON object per record. Runs in the thread that logs (QueueHandler.prepare), so the request's context applies."""
 
     RESERVED = set(vars(logging.LogRecord('', 0, '', 0, '', None, None))) | {'message', 'asctime', 'fields', 'taskName', 'color_message'}
 

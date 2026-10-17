@@ -14,6 +14,9 @@ async function session() {
   $('#auth-text').textContent = s.needs_setup ? 'Create the administrator account for this computer. You can add operators and approvers afterwards.' : 'Sign in to prepare and approve ERP entries.';
   $('#auth-submit').textContent = s.needs_setup ? 'Create administrator →' : 'Sign in →';
   $('#auth-pass').autocomplete = s.needs_setup ? 'new-password' : 'current-password';
+  // a new administrator password needs 12+ characters; signing in accepts what an older account already has
+  $('#auth-pass').minLength = s.needs_setup ? 12 : 1;
+  $('#auth-pass').title = s.needs_setup ? 'At least 12 characters, not a common password, not your username' : '';
   $('#username').textContent = s.username || '—'; $('#role').textContent = s.role || ''; $('#avatar').textContent = (s.username || 'P')[0].toUpperCase();
   return s.authenticated;
 }

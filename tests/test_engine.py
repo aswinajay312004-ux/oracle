@@ -426,7 +426,7 @@ def test_master_names_for_matching_survive_one_oversized_master(monkeypatch):
         def __enter__(self): return self
         def __exit__(self, *a): return False
     monkeypatch.setattr(oracle_store, 'OracleCatalog', Catalog)
-    monkeypatch.setattr(oracle_store, 'connect', lambda: Conn())
+    monkeypatch.setattr(oracle_store, 'connect', lambda *a, **k: Conn())
     monkeypatch.setattr(oracle_store, 'current_mapping', lambda: mapping.effective())
     assert main.master_labels() == {'buyer': ['BUYMAS NAME'], 'color': [], 'size': ['SIZE_MAS NAME']}
     assert sorted(asked) == ['BUYMAS', 'COLORMAS', 'SIZE_MAS']

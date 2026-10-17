@@ -51,6 +51,7 @@ def log_dir():
 @asynccontextmanager
 async def lifespan(app):
     logs.add_secret(setting('ORACLE_PASSWORD'))
+    logs.add_secret(setting('ORACLE_RO_PASSWORD'))
     logs.setup(log_dir())
     try:
         copy = store.init()
@@ -474,7 +475,7 @@ def _reader_checks():
 @app.get('/api/masters')
 def get_masters(user=Depends(authenticated)):
     try:
-        with oracle.connect() as conn:
+        with oracle.connect(purpose='masters', user=user, readonly=True) as conn:
             return oracle.masters(conn)
     except Exception:
         return {}
@@ -521,7 +522,7 @@ def master_labels():
     Empty when Oracle is not reachable: matching then relies on labels and value shapes only. Only these three
     masters are read, each on its own, so a large style or party master never hides the buyer names."""
     try:
-        with oracle.connect() as conn:
+        with oracle.connect(purpose='masters', readonly=True) as conn:
             found = oracle.masters(conn, roles=('buyer', 'color', 'size')) or {}
     except Exception:
         return {}
@@ -846,7 +847,7 @@ def history(user=Depends(authenticated)):
 
 @app.get('/api/history/{id}')
 def history_result(id: str, user=Depends(authenticated)):
-    with oracle.connect() as conn:
+    with oracle.connect(purpose='history', user=user, readonly=True) as conn:
         result = oracle.read_result(conn.cursor(), id)
         if not result:
             raise HTTPException(404, 'Import receipt not found.')
@@ -856,7 +857,7 @@ def history_result(id: str, user=Depends(authenticated)):
 @app.get('/api/history/{id}/graph')
 def history_graph(id: str, user=Depends(authenticated)):
     m = oracle.current_mapping()
-    with oracle.connect() as conn:
+    with oracle.connect(purpose='read-back', user=user, readonly=True) as conn:
         result = oracle.read_result(conn.cursor(), id)
         if not result:
             raise HTTPException(404, 'Import receipt not found.')
@@ -1015,7 +1016,7 @@ _LEX = {}
 
 
 def knowledge_base():
-    return insight.knowledge(oracle.connect, oracle.current_mapping())
+    return insight.knowledge(lambda: oracle.connect(purpose='dictionary', readonly=True), oracle.current_mapping())
 
 
 def lexicon(kb):
@@ -1029,7 +1030,7 @@ def query_sources():
     """{'db': (read-only executor, dialect) or None, 'local': uploaded-files source}. Tests replace this."""
     conn = None
     try:
-        conn = oracle.connect()
+        conn = oracle.connect(purpose='question', readonly=True)   # read-only account when configured
     except Exception:
         conn = None
     local = insight.uploads_db()
@@ -1233,7 +1234,7 @@ def knowledge_edit(data: KnowledgeEdit, user=Depends(require('mapping'))):
 @app.post('/api/knowledge/refresh')
 def knowledge_refresh(user=Depends(require('mapping'))):
     try:
-        phys = insight.refresh_physical(oracle.connect)
+        phys = insight.refresh_physical(lambda: oracle.connect(purpose='dictionary', readonly=True))
     except Exception as exc:   # the driver's text can name the host and service: only the error code is shown
         code = getattr(exc.args[0], 'full_code', None) if isinstance(exc, oracledb.Error) and exc.args else None
         logs.event('knowledge_refresh_failed', 40, error=type(exc).__name__, code=code)

@@ -18,7 +18,8 @@
   install-service.ps1 rewrites the executable to %BASE%\current\python\python.exe when a release ships the
   embeddable Python instead of a .venv. Interpreter flags: -E and -s ignore PYTHON* variables and the user
   site folder; not -I, which would also drop the working folder from sys.path and break "backend.main".
-  The uvicorn log-config option is added when the JSON logging configuration (checklist item 44) ships.
+  The app writes its own JSON logs (request IDs, rotation) to the data folder's logs directory, so uvicorn's
+  access log stays off and no log configuration file is needed.
   (XML comments cannot contain two dashes in a row, so command-line options are not spelled out here.)
 -->
 <service>
