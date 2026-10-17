@@ -18,7 +18,8 @@
       </a>
       <nav class="nav" aria-label="Main">
         <div class="nav-label">Work</div>
-        <button data-view="workspace" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>New order</button>
+        <button data-view="dashboard" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Overview</button>
+        <button data-view="workspace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>New order</button>
         <button data-view="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Saved orders</button>
         <button data-view="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9 11h.01M12 11h.01M15 11h.01"/></svg>Ask AI</button>
         <div class="nav-label">Data</div>
@@ -35,8 +36,20 @@
 
     <div class="main">
       <main id="main" class="page">
+        <!-- OVERVIEW -->
+        <section id="view-dashboard" class="view">
+          <div class="page-head"><div><span class="eyebrow">Today</span><h1>Overview</h1><p class="lead">Orders waiting for you, what was saved to Oracle, and whether everything is connected.</p></div>
+            <button class="primary" data-goto="workspace">＋ Upload an Excel order</button></div>
+          <div class="kpis" id="dash-kpis"></div>
+          <div class="dash-grid">
+            <section class="card"><div class="card-head"><h2>Work queue</h2><span class="muted small-text">Orders not yet saved to Oracle</span></div><div id="dash-queue"></div></section>
+            <section class="card"><div class="card-head"><h2>Connections</h2></div><div id="dash-status" class="dash-status"></div></section>
+          </div>
+          <section class="card" style="margin-top:14px"><div class="card-head"><h2>Recently saved to Oracle</h2><button class="ghost small" data-goto="history">All saved orders →</button></div><div id="dash-saved"></div></section>
+        </section>
+
         <!-- NEW ORDER -->
-        <section id="view-workspace" class="view">
+        <section id="view-workspace" class="view" hidden>
           <div class="page-head">
             <div><span class="eyebrow">Order entry</span><h1 id="ws-title">New sample order</h1></div>
             <ol class="stepper" aria-label="Progress">

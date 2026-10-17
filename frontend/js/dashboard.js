@@ -1,0 +1,44 @@
+// Overview: the work queue (drafts not yet saved), recent Oracle saves read from the receipts, and the
+// connection lights. Every figure comes from /api/overview or /api/health; nothing is estimated.
+import { $, esc, fmt, state, timeAgo } from './util.js';
+import { api } from './api.js';
+
+const STATUS_PILL = { 'Needs attention': 'err', 'Ready to approve': 'ok', 'Checked offline': 'warn', Draft: '' };
+
+export async function loadDashboard() {
+  let o;
+  try { o = await api('/api/overview'); } catch (e) { $('#dash-queue').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
+  const s = o.saved;
+  const tiles = [
+    ['Needs attention', o.counts['Needs attention'], 'Orders with fields to correct'],
+    ['Ready to approve', o.counts['Ready to approve'], 'Checked against live Oracle'],
+    ['Drafts', o.counts['Draft'] + o.counts['Checked offline'], 'Uploaded, not yet checked'],
+    ['Saved in last 7 days', s.available ? s.last_7_days : '—', s.available ? 'Read from Oracle receipts' : 'Oracle offline'],
+  ];
+  $('#dash-kpis').innerHTML = tiles.map(([label, value, hint]) =>
+    `<div class="card kpi"><small>${esc(label)}</small><b>${esc(typeof value === 'number' ? fmt(value, 0) : value)}</b><span class="muted small-text">${esc(hint)}</span></div>`).join('');
+  $('#dash-queue').innerHTML = o.queue.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order / style</th><th class="num">Pieces</th><th>Status</th><th>Uploaded</th><th></th></tr></thead><tbody>
+    ${o.queue.map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><b>${esc(d.filename)}</b><div class="muted small-text">${esc(d.format || '')}</div></td>
+      <td>${esc((d.order_refs || []).filter(Boolean).join(', ') || '—')}<div class="muted small-text">${esc([...(d.buyers || []), ...(d.styles || [])].filter(Boolean).slice(0, 4).join(' · '))}</div></td>
+      <td class="num">${d.pieces == null ? '—' : esc(fmt(d.pieces, 0))}</td>
+      <td><span class="pill ${STATUS_PILL[d.status] ?? ''}">${esc(d.status)}</span></td>
+      <td class="nowrap">${d.created_at ? esc(timeAgo(d.created_at)) : '—'}<div class="muted small-text">${esc(d.uploaded_by || '')}</div></td>
+      <td><button class="secondary small" data-open-draft="${esc(d.id)}">Open →</button></td></tr>`).join('')}</tbody></table></div>`
+    : '<p class="empty">Nothing waiting. Upload an Excel order to start.</p>';
+  $('#dash-saved').innerHTML = !s.available ? `<p class="empty">${esc(s.note || 'Oracle is offline.')}</p>`
+    : s.recent.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order</th><th>Approved by</th><th>Saved</th><th></th></tr></thead><tbody>
+      ${s.recent.map(r => `<tr><td><b>${esc(r.filename || r.job_id)}</b></td><td>${esc((r.orders || []).filter(Boolean).join(', ') || '—')}</td><td>${esc(r.approver)}</td>
+        <td class="nowrap">${esc(new Date(r.committed_at).toLocaleString())}</td><td><button class="secondary small" data-receipt-go="${esc(r.job_id)}">Show where it was saved</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="empty">No orders have been saved to Oracle yet.</p>';
+  drawStatus();
+}
+
+function drawStatus() {
+  const h = state.health || {}; const db = h.database || {}; const ro = h.readonly || {}; const ai = h.ollama || {};
+  const row = (ok, title, detail) => `<div class="dash-light ${ok === true ? 'ok' : ok === false ? 'off' : 'idle'}"><i class="dot"></i><div><b>${esc(title)}</b><small>${esc(detail)}</small></div></div>`;
+  $('#dash-status').innerHTML = [
+    row(!!db.connected, db.connected ? 'Oracle connected' : 'Oracle offline', db.connected ? `${db.owner} · ${db.tables} tables · saving enabled` : (db.error || 'Start Docker Desktop and the oracle26ai container.')),
+    row(db.connected ? !!ro.connected : null, ro.connected ? 'Ask AI account ready (read-only)' : 'Ask AI account not ready', ro.connected ? `${ro.user} can only read data` : (ro.error || 'Needs Oracle first.')),
+    row(ai.available ? true : null, ai.available ? 'Local AI ready' : 'Local AI off', ai.available ? ai.model : 'Optional — known layouts and questions still work'),
+  ].join('');
+}

@@ -49,3 +49,20 @@ def test_real_merch_upload_corrections_preview_and_stale_accept(client):
     assert ready['plan']['errors']==[],ready['plan']['errors']
     assert ready['plan']['totals']['pieces']==30
     # Client data is never committed by this fixture; the separate Oracle test commits synthetic TEST data.
+
+
+def test_overview_counts_real_drafts_and_never_invents_oracle_figures(client, monkeypatch):
+    import sys; sys.path.insert(0, str(Path(__file__).parent))
+    from fixtures import merch_bom
+    from datetime import datetime, timedelta
+    client.post('/api/setup', json={'username': 'tester', 'password': 'test-password-123'})
+    assert client.post('/api/uploads', files={'file': ('bom.xlsx', merch_bom(sample=(1, 2, 3, 4)))}).status_code == 200
+    monkeypatch.setattr(main.oracle, 'history', lambda: (_ for _ in ()).throw(RuntimeError('offline')))
+    o = client.get('/api/overview').json()
+    assert o['open'] == 1 and o['queue'][0]['filename'] == 'bom.xlsx' and o['counts']['Draft'] == 1
+    assert o['saved']['available'] is False and o['saved']['last_7_days'] is None   # offline: no number shown
+    now = datetime.now().astimezone()
+    monkeypatch.setattr(main.oracle, 'history', lambda: [dict(job_id='a', approver='x', committed_at=now.isoformat()),
+                                                         dict(job_id='b', approver='x', committed_at=(now - timedelta(days=9)).isoformat())])
+    saved = client.get('/api/overview').json()['saved']
+    assert saved['available'] and saved['total'] == 2 and saved['last_7_days'] == 1

@@ -584,6 +584,32 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
         return result
 
 
+# --- overview: real figures only (local drafts + Oracle receipts); nothing estimated -----------------
+QUEUE_ORDER = ('Needs attention', 'Ready to approve', 'Checked offline', 'Draft')
+
+
+@app.get('/api/overview')
+def overview(user=Depends(authenticated)):
+    drafts = store.summaries()
+    open_ = [d for d in drafts if not d['committed']]
+    counts = {k: sum(1 for d in open_ if d['status'] == k) for k in QUEUE_ORDER}
+    queue = sorted(open_, key=lambda d: (QUEUE_ORDER.index(d['status']) if d['status'] in QUEUE_ORDER else 9,
+                                         -(datetime.fromisoformat(d['created_at']).timestamp() if d.get('created_at') else 0)))
+    saved = dict(available=False, recent=[], last_7_days=None, total=None)
+    try:
+        records = oracle.history()
+    except Exception:
+        saved['note'] = 'Oracle is offline, so saved-order figures cannot be read right now.'
+    else:
+        now = datetime.now().astimezone()
+        week = [r for r in records if (now - datetime.fromisoformat(r['committed_at']).astimezone()).days < 7]
+        names = {d['id']: d for d in drafts}
+        saved.update(available=True, total=len(records), capped=len(records) >= 100, last_7_days=len(week),
+                     recent=[dict(r, filename=names.get(r['job_id'], {}).get('filename'),
+                                  orders=names.get(r['job_id'], {}).get('order_refs') or []) for r in records[:6]])
+    return dict(queue=queue[:25], counts=counts, open=len(open_), saved=saved)
+
+
 # --- history, read-back graph ---------------------------------------------------------
 @app.get('/api/history')
 def history(user=Depends(authenticated)):

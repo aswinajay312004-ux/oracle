@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-17 (session 2, batch 3) | **382 passed, 0 failed, 18 skipped**; ruff clean | Overview + work queue, Ask AI charts, phone layout |
 | 2026-10-17 (session 2, batch 2) | **381 passed, 0 failed, 18 skipped**; ruff clean | Ask AI, explorer, value index and dictionary harvest moved to the separate read-only account |
 | 2026-10-17 (session 2, batch 1) | **377 passed, 0 failed, 18 skipped**; ruff clean | Root cause of 6: formulas saved without a result (script/export files) read as empty, so pack/piece totals and workbook arithmetic were missing. Added `backend/formulas.py` (safe subset: + − × ÷ ^, refs, SUM/MIN/MAX/AVERAGE/COUNT/ROUND*; nothing executed; cells marked `computed`, sheet note added). 1 stale test updated for the intentional `words` rule in `closed_lists()`. The 18 skips are opt-in local-Oracle tests and client workbooks that exist only on the laptop |
 
@@ -38,6 +39,8 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | B4 | Read-only executor (READ ONLY txn, timeout, row cap) on a **separate read-only account** `POPPYS_RO` | Implemented, Cloud-tested | `oracle_store.connect_readonly()` refuses an account with any write privilege; `scripts/create_readonly_user.py` (run by `setup.ps1`); `/api/health` reports it; `tests/test_readonly.py`. Needs Local Oracle test |
 | C1 | Explorer: search, rows, keyset paging, linked records | Implemented, Cloud-tested | `/api/explorer/*`, `frontend/js/explorer.js` |
 | C2 | Relationship graph / flowchart (no CDN, SVG) | Implemented | `frontend/js/graph.js`, `flow.js` |
+| E1 | Overview screen (default landing): work queue, real counts, recent Oracle saves from receipts, connection lights; nothing estimated (offline → "—") | Implemented, Cloud-tested (rendered desktop + phone) | `GET /api/overview`, `frontend/js/dashboard.js` |
+| E2 | Phone layout: no horizontal page scroll on any screen | Fixed (was broken on New order, Database, Overview) | `minmax(0,1fr)` grids in `frontend/styles.css` |
 | D1 | Windows service, backup/restore, upgrade/rollback | Implemented, Cloud-tested | `deploy/windows/`, `scripts/backup.py` |
 | D2 | Offline packaging (wheelhouse, no CDN) | Needs check | — |
 
@@ -45,7 +48,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 
 1. ~~Fix the failing tests~~ (done, batch 1).
 2. Remove leftover PDF wording in docs (PDF is out of scope).
-3. Re-audit gaps against the master prompt; implement missing pieces.
+3. Re-audit gaps against the master prompt; implement missing pieces. Done so far: read-only account, charts, overview. Still open: undo/redo in the draft editor; REA review (user asked to reuse what helps from https://github.com/morluto/rea).
 4. Produce exact local Oracle verification commands and record results here.
 
 ## Local verification

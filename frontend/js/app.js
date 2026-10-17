@@ -5,6 +5,7 @@ import * as ws from './workspace.js';
 import { loadExplorer, bindExplorer, exploreOrder } from './explorer.js';
 import { loadAdmin, bindAdmin } from './admin.js';
 import { loadChat, bindChat } from './chat.js';
+import { loadDashboard } from './dashboard.js';
 
 async function session() {
   const s = await fetch('/api/session', { credentials: 'same-origin' }).then(r => r.json());
@@ -50,6 +51,7 @@ function go(next) {
   $$('.nav [data-view]').forEach(t => t.classList.toggle('active', t.dataset.view === next));
   $$('.view').forEach(v => { v.hidden = v.id !== `view-${next}`; });
   closeDrawer();
+  if (next === 'dashboard') loadDashboard();
   if (next === 'history') history();
   if (next === 'explorer') loadExplorer();
   if (next === 'admin') loadAdmin();
@@ -106,7 +108,9 @@ function bind() {
   $('#modal').addEventListener('click', e => { if (e.target === $('#modal')) $('#modal').close(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#drawer').hidden) closeDrawer(); });
   document.addEventListener('click', async e => {
-    const b = e.target.closest('[data-open-draft],[data-receipt],[data-explore-order],[data-act2]'); if (!b || state.busy) return;
+    const b = e.target.closest('[data-open-draft],[data-receipt],[data-receipt-go],[data-goto],[data-explore-order],[data-act2]'); if (!b || state.busy) return;
+    if (b.dataset.goto) return go(b.dataset.goto);
+    if (b.dataset.receiptGo) { go('history'); return receipt(b.dataset.receiptGo); }
     if (b.dataset.openDraft) { go('workspace'); return ws.openDraft(b.dataset.openDraft); }
     if (b.dataset.receipt) return receipt(b.dataset.receipt);
     if (b.dataset.exploreOrder) { closeDrawer(); go('explorer'); return exploreOrder(b.dataset.exploreOrder); }
@@ -122,8 +126,8 @@ async function start() {
   $$('[data-permission]').forEach(el => { el.hidden = !can(el.dataset.permission); });
   await Promise.allSettled([status(), lists()]);
   const initial = (location.hash || '').slice(1);
-  go(['workspace', 'history', 'chat', 'explorer', 'admin'].includes(initial) ? initial : 'workspace');
-  clearInterval(start.timer); start.timer = setInterval(status, 30000);
+  go(['dashboard', 'workspace', 'history', 'chat', 'explorer', 'admin'].includes(initial) ? initial : 'dashboard');
+  clearInterval(start.timer); start.timer = setInterval(async () => { await status(); if (!$('#view-dashboard').hidden) loadDashboard(); }, 30000);
 }
 
 bind();
