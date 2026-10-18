@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import json
 import re
+from . import masters as masters_index
 from .mapping import referenced_tables, fingerprint
 
 LIMITS = dict(orders=50, lines=100, sizes=100, fabrics=100, yarns=10, accessories=300)
@@ -75,6 +76,7 @@ class Issues:
 
     def add(self, severity, message, path=None):
         self.items.append(dict(severity=severity, message=message, path=path))
+        return self.items[-1]
 
     def error(self, message, path=None):
         self.add('error', message, path)
@@ -176,7 +178,9 @@ def plan(catalog, orders, filehash, mapping, required=()):
         return '$' + key
 
 
-    def master(role, label, where, provenance=None, path=None, required=True):
+    def master(role, label, where, provenance=None, path=None, required=True, field_path=None):
+        """The record ID of a master value: an existing record (exact text, else the same letters and digits,
+        backend/erp/masters.py), or a new record when the master allows it (similar existing names are listed)."""
         spec = mapping['masters'][role]
         label = ' '.join(str(label or '').strip().split())
         if not label:
@@ -192,8 +196,18 @@ def plan(catalog, orders, filehash, mapping, required=()):
                          f'Leave this column unverified or grant access to the master table.', path)
             return None
         if role not in lookups:
-            lookups[role] = catalog.masters(spec)
-        matches = [x for x in lookups[role] if normalize(x['label']) == normalize(label)]
+            lookups[role] = masters_index.Index(catalog.masters(spec), normalize)
+        index = lookups[role]; business = spec['business'].lower(); at = field_path or path
+        matches = index.exact.get(normalize(label), [])
+        loose = not matches and index.same_letters(label)
+        if loose and len({x['id'] for x in loose}) > 1:
+            names = ', '.join(f'“{x["label"]}”' for x in loose[:4])
+            issues.error(f'{where}: {business} “{label}” could be any of {names} in {table}. Type it exactly as one of them.', at)
+            return None
+        if loose:
+            matches = loose[:1]
+            issues.warn(f'{where}: “{label}” is the existing {business} “{matches[0]["label"]}” ({table} record {matches[0]["id"]}); '
+                        'only spacing, punctuation or letter case differ, so no new record is made.', at)
         if len(matches) > 1 or (matches and matches[0]['id'] is None):
             issues.error(f'{where}: ambiguous {role} master "{label}". Resolve duplicate master records.', path)
             return None
@@ -210,6 +224,11 @@ def plan(catalog, orders, filehash, mapping, required=()):
         else:
             if table not in insertable:
                 issues.error(f'{where}: new {role} "{label}" needs INSERT permission on {table}.', path)
+            near = index.similar(label) if role in masters_index.NAMES else []
+            if near:
+                names = ', '.join(f'“{x["label"]}”' for _, x in near)
+                issues.warn(f'{where}: a new {business} “{label}” will be added to {table}. Similar existing: {names}. '
+                            'If it is one of these, change it to that name before approving.', at)
             val = add(key, table, {pk: '$' + key, col: label}, provenance=provenance, where=where)
         known[code] = val
         return val
@@ -231,8 +250,9 @@ def plan(catalog, orders, filehash, mapping, required=()):
                 if c.get('master'):
                     if c.get('optional') and (value is None or str(value).strip() == ''):
                         continue
-                    src = (provenance or {}).get(c.get('field', '').partition('.')[2]) if provenance else None
-                    value = master(c['master'], value, where, src, path, c.get('required', True))
+                    name = c.get('field', '').partition('.')[2]
+                    src = (provenance or {}).get(name) if provenance else None
+                    value = master(c['master'], value, where, src, path, c.get('required', True), f'{path}.{name}' if name else path)
                 elif c.get('optional') and (value is None or str(value).strip() == ''):
                     continue
             values[col] = plain(value)
