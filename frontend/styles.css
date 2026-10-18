@@ -807,3 +807,24 @@ details.banner.coverage ul { margin: 8px 0 4px 30px; padding: 0; }
 .card.exceptions li { margin: 3px 0; overflow-wrap: anywhere; }
 .card.exceptions .check { margin-top: 12px; font-weight: 650; }
 .saved-hero .tick.warn { background: var(--warn); }
+
+/* --- phones (audit SCREEN_BY_SCREEN §12 items 3, 12, 23): no sideways page scroll, compact navigation ------- */
+@media (max-width: 600px) {
+  .doc-bar { flex-wrap: wrap; gap: 8px; }
+  .doc-bar > div:first-of-type { flex: 1 1 calc(100% - 60px); min-width: 0; }
+  .doc-bar .spacer { display: none; }
+  .screen-head { flex-wrap: wrap; padding: 0 10px; }
+  .screen-head .tabs { order: 3; width: 100%; overflow-x: auto; }
+  .sidebar { padding: 8px 12px; gap: 6px; }
+  .brand-text small { display: none; }
+  .nav { flex-direction: row; flex-wrap: wrap; width: 100%; gap: 4px; }
+  .nav button { width: auto; flex: 0 1 auto; justify-content: center; padding: 6px 9px; font-size: 12.5px; white-space: nowrap; }
+  .kpis, .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .screen-head .tabs button { white-space: nowrap; }
+  .nav button svg { width: 16px; height: 16px; }
+  .side-foot { flex-wrap: wrap; gap: 6px; font-size: 12px; }
+  .account .who small { display: none; }
+  .action-bar { position: static; flex-direction: column; align-items: stretch; }
+  .action-bar .primary.big { width: 100%; }
+  .card.exceptions { padding: 12px; }
+}

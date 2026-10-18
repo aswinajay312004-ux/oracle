@@ -12,7 +12,9 @@ def test_merch_bom_header_blocks_bom_and_provenance():
     assert o['order_ref'] == ''                      # OCN heading is not a value
     assert o['provenance']['style']['cell'] == 'C4'
     assert sum(s['quantity'] for l in o['order_lines'] for s in l['sizes']) == 150
-    assert sum(s['quantity'] for l in o['lines'] for s in l['sizes']) == 0   # sample block, summary not doubled
+    # the sample block is all zero: the buyer order quantities are shown (summary not added), the choice is asked
+    assert sum(s['quantity'] for l in o['lines'] for s in l['sizes']) == 150 and o['quantity_basis'] == 'unconfirmed'
+    assert o['warnings'][0].startswith('The sample section of this file is empty')
     assert o['packs']['packs'] == 100 and o['packs']['pieces'] == 200 and o['components'] == 2 and o['packing_type'] == '2PC PACK'
     assert [f['line'] for f in o['fabrics']] == [1, 2, 2]
     assert [f['portion'] for f in o['fabrics']] == ['BODY', 'BODY', 'BINDING']

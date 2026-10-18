@@ -46,12 +46,39 @@ export function confirmDialog(title, html, ok = 'Confirm') {
   return new Promise(resolve => { d.onclose = () => resolve(d.returnValue === 'ok'); d.returnValue = ''; d.showModal(); });
 }
 
+// A new password, typed twice and hidden (never the browser's prompt(), which shows it in plain text). null = cancelled.
+export async function passwordDialog(title, intro) {
+  const html = `<p>${esc(intro)}</p><label class="field" for="pw-a">New password (12 or more characters)<input id="pw-a" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
+    <label class="field" for="pw-b">Type it again<input id="pw-b" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>`;
+  const d = $('#confirm'); const pending = confirmDialog(title, html, 'Set password');
+  const a = $('#pw-a', d); const b = $('#pw-b', d);
+  const same = () => b.setCustomValidity(a.value === b.value ? '' : 'The two passwords are different.');
+  a.addEventListener('input', same); b.addEventListener('input', same); a.focus();
+  return (await pending) ? a.value : null;
+}
+
+// The side panel keeps the keyboard inside while it is open (Tab cycles within it) and gives focus back on close.
+let drawerReturn = null;
 export function drawer(title, html) {
   $('#drawer-title').textContent = title; $('#drawer-body').innerHTML = html;
+  if ($('#drawer').hidden) drawerReturn = document.activeElement;
   $('#drawer').hidden = false; $('#scrim').hidden = false; $('#drawer-close').focus();
   return $('#drawer-body');
 }
-export function closeDrawer() { $('#drawer').hidden = true; $('#scrim').hidden = true; }
+export function closeDrawer() {
+  const open = !$('#drawer').hidden;
+  $('#drawer').hidden = true; $('#scrim').hidden = true;
+  if (open && drawerReturn?.isConnected) drawerReturn.focus();
+  drawerReturn = null;
+}
+document.addEventListener('keydown', e => {
+  const d = $('#drawer'); if (e.key !== 'Tab' || !d || d.hidden) return;
+  const items = [...d.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter(x => !x.disabled && x.offsetParent);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
 
 export function modal(titleHtml, bodyHtml, footHtml = '') {
   $('#modal-title-wrap').innerHTML = titleHtml; $('#modal-body').innerHTML = bodyHtml; $('#modal-foot').innerHTML = footHtml;

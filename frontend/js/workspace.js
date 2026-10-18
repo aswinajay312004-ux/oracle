@@ -29,6 +29,12 @@ function step(n) {
   $$('.stepper li[data-step]').forEach(li => { const s = Number(li.dataset.step); li.classList.toggle('active', s === n); li.classList.toggle('done', s < n); });
 }
 function stage(name) {
+  // Check & approve gets its own history entry: the browser's Back button returns to the review, not out of the app.
+  try {
+    if (name === 'approve' && location.hash !== '#workspace/approve') window.history.pushState(null, '', '#workspace/approve');
+    else if (name !== 'approve' && location.hash === '#workspace/approve') window.history.replaceState(null, '', '#workspace');
+  } catch (_) { /* file previews */ }
+  if ($(`#stage-${name}`).hidden) $$('#toasts .toast.warning, #toasts .toast.success').forEach(t => t.remove());   // notes of the previous step
   ['upload', 'read', 'review', 'approve', 'saved'].forEach(s => { $(`#stage-${s}`).hidden = s !== name; });
   step({ upload: 1, read: 1, review: 2, approve: 3, saved: 4 }[name]);
   $('#ws-title').textContent = { upload: 'New sample order', read: 'Reading the file', review: 'Review the order entry', approve: 'Check before saving', saved: 'Saved in Oracle' }[name];
@@ -156,7 +162,7 @@ export function renderReview() {
     <div class="card doc-bar"><span class="file-badge">XLS</span>
       <div><span class="name">${esc(d.filename)}</span><small>${d.template ? `Saved layout “${esc(d.template.name)}” (v${esc(d.template.version)})` : esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
       <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? (d.verification?.verified ? 'Verified in Oracle' : 'Saved to Oracle') : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
-      ${undoButtons()}<a class="button ghost small" href="/api/drafts/${esc(id(d.id))}/original" download title="The file exactly as uploaded (SHA-256 ${esc((d.filehash || '').slice(0, 12))}…)">Original file</a><button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
+      ${undoButtons()}<a class="button ghost small" href="/api/drafts/${esc(id(d.id))}/original" download title="The file exactly as uploaded (SHA-256 ${esc((d.filehash || '').slice(0, 12))}…)">Original file</a>${state.health?.ollama?.available ? '<button class="ghost small" data-act="ask-file">Ask about this file</button>' : ''}${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
     ${d.outcome ? outcomeBanner(d) : ''}
     ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}
     ${coverageBanner(d)}
@@ -577,7 +583,7 @@ export async function onAction(btn) {
     case 'ask-file': askFile(); return true;
     case 'reconcile': await busy('Asking Oracle whether the order was saved…', async () => {
       state.draft = await api(`/api/drafts/${id(d.id)}/reconcile`, { method: 'POST' });
-      if (state.draft.result) { state.saved = true; notify('Oracle confirms the order is saved.', 'success'); return showSaved(state.draft.result); }
+      if (state.draft.result) { state.saved = true; await showSaved(state.draft.result); return notify('Oracle confirms the order is saved.', 'success'); }
       notify('Oracle confirms the order was not saved. You can check and approve it again.', 'info'); renderReview();
     }); return true;
     case 'new-upload': if (state.dirty && !await confirmDialog('Discard your corrections?', '<p>Corrections not yet checked will be lost.</p>', 'Discard')) return true; resetWorkspace(); return true;
@@ -715,6 +721,13 @@ export function exceptionsSeen(checked) {
   if (b) b.disabled = !(plan.live && !plan.errors.length && can('approve')) || needsAck(plan);
 }
 
+// Browser Back / Forward inside New order: '#workspace' is the review (or upload), '#workspace/approve' the check.
+export function onHistory(sub) {
+  const d = state.draft; if (!d) return;
+  if (sub === 'approve' && d.plan && !d.result && $('#stage-approve').hidden) return showApprove();
+  if (!sub && !$('#stage-approve').hidden) backToReview();
+}
+
 export function backToReview(tab) {
   if (tab) state.draft.orders.forEach((_, i) => { state.tab[i] = tab; });
   renderReview(); stage('review');
@@ -723,9 +736,11 @@ export function backToReview(tab) {
 export async function approve() {
   const d = state.draft; const plan = d.plan;
   const inserts = plan.operations.filter(o => o.action === 'insert');
-  const counts = {}; inserts.forEach(o => { counts[o.table] = (counts[o.table] || 0) + 1; });
-  const ok = await confirmDialog('Save this order to Oracle?', `<p><b>${esc(d.orders.map(o => `${o.order_ref} · ${o.style} · ${o.buyer}`).join(' / '))}</b></p>
-    <ul>${Object.entries(counts).map(([t, n]) => `<li><b>${esc(t)}</b>: ${n} new record${n === 1 ? '' : 's'}</li>`).join('')}</ul>
+  const counts = {}; inserts.forEach(o => { const k = o.business || o.table; counts[k] = counts[k] || { n: 0, table: o.table }; counts[k].n++; });
+  const ex = plan.exceptions || {}; const left = (ex.not_saved || []).length + (ex.exclusions || []).length;
+  const ok = await confirmDialog('Save this order to Oracle?', `<p><b>${esc(d.orders.map(o => `${o.order_ref} · ${o.style} · ${o.buyer}`).join(' / '))}</b> · ${fmt(plan.totals.pieces, 0)} pieces</p>
+    <ul>${Object.entries(counts).map(([b, x]) => `<li>${esc(b)}: ${plural(x.n, 'new record')} <span class="muted small-text">(${esc(x.table)})</span></li>`).join('')}</ul>
+    ${left ? `<p><b>${plural(left, 'item')} will not be saved exactly as in the file</b> — listed on the check screen.</p>` : ''}
     <p class="muted">This cannot be undone from POPPYS AI. Existing orders are never overwritten.</p>`, 'Yes, save to Oracle');
   if (!ok) return;
   await busy('Saving in one transaction…', async () => {

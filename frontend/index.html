@@ -39,7 +39,7 @@
         <!-- OVERVIEW -->
         <section id="view-dashboard" class="view">
           <div class="page-head"><div><span class="eyebrow">Today</span><h1>Overview</h1><p class="lead">Orders waiting for you, what was saved to Oracle, and whether everything is connected.</p></div>
-            <button class="primary" data-goto="workspace">＋ Upload an Excel order</button></div>
+            <button class="primary" data-goto="workspace" data-permission="upload">＋ Upload an Excel order</button></div>
           <div class="kpis" id="dash-kpis"></div>
           <div class="dash-grid">
             <section class="card"><div class="card-head"><h2>Work queue</h2><span class="muted small-text">Orders not yet saved to Oracle</span></div><div id="dash-queue"></div></section>
@@ -72,7 +72,8 @@
                   <li><span class="i">3</span><div><b>Saves only after approval</b><span>One Oracle transaction, every row read back and shown in a table flowchart.</span></div></li>
                 </ul>
               </div>
-              <label class="dropzone" id="dropzone" for="file-input" tabindex="0">
+              <div class="banner info" data-permission-not="upload" hidden><span class="b-ic">i</span><div>Your role can open and read orders. Uploading a file needs an operator, approver or administrator.</div></div>
+              <label class="dropzone" id="dropzone" for="file-input" tabindex="0" data-permission="upload">
                 <span class="drop-icon" aria-hidden="true"><svg viewBox="0 0 48 48" width="34" height="34"><path d="M24 31V11m0 0-8 8m8-8 8 8" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 29v6a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-6" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span>
                 <strong>Drag &amp; drop the order file</strong>
                 <span>or <u>choose a file</u> from this computer</span>
@@ -130,7 +131,7 @@
 
         <!-- DATABASE EXPLORER -->
         <section id="view-explorer" class="view" hidden>
-          <div class="page-head"><div><span class="eyebrow">Read-only · live Oracle</span><h1>Database</h1><p class="lead">Browse GARMENT_DEMO by business name, follow links between records, and see how tables connect.</p></div>
+          <div class="page-head"><div><span class="eyebrow" id="explorer-eyebrow">Read-only</span><h1>Database</h1><p class="lead">Browse GARMENT_DEMO by business name, follow links between records, and see how tables connect.</p></div>
             <form id="order-lookup" class="row"><input id="order-id" maxlength="100" placeholder="Find an order: reference or record ID" style="width:300px" aria-label="Find an order"><button class="secondary">Find</button></form></div>
           <div class="explorer">
             <aside class="card table-list"><div class="search"><input id="table-filter" placeholder="Search tables (e.g. buyer, size, ORDSIZE)" aria-label="Search tables"></div><div class="items" id="tables"></div></aside>
@@ -169,7 +170,7 @@
     <div class="modal-body" id="modal-body"></div><div class="modal-foot" id="modal-foot"></div></dialog>
 
   <dialog id="confirm" class="confirm"><form method="dialog"><h2 id="confirm-title"></h2><div id="confirm-body"></div>
-    <div class="confirm-actions"><button value="cancel" class="secondary">Go back</button><button value="ok" class="primary" id="confirm-ok">Confirm</button></div></form></dialog>
+    <div class="confirm-actions"><button value="cancel" class="secondary" formnovalidate>Go back</button><button value="ok" class="primary" id="confirm-ok">Confirm</button></div></form></dialog>
 
   <div id="auth" class="auth" hidden>
     <div class="auth-art">

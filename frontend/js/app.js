@@ -28,6 +28,7 @@ async function status() {
     o.querySelector('span').textContent = db.connected ? 'Oracle connected' : 'Oracle offline';
     o.querySelector('small').textContent = db.connected ? `${db.owner} · ${db.tables} tables` : 'start Docker + oracle26ai';
     o.title = db.connected ? `Connected to ${db.dsn || ''}` : db.error || '';
+    const eb = $('#explorer-eyebrow'); if (eb) eb.textContent = db.connected ? 'Read-only · live Oracle' : 'Read-only · Oracle offline (saved structure)';
     a.className = `status ${h.ollama.available ? 'ok' : 'idle'}`;
     a.querySelector('span').textContent = h.ollama.available ? 'Local AI ready' : 'Local AI off';
     a.querySelector('small').textContent = h.ollama.available ? h.ollama.model : 'optional · rules still work';
@@ -48,7 +49,9 @@ async function lists() {
   } catch (_) { state.mappingStatus = {}; }
 }
 
-function go(next) {
+const VIEWS = ['dashboard', 'workspace', 'history', 'chat', 'explorer', 'admin'];
+
+function go(next, push = true) {
   $$('.nav [data-view]').forEach(t => t.classList.toggle('active', t.dataset.view === next));
   $$('.view').forEach(v => { v.hidden = v.id !== `view-${next}`; });
   closeDrawer();
@@ -58,9 +61,18 @@ function go(next) {
   if (next === 'admin') loadAdmin();
   if (next === 'chat') { loadChat(); setTimeout(() => $('#chat-input').focus(), 50); }
   if (next === 'workspace' && !state.draft) ws.recent();
-  if (location.hash !== '#' + next) history_replace(next);
+  if (location.hash.split('/')[0] !== '#' + next) (push ? history_push : history_replace)(next);
 }
+// Each screen is a browser history entry, so Back and Forward move between screens instead of leaving the app.
 function history_replace(v) { try { window.history.replaceState(null, '', '#' + v); } catch (_) { /* file previews */ } }
+function history_push(v) { try { window.history.pushState(null, '', '#' + v); } catch (_) { /* file previews */ } }
+window.addEventListener('popstate', () => {
+  if (!state.user) return;
+  const [view, sub] = location.hash.slice(1).split('/');
+  if (!VIEWS.includes(view)) return;
+  go(view, false);
+  if (view === 'workspace') ws.onHistory(sub);
+});
 
 async function history() {
   $('#history-detail').hidden = true;
@@ -128,14 +140,35 @@ function bind() {
     if (b.dataset.act2 === 'another') return ws.resetWorkspace();
   });
   window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
+  keyboardReach();
   ws.bindWorkspace(); bindExplorer(); bindAdmin(); bindChat();
+}
+
+// Rows and headings that act on a click (open a record, sort a column, pick a sheet cell, expand a group) are reachable and
+// usable with the keyboard too: focusable, announced as buttons, and Enter / Space do what a click does.
+const ACTIONABLE = 'tr.clickable, th[data-sort], tr[data-open], tr.group-row, #sheet-grid td[data-r]';
+function keyboardReach() {
+  const mark = root => root.querySelectorAll?.(ACTIONABLE).forEach(el => {
+    if (!el.hasAttribute('tabindex')) el.tabIndex = 0;
+    if (!el.hasAttribute('role') && el.tagName !== 'TH') el.setAttribute('role', 'button');
+  });
+  mark(document);
+  new MutationObserver(list => list.forEach(m => m.addedNodes.forEach(n => n.nodeType === 1 && (n.matches(ACTIONABLE) ? mark(n.parentNode) : mark(n))))).observe(document.body, { childList: true, subtree: true });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const el = e.target.closest?.(ACTIONABLE);
+    if (!el || e.target !== el) return;
+    e.preventDefault(); el.click();
+  });
 }
 
 async function start() {
   $$('[data-permission]').forEach(el => { el.hidden = !can(el.dataset.permission); });
+  $$('[data-permission-not]').forEach(el => { el.hidden = can(el.dataset.permissionNot); });
   await Promise.allSettled([status(), lists()]);
   const initial = (location.hash || '').slice(1);
-  go(['dashboard', 'workspace', 'history', 'chat', 'explorer', 'admin'].includes(initial) ? initial : 'dashboard');
+  const first = initial.split('/')[0];
+  go(VIEWS.includes(first) ? first : 'dashboard', false);
   clearInterval(start.timer); start.timer = setInterval(async () => { await status(); if (!$('#view-dashboard').hidden) loadDashboard(); }, 30000);
 }
 

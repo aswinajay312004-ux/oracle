@@ -1894,7 +1894,7 @@ def assist(id: str, data: Question, user=Depends(authenticated)):
     if len(json.dumps(facts, default=str)) > 48000:
         raise ValueError('This draft is too large for the local helper. Ask about a smaller import.')
     answer = ai.assist(facts, data.question)
-    return {'answer': answer or 'The local AI helper is offline. Everything else still works: the questions panel lists each issue with the Excel cell it came from.'}
+    return {'answer': answer or 'The local AI helper is offline. Everything else still works: each problem is outlined on its field, with the Excel cell its value came from.'}
 
 
 @app.get('/')

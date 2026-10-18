@@ -541,22 +541,29 @@ def merch_bom(g):
     if not blocks or not g.find(g.fields.aliases('buyer'), range(1, blocks[0]['header'])):
         return None
     o = base_order(); header_fields(g, o, blocks[0]['header'])
-    roles = {}
+    roles = {}; skipped = []
     for b in blocks:
         if b['end'] is None:
             raise ValueError(f'{g.sheet["name"]}: incomplete garment/size block near row {b["header"]}.')
         if b['role'] in roles:
-            raise ValueError(f'{g.sheet["name"]}: multiple {b["role"]} blocks need explicit mapping; they were not combined.')
+            # A second block of the same kind is named, never combined and never a reason to refuse the whole file.
+            skipped.append(f'A second {b["role"]} block starts at row {b["header"]} of “{g.sheet["name"]}”; only the first one '
+                           f'(row {roles[b["role"]]["header"]}) was read. If it is another order, map it separately.')
+            continue
         roles[b['role']] = b
     def lines(role):
         b = roles.get(role)
         return matrix_lines(g, b['header'], b['end'], b['gcol'], b['gcol'] + 1, b['ccol'] + 1, b['tcol']) if b else []
     o['order_lines'] = lines('order'); o['sample_lines'] = lines('sample')
-    o['lines'] = deepcopy(o['sample_lines'] or o['order_lines'])
-    o['quantity_basis'] = 'sample' if o['sample_lines'] else 'unconfirmed'
-    o['warnings'] = ['Sample section selected. Order and summary repeats are excluded.' if o['sample_lines'] else
+    total = lambda ls: sum(number(s.get('quantity')) or 0 for l in ls for s in l['sizes'])   # noqa: E731
+    empty_sample = o['sample_lines'] and not total(o['sample_lines']) and total(o['order_lines'])
+    o['lines'] = deepcopy(o['order_lines'] if empty_sample else o['sample_lines'] or o['order_lines'])
+    o['quantity_basis'] = 'sample' if o['sample_lines'] and not empty_sample else 'unconfirmed'
+    o['warnings'] = ['The sample section of this file is empty (every quantity is 0), so the buyer order quantities are shown. '
+                     'Confirm which quantities to save.' if empty_sample else
+                     'Sample section selected. Order and summary repeats are excluded.' if o['sample_lines'] else
                      'No sample section found. Choose the quantity source.',
-                     'BOM date is not an order confirmation date. Confirm the order date below.']
+                     'BOM date is not an order confirmation date. Confirm the order date below.'] + skipped
     packs(g, o, blocks[0]['header'])
     merch_unit(g, o)
     return o
