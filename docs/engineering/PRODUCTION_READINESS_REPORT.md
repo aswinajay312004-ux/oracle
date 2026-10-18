@@ -2,8 +2,9 @@
 
 ## Status: NOT PRODUCTION READY
 
-Two blocking criteria are not met (spec §18): **Oracle/Axpert integration is not demonstrated** on the real ERP and
-**the laptop verification has not been run** with this code. Everything that can be done and proven without the owner's
+One blocking criterion is not met (spec §18): **Oracle/Axpert integration is not demonstrated** on the real ERP. The
+laptop verification now passes (`verify_local.ps1`, 2026-10-18: 518 passed, 0 failed; Ask AI 12/12); Demo A and the
+Axpert screen check are still to be done. Everything that can be done and proven without the owner's
 laptop has been done in this programme; the remaining steps are listed at the end with exact commands.
 
 ## 1. Audit findings → what was done
@@ -38,13 +39,13 @@ CI went green).
 | Data fidelity | Yes, for tested cases | EXCEL_DATA_FIDELITY_SPEC, `test_fidelity.py` |
 | Excel understanding | Partly | Known layouts and re-anchored layouts read; unknown layouts need one mapping; accuracy on real files not measured |
 | Mapping | Yes | Only verified columns written; everything else reported |
-| Oracle integration | **No** | Replica proven; Axpert not verified; laptop not run |
+| Oracle integration | **No** | Replica and laptop test suites pass; Axpert not verified; Demo A pending |
 | Saving | Yes (design + replica) | Idempotent receipt, unknown-outcome handling (stand-in) |
 | Verification | Yes | Fresh read-only read-back with control totals |
 | User experience | Mostly | Main journey usable without database knowledge; some technical screens remain |
 | Security | Yes, for tested controls | Roles, four-eyes, CSRF, offline, read-only account |
 | Operations | Partly | Health, logs, backup/restore tested in the cloud; Windows service/upgrade not run |
-| Testing | Yes, in CI | Run 70 all green; laptop pending |
+| Testing | Yes | CI run 70 all green; laptop `verify_local.ps1` 518 passed, 0 failed |
 
 ## 3. Remaining blockers and exact steps (owner)
 

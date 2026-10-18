@@ -21,7 +21,7 @@ Fake Oracle tests are never reported as Oracle results; replica results are labe
 | Real Oracle replica (Oracle Free 23.26) | **529 passed, 0 failed, 6 skipped** |
 | Ask AI benchmark on the replica | **12 of 12 correct** |
 | GitHub CI run 70 (`db23169`) | **all 7 jobs green**: secret scan (gitleaks, whole history), lint, JavaScript, unit tests, Oracle integration, dependency audit, Windows |
-| Laptop (`verify_local.ps1`) | **not run with this code** — Environment-blocked (owner) |
+| Laptop (`verify_local.ps1`, owner's Windows + local Oracle 23.26 GARMENT_DEMO, `f9b0aa0`) | **518 passed, 0 failed, 18 skipped**; Oracle connection PASSED; Ask AI **12 of 12**. The first run (513 passed, 4 failed) found the DOCID receipt defect and three test problems, fixed in `0d6a0b0`–`f9b0aa0` |
 | Real Ollama model | **not run** — Environment-blocked |
 
 ## 3. Coverage of the spec's test list (§14)
@@ -53,7 +53,7 @@ Fake Oracle tests are never reported as Oracle results; replica results are labe
 | 7 | A partial write cannot appear as fully verified | Met ("with exceptions", `complete`) |
 | 8 | Retry does not duplicate a committed order | Met (receipt under lock, unique keys; tested) |
 | 9 | Role and approval restrictions pass server-side tests | Met |
-| 10 | Real local Oracle integration tests pass | **Replica: met. Laptop: not run** |
+| 10 | Real local Oracle integration tests pass | **Met** (replica and owner's laptop, 2026-10-18) |
 | 11 | Axpert-visible correctness on representative orders | **Not met** (not verified) |
 | 12 | Offline installation and runtime tests pass | Cloud: met; Windows: not run |
 | 13 | Responsive and accessibility tests pass | Responsive measured at 390 px; accessibility partly |

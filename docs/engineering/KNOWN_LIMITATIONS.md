@@ -7,7 +7,7 @@ Listed so that nobody has to discover them in production. Each has an owner acti
 1. **Axpert compatibility is not verified.** Orders are written by direct INSERT into 13 of ORDMAS's 197 columns (plus
    lines, sizes, masters). Whether Axpert treats them as its own is unknown. → Run `scripts/axpert_gap_report.py` and
    the Axpert screen check on the laptop; decide the write channel (ORACLE_AXPERT_INTEGRATION §4–5).
-2. **No run on the owner's laptop since these changes.** `verify_local.ps1`, Demo A/B and the real Ollama model have
+2. **Laptop: tests pass (`verify_local.ps1` 2026-10-18, 518 passed).** Demo A/B and the real Ollama model have
    not been run with this code. → owner.
 3. **BOM rows (fabric, yarn, trims) are not written** — their mapping is not verified. They are shown, checked and
    listed as "not saved".

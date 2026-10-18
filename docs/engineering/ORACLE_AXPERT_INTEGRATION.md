@@ -31,7 +31,7 @@ Values without a verified column are listed before approval and in the receipt (
 |---|---|---|
 | Inserts, keys, links and read-back work on Oracle 23.26 | `bash scripts/check.sh oracle` on the synthetic replica: 529 passed (2026-10-18); CI Oracle job green | Tested (replica) |
 | Values read back equal the approved plan (in the transaction and on a fresh read-only connection, with control totals) | `oracle_store.commit`, `readback.graph/control_totals` | Tested (replica, stand-in) |
-| The same on the laptop's GARMENT_DEMO | `verify_local.ps1` | Environment-blocked (owner run pending) |
+| The same on the laptop's GARMENT_DEMO | `verify_local.ps1` 2026-10-18: 518 passed, 0 failed | Tested (laptop) |
 | Axpert opens and processes POPPYS orders like its own | — | **NOT VERIFIED** |
 
 ## 4. Finding the gaps against Axpert (procedure)
