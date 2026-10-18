@@ -347,16 +347,149 @@ def plan(catalog, orders, filehash, mapping, required=()):
 
     _check_columns(operations, registry, issues, tables)
     totals['fabric_kg'] = plain(q(totals['fabric_kg']))
+    not_saved = destination(orders, mapping)
+    conversions = _conversions(orders)
     result = dict(operations=operations, errors=issues.messages('error'), warnings=issues.messages('warning'),
                   issues=_unique(issues.items), totals=totals,
                   reference_only=[dict(table=t, business=tables[t]['business'], rows=n,
                                        reason='Mapping not yet verified for this table — shown for review, not saved.')
                                   for t, n in reference_only.items()],
                   skipped_columns={t: c for t, c in skipped.items() if c},
+                  not_saved=not_saved, conversions=conversions,
                   live=catalog.live, schema_fingerprint=digest(registry), derived=derived, mapping_fingerprint=fingerprint(mapping),
                   columns=_column_meta(mapping))
     result['hash'] = digest(result)
     return result
+
+
+# Business fields of an order and where each part of an order lives in the draft (field path scope → draft keys).
+LINE_FIELDS = {'label': 'Line label', 'color': 'Colour / combo'}
+SIZE_FIELDS = {'size': 'Size', 'quantity': 'Quantity'}
+SECTIONS = {'fabrics': ('ORDFAB', 'Fabric rows'), 'accessories': ('ORDACC', 'Trims / accessory rows')}
+YARNS = ('ORDYARN', 'Yarn split rows')
+FILLED = lambda v: v is not None and str(v).strip() != ''      # noqa: E731
+
+
+def _written(mapping):
+    """{'order.buyer': (table, column, status)} for every business field a mapped column reads, and the status of the
+    column and its table together (both must be verified for the value to be written)."""
+    out = {}
+    for table, spec in mapping['tables'].items():
+        for col, c in spec['columns'].items():
+            field = c.get('field') or ''
+            if field == 'calc.pieces' and spec.get('level') == 'size':
+                field = 'size.quantity'           # each size quantity is written as pieces (quantity × pieces per unit)
+            if not field or field.startswith('calc.'):
+                continue
+            ok = spec['status'] == 'verified' and c['status'] == 'verified'
+            prev = out.get(field)
+            if not prev or (ok and prev[2] != 'verified'):
+                out[field] = (table, col, 'verified' if ok else 'proposed')
+    return out
+
+
+def field_destinations(mapping):
+    """Where each order field goes, for badges on the review screen before any preview: {field: {kept, column}} for the
+    fields that do NOT reach Oracle (kept 'unverified' or 'poppys'); fields that are saved are left out."""
+    from .. import fields as business_fields
+    written = _written(mapping); out = {}
+    for f in business_fields.DEFAULTS:
+        key = f['key']
+        if f['where'] != 'header' or key == 'qty_unit':
+            continue
+        target = written.get(f'order.{key}')
+        if target and target[2] == 'verified':
+            continue
+        out[key] = dict(kept='unverified' if target else 'poppys', column=f'{target[0]}.{target[1]}' if target else None)
+    for key in LINE_FIELDS:
+        target = written.get(f'line.{key}')
+        if not (target and target[2] == 'verified'):
+            out[f'line.{key}'] = dict(kept='unverified' if target else 'poppys', column=f'{target[0]}.{target[1]}' if target else None)
+    return out
+
+
+def destination(orders, mapping):
+    """Every value the person can see that will NOT reach Oracle, and why (audit MAPPING_AND_ORACLE_WRITE §5.1:
+    Exporter, Season, Department… were typed and never saved, and no screen said so). One entry per order and field:
+    {order, path, field, label, values, count, reason, kept, column}. kept is 'poppys' (kept only in the POPPYS import
+    record) for values Oracle has no place for, 'unverified' when a column exists but is not confirmed yet."""
+    from .. import fields as business_fields
+    written = _written(mapping); out = []
+
+    def note(index, path, field, label, values, scope_field):
+        values = [v for v in values if FILLED(v)]
+        if not values:
+            return
+        target = written.get(scope_field)
+        if target and target[2] == 'verified':
+            return
+        if target:
+            reason = (f'not saved to Oracle: its place ({target[0]}.{target[1]}) is not confirmed yet. An administrator can '
+                      'confirm it in Setup → Write mapping.')
+        else:
+            reason = 'not saved to Oracle: the Oracle order has no place for it. It stays in the POPPYS import record.'
+        shown = list(dict.fromkeys(str(v) for v in values))
+        out.append(dict(order=index, path=path, field=field, label=label, values=shown[:5], count=len(values), reason=reason,
+                        kept='unverified' if target else 'poppys', column=f'{target[0]}.{target[1]}' if target else None))
+
+    for index, o in enumerate(orders):
+        base = f'orders.{index}'
+        for f in business_fields.DEFAULTS:
+            key = f['key']
+            if f['where'] != 'header' or key == 'qty_unit':
+                continue
+            note(index, f'{base}.{key}', key, f['label'], [o.get(key)], f'order.{key}')
+        for key, label in LINE_FIELDS.items():
+            note(index, f'{base}.lines', key, label, [l.get(key) for l in o.get('lines') or []], f'line.{key}')
+        for key, label in SIZE_FIELDS.items():
+            note(index, f'{base}.lines', key, label, [s.get(key) for l in o.get('lines') or [] for s in l.get('sizes') or []], f'size.{key}')
+        for section, (table, label) in SECTIONS.items():
+            rows = o.get(section) or []
+            spec = mapping['tables'].get(table)
+            if rows and (not spec or spec['status'] != 'verified'):
+                out.append(dict(order=index, path=f'{base}.{section}', field=section, label=label, values=[], count=len(rows),
+                                reason=('not saved to Oracle: the mapping of these rows is not verified yet, so they are checked '
+                                        'and shown only.') if spec else 'not saved to Oracle: no Oracle table is mapped for them.',
+                                kept='unverified' if spec else 'poppys', column=table if spec else None))
+        yarns = [y for f in o.get('fabrics') or [] for y in f.get('yarns') or []]
+        spec = mapping['tables'].get(YARNS[0])
+        if yarns and (not spec or spec['status'] != 'verified'):
+            out.append(dict(order=index, path=f'{base}.fabrics', field='yarns', label=YARNS[1], values=[], count=len(yarns),
+                            reason='not saved to Oracle: the mapping of these rows is not verified yet, so they are checked and shown only.',
+                            kept='unverified' if spec else 'poppys', column=YARNS[0] if spec else None))
+    return out
+
+
+def _conversions(orders):
+    """Quantity conversions the plan applies (packs to pieces), with the original figures and who decided the unit,
+    so the approver sees "120 packs × 3 = 360 pieces (unit chosen by a person)" instead of a silent 360."""
+    out = []
+    for index, o in enumerate(orders):
+        if str(o.get('qty_unit') or '').upper() != 'PACK':
+            continue
+        try:
+            per = int(Decimal(str(o.get('pieces_per_unit'))))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if per < 2:
+            continue
+        source = sum(int(Decimal(str(s.get('quantity')))) for l in o.get('lines') or [] for s in l.get('sizes') or []
+                     if FILLED(s.get('quantity')) and _whole(s.get('quantity')))
+        prov = (o.get('provenance') or {}).get('pieces_per_unit') or (o.get('provenance') or {}).get('qty_unit') or {}
+        decided = {'person': 'chosen by a person', 'template': 'remembered from this buyer’s saved layout',
+                   'file': 'stated in the file'}.get(prov.get('reason'), 'entered on the review screen')
+        out.append(dict(order=index, path=f'orders.{index}.qty_unit', unit='PACK', pieces_per_unit=per, source_quantity=source,
+                        pieces=source * per, decided=decided, derivation=prov.get('derivation') or prov.get('evidence'),
+                        text=f'{source:,} packs × {per} pieces per pack = {source * per:,} pieces ({decided}).'))
+    return out
+
+
+def _whole(v):
+    try:
+        d = Decimal(str(v))
+        return d.is_finite() and d == d.to_integral_value()
+    except InvalidOperation:
+        return False
 
 
 def _column_meta(mapping):

@@ -64,7 +64,7 @@ class FakeOracle:
         self.hashes.add(draft['filehash'])
         result = dict(job_id=draft['id'], orders=orders, rows=inserted, reused=reused, totals=checked['totals'],
                       reference_only=checked['reference_only'], committed_at=datetime.now().astimezone().isoformat(),
-                      approver=approver, already_committed=False)
+                      approver=approver, already_committed=False, **oracle_store.receipt_extras(checked, draft))
         self.receipts[draft['id']] = deepcopy(result)
         return result
 

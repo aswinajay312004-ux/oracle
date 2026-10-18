@@ -9,13 +9,14 @@ import secrets
 import threading
 import time
 import uuid
+from urllib.parse import quote as _quote
 from fastapi import FastAPI, UploadFile, File, Request, Response, HTTPException, Depends, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
-from . import auth, evidence, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
+from . import auth, coverage, evidence, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
 from .config import DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
@@ -24,7 +25,15 @@ from . import insight_api as insight
 from .insight import benchmark, engine, understand
 from .insight.query import Dialect, QueryError, compile_intent
 
-LOCK = threading.RLock()
+LOCK = threading.RLock()          # users and settings
+_DRAFT_LOCKS = {}; _DRAFT_LOCKS_GUARD = threading.Lock()
+
+
+def draft_lock(id):
+    """One lock per draft: a long Oracle save of one import no longer holds up everyone else's editing. Writes to
+    Oracle are still one at a time, by PP_WRITE_LOCK inside the database (oracle_store.commit)."""
+    with _DRAFT_LOCKS_GUARD:
+        return _DRAFT_LOCKS.setdefault(id, threading.RLock())
 RANK = {'viewer': 0, 'operator': 1, 'approver': 2, 'admin': 3}
 PERMISSIONS = {
     'viewer': ['view'],
@@ -32,7 +41,7 @@ PERMISSIONS = {
     'approver': ['view', 'upload', 'edit', 'preview', 'approve', 'audit'],
     'admin': ['view', 'upload', 'edit', 'preview', 'approve', 'audit', 'users', 'mapping', 'templates', 'settings'],
 }
-DEFAULT_SETTINGS = dict(allow_self_approval=True, company_exporter='POPPYS KNITWEAR PRIVATE LIMITED', default_sample_type='DEVELOPMENT SAMPLE')
+DEFAULT_SETTINGS = dict(allow_self_approval=False, company_exporter='POPPYS KNITWEAR PRIVATE LIMITED', default_sample_type='DEVELOPMENT SAMPLE')
 
 
 @asynccontextmanager
@@ -311,6 +320,7 @@ def _new_order_defaults(orders):
             o.setdefault('provenance', {})['exporter'] = {'derivation': 'Company default (Settings)'}
         if not o.get('sample_type'):
             o['sample_type'] = s['default_sample_type']
+            o.setdefault('provenance', {})['sample_type'] = {'derivation': 'Company default (Settings)'}
     return orders
 
 
@@ -356,24 +366,73 @@ def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
         raise HTTPException(415, 'Upload the buyer Excel file (.xlsx, .xlsm, .xls, .xlsb, .ods, .csv, Excel XML/HTML export) or JSON data.')
     content = file.file.read(readers.MAX_BYTES + 1)
     readers.sniff(content, name)   # rejects an empty, oversized or non-spreadsheet file (415) before anything is parsed
+    id = uuid.uuid4().hex; filehash = hashlib.sha256(content).hexdigest()
+    # Layer A: the original bytes are kept before anything is parsed, so a file that cannot be read is never lost.
+    archive_original(id, content)
     fields = current_fields()
-    parsed = workbooks.parse(content, store.templates(), name, fields); kind = 'excel'
+    try:
+        parsed = workbooks.parse(content, store.templates(), name, fields); kind = 'excel'
+    except Exception as exc:
+        store.audit(user['username'], 'upload_unreadable', id, filename=name, sha256=filehash, error=str(exc)[:300])
+        if isinstance(exc, (ValueError, readers.Unsupported)):
+            raise type(exc)(f'{exc} The original file is kept unchanged (upload {id[:8]}, SHA-256 {filehash[:12]}…).') from exc
+        raise
     used = parsed.pop('templates_used', [])
     for tid in used:
         store.template_used(tid)
-    id = uuid.uuid4().hex
     suggestion = _suggestion(parsed, fields) if not parsed['orders'] or parsed.get('templates_refused') else None
     template = next((dict(id=t['id'], name=t['name'], version=t['version']) for t in store.templates() if t['id'] in used), None)
-    draft = dict(id=id, version=1, filename=name, kind=kind, filehash=hashlib.sha256(content).hexdigest(),
+    draft = dict(id=id, version=1, filename=name, kind=kind, filehash=filehash, size=len(content),
                  created_at=datetime.now().astimezone().isoformat(), uploaded_by=user['username'],
                  **parsed, suggestion=suggestion, template=template, plan=None, result=None)
     _new_order_defaults(draft['orders'])
     store.identify(draft['orders'])
-    (DATA / (id + '.upload')).write_bytes(content)
+    cover(draft)
     store.save(draft, user['username'])
     store.audit(user['username'], 'upload', id, filename=name, format=draft['format'], orders=len(draft['orders']),
-                sha256=draft['filehash'])
+                sha256=draft['filehash'], numbers_not_read=draft['coverage']['totals']['numbers_not_read'])
     return draft
+
+
+def original_path(id):
+    if not re.fullmatch(r'[0-9a-f]{32}', id):
+        raise KeyError(id)
+    return DATA / (id + '.upload')
+
+
+def archive_original(id, content):
+    """Write the uploaded bytes once, read-only. An existing file is never replaced (open mode 'xb')."""
+    path = original_path(id)
+    with open(path, 'xb') as f:
+        f.write(content)
+        f.flush(); os.fsync(f.fileno())
+    try:
+        os.chmod(path, 0o444)
+    except OSError:
+        pass
+
+
+def cover(d):
+    """Refresh the draft's extraction coverage manifest (backend/coverage.py) against its current orders."""
+    d['coverage'] = coverage.manifest(d.get('sheets') or [], d.get('orders') or [], d.get('notes') or [])
+    d['destinations'] = planner.field_destinations(oracle.current_mapping())
+    return d
+
+
+@app.get('/api/drafts/{id}/original')
+def original(id: str, user=Depends(authenticated)):
+    """The uploaded file exactly as received, after checking it still has the SHA-256 recorded at upload."""
+    d = store.get(id); path = original_path(id)
+    if not path.exists():
+        raise HTTPException(404, 'The original file of this upload is not on this computer (restored from a backup without uploads?).')
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != d['filehash']:
+        store.audit(user['username'], 'original_mismatch', id)
+        raise HTTPException(409, 'The stored original file no longer matches the fingerprint recorded at upload. It was not served.')
+    store.audit(user['username'], 'original_downloaded', id)
+    return Response(content, media_type='application/octet-stream',
+                    headers={'Content-Disposition': f"attachment; filename*=UTF-8''{_quote(d['filename'])}",
+                             'X-Content-SHA256': d['filehash']})
 
 
 @app.get('/api/drafts')
@@ -381,7 +440,9 @@ def drafts(user=Depends(authenticated)): return store.summaries()
 
 
 @app.get('/api/drafts/{id}')
-def draft(id: str, user=Depends(authenticated)): return store.get(id)
+def draft(id: str, user=Depends(authenticated)):
+    with draft_lock(id):
+        return reconcile(store.get(id), user)
 
 
 class Edit(BaseModel):
@@ -399,7 +460,10 @@ def oracle_committed(id):
 
 
 def editable(id, version):
-    d = store.get(id)
+    d = reconcile(store.get(id))
+    if d.get('outcome'):
+        raise HTTPException(409, 'Whether this order was saved in Oracle is still being checked. Nothing can be changed until '
+                                 'Oracle answers: press “Check again” when the database is running.')
     if d['version'] != version:
         raise HTTPException(409, 'Draft has changed. Reload it before continuing.')
     if d.get('result'):
@@ -411,15 +475,18 @@ def editable(id, version):
 
 @app.put('/api/drafts/{id}')
 def edit(id: str, data: Edit, user=Depends(require('edit'))):
-    with LOCK:
+    with draft_lock(id):
         d = editable(id, data.version)
         if sum(len(o.get('lines', [])) for o in data.orders) > 500:
             raise ValueError('Import exceeds 500 lines.')
         if sum(len(l.get('sizes', [])) for o in data.orders for l in o.get('lines', [])) > 5000:
             raise ValueError('Import exceeds 5,000 size rows.')
+        known = {o['id'] for o in d['orders']}
         new = store.edited_orders(d['orders'], data.orders)
+        _new_order_defaults([o for o in new if o['id'] not in known])   # an order typed in gets the company defaults, labelled
         diff = store.changes(d['orders'], new)
         d['orders'] = new; d['version'] += 1; d['plan'] = None
+        cover(d)
         store.save(d, user['username'], data.version)
         if diff:
             store.audit(user['username'], 'edit', id, changes=diff)
@@ -452,6 +519,9 @@ def _learn_unit(d, user):
     tid = (d.get('template') or {}).get('id')
     if not tid or not d.get('orders'):
         return
+    saved = next((t for t in store.templates(active_only=False) if t['id'] == tid), None)
+    if not saved or not workbooks.own_template(saved, d['orders']):
+        return      # another buyer's answer is not that template's decision (it would multiply the next file of its buyer)
     unit, basis = _decided_unit(d['orders'])
     learned = store.fill_template_unit(tid, unit, basis)
     if learned:
@@ -469,6 +539,27 @@ class Mapping(BaseModel):
     qty_unit: str | None = Field(default=None, pattern='^(PCS|PACK|)$')
     pieces_per_unit: int | None = Field(default=None, ge=1, le=10000)
     quantity_basis: str | None = Field(default=None, pattern='^(sample|order_demo)$')
+    replace_layout: bool = False     # the person chose to replace a different layout saved under the same name
+
+
+def _name_taken(d, name, signature):
+    """The saved layout another structure would silently retire by saving under its name (audit scenario S1b), or None.
+    The same name is a new version of the same layout when the structure is the same, or when that layout was
+    refused for this very file (the buyer changed its format)."""
+    refused = {r['id'] for r in d.get('templates_refused') or []}
+    for t in store.templates():
+        if t['name'].strip().lower() == name.strip().lower() and t['signature'] != signature and t['id'] not in refused:
+            return t
+    return None
+
+
+def _free_name(name):
+    taken = {t['name'].strip().lower() for t in store.templates(active_only=False)}
+    for n in range(2, 100):
+        candidate = f'{name[:72]} ({n})'
+        if candidate.lower() not in taken:
+            return candidate
+    return f'{name[:60]} {uuid.uuid4().hex[:6]}'
 
 
 def _refused(rejected, fields):
@@ -480,7 +571,7 @@ def _refused(rejected, fields):
 
 @app.post('/api/drafts/{id}/map')
 def mapping(id: str, data: Mapping, user=Depends(require('edit'))):
-    with LOCK:
+    with draft_lock(id):
         d = editable(id, data.version)
         sheet = next((s for s in d['sheets'] if s['name'] == data.sheet), None)
         if not sheet:
@@ -495,11 +586,24 @@ def mapping(id: str, data: Mapping, user=Depends(require('edit'))):
         orders = workbooks.apply_template(d['sheets'], sheet, definition, fields)
         workbooks.attach_bom(workbooks.Grid(sheet, fields), orders)
         for o in orders:
+            o['sheet'] = sheet['name']
             _confirm_unit(o, data)
-        d['orders'] = store.identify(_new_order_defaults([workbooks.finish(o) for o in orders]))
+        # Orders read from other sheets (or typed in) stay: mapping one sheet replaces only that sheet's orders.
+        kept = [o for o in d['orders'] if workbooks.order_sheet(o) != sheet['name']]
+        d['orders'] = kept + store.identify(_new_order_defaults([workbooks.finish(o) for o in orders]))
         d['format'] = 'Reviewed layout mapping'; d['version'] += 1; d['plan'] = None; d['template'] = None
+        cover(d)
         if data.save_template:
             name = (data.template_name or '').strip() or f'{d["filename"]} · {sheet["name"]}'
+            other = _name_taken(d, name, workbooks.layout_signature(sheet, definition))
+            if other and not data.replace_layout:
+                suggested = _free_name(name)
+                return JSONResponse(status_code=409, content={
+                    'detail': f'A different layout is already saved as “{other["name"]}”'
+                              f'{" for buyer " + other["buyer"] if other.get("buyer") else ""}. Saving this one under the same name '
+                              f'would stop that layout from reading its files. Save this one as “{suggested}”, or choose '
+                              'to replace the old layout.',
+                    'name_taken': True, 'suggested_name': suggested, 'existing': dict(id=other['id'], name=other['name'])})
             unit, basis = _decided_unit(d['orders'])
             buyers = {o.get('buyer') for o in d['orders'] if o.get('buyer')}
             saved = store.save_template(name, workbooks.layout_signature(sheet, definition), workbooks.layout_labels(sheet, definition),
@@ -546,6 +650,18 @@ class Version(BaseModel):
 
 class Approval(Version):
     plan_hash: str = Field(min_length=64, max_length=64)
+    exceptions_seen: str | None = Field(default=None, max_length=64)   # digest of the "not saved" list the approver saw
+
+
+def exceptions(d):
+    """Everything the approver must know will NOT be in Oracle as the file says, before approving (zero silent loss):
+    data in the file that is in no order, values with no verified place in Oracle, and quantity conversions."""
+    plan = d.get('plan') or {}; cov = d.get('coverage') or {}
+    items = dict(exclusions=list(cov.get('exclusions') or []), not_saved=list(plan.get('not_saved') or []),
+                 conversions=list(plan.get('conversions') or []))
+    items['digest'] = (hashlib.sha256(json.dumps(items, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+                       if any(items.values()) else None)
+    return items
 
 
 def _plan(d):
@@ -567,10 +683,11 @@ def _plan(d):
 
 @app.post('/api/drafts/{id}/preview')
 def preview(id: str, data: Version, user=Depends(require('preview'))):
-    with LOCK:
+    with draft_lock(id):
         d = editable(id, data.version)
         d['plan'] = _plan(d)
         d['plan']['graph'] = readback.planned(d['plan'], oracle.current_mapping())
+        cover(d); d['plan']['exceptions'] = exceptions(d)
         # Preview itself is a revision, preventing an earlier accept from approving a replaced preview.
         old = d['version']; d['version'] += 1; store.save(d, user['username'], old)
         store.audit(user['username'], 'preview', id, errors=len(d['plan']['errors']), warnings=len(d['plan']['warnings']),
@@ -578,36 +695,131 @@ def preview(id: str, data: Version, user=Depends(require('preview'))):
         return d
 
 
+LOST = ('DPY-4011', 'DPY-4024', 'DPY-1001', 'ORA-03113', 'ORA-03114', 'ORA-03135', 'ORA-03156', 'ORA-01013', 'ORA-12170',
+        'ORA-12541', 'ORA-12514', 'DPY-6005', 'DPY-4005')
+RECHECK_S = 2.0      # a lost connection's COMMIT may still be completing on the server: Oracle is asked twice
+
+
+def _lost(exc):
+    """True when the connection went away during the save, so the outcome cannot be known from the error itself."""
+    if isinstance(exc, (oracledb.InterfaceError, oracledb.OperationalError, TimeoutError, ConnectionError)):
+        return True
+    text = str(exc)
+    return isinstance(exc, oracledb.Error) and any(code in text for code in LOST)
+
+
+def _committed_in_oracle(id):
+    """(reachable, receipt or None): Oracle's own import log, read on a fresh connection."""
+    try:
+        with oracle.connect() as conn:
+            return True, oracle.read_result(conn.cursor(), id)
+    except Exception:
+        return False, None
+
+
+def _record_saved(d, result, user, expected):
+    """Keep the Oracle receipt in the local draft. If that local write fails, Oracle still holds the order and the
+    receipt; the draft is reconciled from Oracle the next time it is opened (never shown as unsaved)."""
+    d['result'] = result; d.pop('outcome', None); d['version'] = expected + 1
+    try:
+        store.save(d, user['username'], expected)
+        store.audit(user['username'], 'approved_saved', d['id'], orders=result.get('orders'), rows=len(result.get('rows', [])),
+                    plan_hash=result.get('plan_hash') or (d.get('plan') or {}).get('hash'), complete=result.get('complete'))
+    except Exception as exc:
+        result = dict(result, local_record='The order is saved in Oracle, but this computer could not update its own copy of the '
+                                            f'draft ({str(exc)[:120]}). It will be updated from Oracle when the draft is opened again.')
+    return result
+
+
+def reconcile(d, user=None):
+    """Bring a draft whose save outcome is open (saving / unknown) in line with Oracle. Returns the draft."""
+    if d.get('result') or not d.get('outcome'):
+        return d
+    reachable, found = _committed_in_oracle(d['id'])
+    if not reachable:
+        return d
+    actor = (user or {}).get('username') or 'system'
+    if found:
+        _record_saved(d, found, user or dict(username=actor), d['version'])
+        store.audit(actor, 'reconciled_saved', d['id'])
+    else:
+        d.pop('outcome', None)
+        store.save(d, actor, d['version'])
+        store.audit(actor, 'reconciled_not_saved', d['id'])
+    return d
+
+
 @app.post('/api/drafts/{id}/accept')
 def accept(id: str, data: Approval, user=Depends(require('approve'))):
-    with LOCK:
+    with draft_lock(id):
         d = store.get(id)
         previous = oracle_committed(id)
         if previous:
-            return previous
+            return previous if d.get('result') else _record_saved(d, previous, user, d['version'])
         if d['version'] != data.version or not d.get('plan') or d['plan']['hash'] != data.plan_hash:
             raise HTTPException(409, 'Approval requires the exact current preview. Prepare the preview again.')
         if not d['plan'].get('live'):
             raise HTTPException(409, 'This preview was made without Oracle. Connect Oracle and prepare the preview again before approving.')
         if d['plan']['errors']:
             raise HTTPException(409, 'Resolve all questions before approving.')
-        if d.get('uploaded_by') == user['username'] and not settings()['allow_self_approval']:
-            raise HTTPException(403, 'A different approver must approve this upload (four-eyes rule is on).')
+        if not settings()['allow_self_approval']:
+            prepared = {d.get('uploaded_by')} | {e['actor'] for e in store.audit_events(300, id) if e['action'] in ('edit', 'mapping_applied')}
+            if user['username'] in prepared:
+                raise HTTPException(403, 'You uploaded or changed this order, so another approver must approve it (four-eyes rule). '
+                                         'An administrator can allow self-approval in Setup → Settings; that change is recorded in the audit log.')
+        ex = d['plan'].get('exceptions') or exceptions(d)
+        if ex['digest'] and data.exceptions_seen != ex['digest']:
+            return JSONResponse(status_code=409, content={
+                'detail': 'Some of this file will not be in Oracle exactly as written (listed under “What will not be saved”). '
+                          'Read the list and tick “I have read what will not be saved” before approving.',
+                'exceptions_unseen': True, 'exceptions': ex})
+        # Durable intent before Oracle is touched: if this process stops mid-save, the draft says "saving" and is
+        # reconciled from Oracle's own import log, never shown as saved or unsaved on a guess.
+        d['outcome'] = dict(state='saving', at=datetime.now().astimezone().isoformat(), by=user['username'], plan_hash=data.plan_hash)
+        store.save(d, user['username'], d['version'])
+        store.audit(user['username'], 'approve_started', id, plan_hash=data.plan_hash)
         try:
             result = oracle.commit(d, data.plan_hash, user['username'])
         except Exception as exc:
+            reachable, found = _committed_in_oracle(id)
+            if not found and reachable and _lost(exc):
+                time.sleep(RECHECK_S)
+                reachable, found = _committed_in_oracle(id)
+            if found:
+                store.audit(user['username'], 'approve_error_after_commit', id, error=str(exc)[:300])
+                return _record_saved(d, found, user, d['version'])
+            if not reachable:
+                d['outcome'] = dict(d['outcome'], state='unknown', error=str(exc)[:300])
+                store.save(d, user['username'], d['version'])
+                store.audit(user['username'], 'approve_outcome_unknown', id, error=str(exc)[:500])
+                return JSONResponse(status_code=503, content={
+                    'detail': 'Oracle did not confirm the save, and it cannot be reached to check whether the order was written. '
+                              'Nothing will be saved twice: when Oracle is back, open this draft and press “Check again”.',
+                    'outcome': 'unknown'})
+            d.pop('outcome', None); store.save(d, user['username'], d['version'])
             store.audit(user['username'], 'approve_failed', id, error=str(exc)[:500])
-            raise
-        d['result'] = result; d['version'] += 1
+            if isinstance(exc, ValueError):
+                raise ValueError(f'{exc} Nothing was saved in Oracle.') from exc
+            return JSONResponse(status_code=503, content={'detail': f'Oracle refused the save ({str(exc)[:200]}). Oracle confirms '
+                                                                    'nothing was saved. Check the connection and try again.',
+                                                          'outcome': 'not_saved'})
         clear_counts()
-        store.save(d, user['username'], data.version)
-        store.audit(user['username'], 'approved_saved', id, orders=result.get('orders'), rows=len(result.get('rows', [])),
-                    plan_hash=data.plan_hash)
-        return result
+        return _record_saved(d, result, user, d['version'])
+
+
+@app.post('/api/drafts/{id}/reconcile')
+def reconcile_draft(id: str, user=Depends(authenticated)):
+    """“Check again” after an unknown save outcome: Oracle's import log decides."""
+    with draft_lock(id):
+        d = reconcile(store.get(id), user)
+        if d.get('outcome'):
+            raise HTTPException(503, 'Oracle still cannot be reached, so whether the order was saved is not known yet. Nothing will be '
+                                     'saved twice. Try again when the database is running.')
+        return d
 
 
 # --- overview: real figures only (local drafts + Oracle receipts); nothing estimated -----------------
-QUEUE_ORDER = ('Needs attention', 'Ready to approve', 'Checked offline', 'Draft')
+QUEUE_ORDER = ('Save outcome unknown', 'Saving', 'Needs attention', 'Ready to approve', 'Checked offline', 'Draft')
 
 
 @app.get('/api/overview')
@@ -641,7 +853,8 @@ def history(user=Depends(authenticated)):
         try:
             d = store.get(record['job_id'])
             record.update(filename=d['filename'], format=d['format'], orders=[o.get('order_ref') for o in d['orders']],
-                          styles=[o.get('style') for o in d['orders']], status='Saved')
+                          styles=[o.get('style') for o in d['orders']],
+                          status='Saved with exceptions' if (d.get('result') or {}).get('complete') is False else 'Saved')
         except KeyError:
             record['status'] = 'Saved'
     return records

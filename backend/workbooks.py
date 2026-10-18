@@ -120,7 +120,7 @@ def source(sheet, address, value, formula=None):
 
 def base_order():
     return dict(buyer='', style='', description='', po_number='', order_ref='', ship_date='',
-        order_date='', season='', merch='', sample_type='DEVELOPMENT SAMPLE', exporter='', against='',
+        order_date='', season='', merch='', sample_type='', exporter='', against='',
         department='', gender='', packing_type='', components=None,
         qty_unit='', pieces_per_unit=None, quantity_basis='unconfirmed', lines=[], provenance={},
         warnings=[], order_lines=[], sample_lines=[], fabrics=[], accessories=[], packs=None, workbook_pieces=None)
@@ -482,6 +482,8 @@ def unit_question(o):
     """Plain question for an undecided unit, quoting what the file says (shown on the unit field)."""
     p = (o.get('provenance') or {}).get('qty_unit') or {}
     ev = p.get('evidence') or ''
+    if p.get('reason') == 'other_buyer' and ev:
+        return ev[0].upper() + ev[1:] + ' — are these quantities pieces or packs?'
     if p.get('reason') == 'both':
         return 'The file mentions both pieces and packs — which are these quantities?'
     if p.get('reason') in ('conflict', 'mismatch') and ev:
@@ -924,11 +926,36 @@ def anchor_problems(g, t):
     return out
 
 
+def order_sheet(o):
+    """The worksheet an order was read from: recorded at reading, else the sheet most of its cells come from (drafts
+    read before it was recorded), else None (an order typed in by a person)."""
+    if o.get('sheet'):
+        return o['sheet']
+    from .coverage import referenced
+    cells = referenced(o)
+    return max(cells, key=lambda k: len(cells[k])) if cells else None
+
+
+def same_buyer(a, b):
+    """The same buyer once case, spacing and punctuation are ignored ("Zen Kids" = "ZEN KIDS."). Empty is never
+    the same as anything: a template that does not know its buyer belongs to no buyer."""
+    from .erp.masters import fingerprint
+    fa, fb = fingerprint(a), fingerprint(b)
+    return bool(fa) and fa == fb
+
+
+def own_template(t, orders):
+    """True when every order read with template t names the buyer the template was saved for."""
+    return bool(orders) and all(same_buyer(t.get('buyer'), o.get('buyer')) for o in orders)
+
+
 def choose_template(sheets, sheet, templates, fields):
     """(template, orders, refusals). A template is applied only when the layout matches, every anchor label
-    is unchanged and the validator accepts its definition on this sheet; otherwise the reason is kept."""
+    is unchanged and the validator accepts its definition on this sheet; otherwise the reason is kept.
+    Among the templates that fit, the one saved for this file's buyer wins over a better-scoring one of another
+    buyer, so a buyer's own layout (and its unit) is never shadowed by a look-alike from someone else."""
     from . import matcher
-    g = Grid(sheet, fields); refused = []
+    g = Grid(sheet, fields); refused = []; fits = []
     ranked = sorted(((template_score(sheet, t), t) for t in templates), key=lambda x: -x[0])
     for score, t in ranked:
         if score < 0.8:
@@ -944,18 +971,42 @@ def choose_template(sheets, sheet, templates, fields):
             except ValueError as exc:
                 reasons = [str(exc)]
         if not reasons:
-            return t, orders, refused
+            if own_template(t, orders):
+                return t, orders, refused
+            fits.append((t, orders))
+            continue
         refused.append(dict(id=t['id'], name=t['name'], version=t.get('version', 1), sheet=sheet['name'], reasons=reasons))
+    if fits:
+        return fits[0][0], fits[0][1], refused
     return None, None, refused
 
 
+def _unit_words(unit):
+    if unit.get('qty_unit') == 'PCS':
+        return 'pieces'
+    per = unit.get('pieces_per_unit')
+    return f'packs{" of " + str(per) if per else ""}'
+
+
 def restore_from_template(orders, t):
-    """A confirmed unit and quantity basis saved with the template come back; the file still wins when it
-    says something different (then the person is asked)."""
+    """A confirmed unit and quantity basis saved with the template come back, but only for the buyer they were
+    confirmed for: a unit is a business decision about one buyer's quantities ("packs of 3"), not part of the layout.
+    Another buyer's file read with the same layout is asked again (docs/audit LAYOUT_TEMPLATE_CAPABILITY_MATRIX §7,
+    scenario 2: 120 source units became 360 pieces). The file still wins when it says something different."""
     tag = f'saved layout “{t["name"]}” (version {t.get("version", 1)})'
     unit = t.get('unit') or {}; basis = t.get('quantity_basis')
     for o in orders:
         prov = o.setdefault('provenance', {})
+        if not same_buyer(t.get('buyer'), o.get('buyer')):
+            owner = f'buyer “{t["buyer"]}”' if t.get('buyer') else 'no particular buyer'
+            lead = (f'Read with the {tag}, which was saved for {owner}; this order’s buyer is “{o.get("buyer") or "not given"}”. '
+                    'Only the layout was reused: check that every field was read from the right cell.')
+            if unit.get('qty_unit') in ('PCS', 'PACK') and not o.get('qty_unit'):
+                prov['qty_unit'] = dict(prov.get('qty_unit') or {}, reason='other_buyer', template=t['id'],
+                                        evidence=f'the {tag} uses {_unit_words(unit)} for {owner}, but this order is for '
+                                                 f'“{o.get("buyer") or "a buyer not given"}”, so that unit was not applied')
+            review_notes(o, lead)
+            continue
         if unit.get('qty_unit') in ('PCS', 'PACK'):
             per = 1 if unit['qty_unit'] == 'PCS' else unit.get('pieces_per_unit')
             file_unit = (prov.get('qty_unit') or {}).get('reason') == 'file'
@@ -1050,6 +1101,8 @@ def parse_sheets(sheets, templates=(), fields=None):
                 for o in found:
                     o['warnings'].insert(0, f'{len(uncalculated)} formula cells on "{sheet["name"]}" have no calculated value '
                                             f'(e.g. {", ".join(uncalculated[:4])}). Open the file in Excel, save it, and upload again.')
+            for o in found:
+                o['sheet'] = sheet['name']             # which worksheet the order came from (re-mapping one sheet keeps the others)
             origin += [(sheet['name'], o) for o in found]
     # One date convention per file: a date that can only be month first makes ambiguous ones a question.
     month_first = month_first_example([o.get(k) for _, o in origin for k in DATE_FIELDS])
@@ -1235,6 +1288,9 @@ def validate_definition(sheet, d, fields=None):
     return d
 
 
+MATRIX_ROWS = 200     # rows read under the size headings of one matrix (an order holds at most 100 lines anyway)
+
+
 def matrix_order(g, t):
     """One order from a size matrix (sizes across columns). Total rows are left out — a sub total is skipped, a
     grand total ends the table and its figure is checked against the lines read — hidden rows are not read, and
@@ -1244,7 +1300,8 @@ def matrix_order(g, t):
     total_col = int(t.get('total_col') or 0) or None
     sizes = range(first, last + 1); heads = {c: norm(g.v(header, c)) for c in sizes}
     o = base_order(); lines = []; totals = []; stop = None; read = 0
-    for r in range(header + 1, min(header + 201, g.rows + 1)):
+    end = min(header + MATRIX_ROWS, g.rows)
+    for r in range(header + 1, end + 1):
         if r in g.hidden_rows:
             continue                                   # named by the sheet's hidden-rows note
         names = [g.v(r, c) for c in range(1, first) if isinstance(g.v(r, c), str)]
@@ -1266,8 +1323,14 @@ def matrix_order(g, t):
                           provenance={'color': g.p(r, color_col)} if color_col else {},
                           sizes=[dict(size=text(g.v(header, c)), quantity=quantity_of(g.v(r, c)), source=g.p(r, c), size_source=g.p(header, c))
                                  for c in sizes if g.v(header, c) is not None]))
+    else:
+        if end < g.rows and any(g.v(r, c) not in (None, '') for r in range(end + 1, min(end + 50, g.rows) + 1) for c in sizes):
+            stop = end + 1                             # the row limit, not the table, ended the reading: named below
     o['lines'] = lines; o['order_lines'] = deepcopy(lines)
     o['warnings'] = [n for n in (_total_note(g, totals, read), _below_note(g, stop, list(sizes))) if n]
+    if stop == end + 1:
+        o['warnings'].insert(0, f'Only the first {MATRIX_ROWS} rows under the size headings of “{g.sheet["name"]}” were read '
+                                f'(rows {header + 1}–{end}); the table continues below row {end}. Split the file or map the rest separately.')
     return o
 
 

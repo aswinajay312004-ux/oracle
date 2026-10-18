@@ -47,7 +47,7 @@ export async function recent() {
       ${drafts.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><span class="row"><span class="file-badge">XLS</span><span><b>${esc(d.filename)}</b><br><span class="muted small-text">${esc(d.format)}</span></span></span></td>
         <td>${esc((d.styles || []).filter(Boolean).join(', ') || '—')}<br><span class="muted small-text">${esc((d.buyers || []).filter(Boolean).join(', '))}</span></td>
         <td class="nowrap">${esc(d.uploaded_by || '')}<br><span class="muted small-text">${d.created_at ? esc(new Date(d.created_at).toLocaleString()) : ''}</span></td>
-        <td><span class="pill ${({ 'Saved to Oracle': 'ok', 'Ready to approve': 'info', 'Needs attention': 'err', 'Checked offline': 'warn' })[d.status] || ''}">${esc(d.status)}</span></td><td><button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></td></tr>`).join('')}
+        <td><span class="pill ${({ 'Saved to Oracle': 'ok', 'Saved with exceptions': 'warn', 'Ready to approve': 'info', 'Needs attention': 'err', 'Checked offline': 'warn', 'Save outcome unknown': 'err', Saving: 'warn' })[d.status] || ''}">${esc(d.status)}</span></td><td><button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="empty">Your uploads will appear here.</p>';
   } catch (e) { $('#recent').innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
 }
@@ -96,6 +96,9 @@ function showReading() {
     items.push([need.length ? 'warn' : 'ok', need.length ? `${plural(need.length, 'field')} not in the file: ${need.join(', ')}` : 'All required order details present',
       need.length ? 'They are outlined in red on the next screen — type them there.' : 'Review the quantities and approve.']);
   }
+  const cov = d.coverage;
+  if (cov && d.orders.length) items.push([cov.exclusions.length ? 'warn' : 'ok', `${fmt(cov.totals.numbers_read, 0)} of ${fmt(cov.totals.numbers, 0)} numbers in the file are in the order`,
+    cov.exclusions.length ? `Not read: ${cov.exclusions.slice(0, 2).join(' ')}${cov.exclusions.length > 2 ? ` (and ${cov.exclusions.length - 2} more, listed on the next screen)` : ''}` : 'Every number in the file is accounted for.']);
   $('#read-title').textContent = d.orders.length ? 'Here is what we found' : 'We need one quick hint';
   $('#read-steps').innerHTML = items.map(([k, t, s], i) => `<li class="${k === 'ok' ? '' : k}" style="animation-delay:${i * 80}ms"><span class="ic">${k === 'ok' ? '✓' : k === 'warn' ? '!' : '–'}</span><div><strong>${esc(t)}</strong><small>${esc(s)}</small></div></li>`).join('');
   $('#read-actions').hidden = false; $('#go-review').focus();
@@ -153,8 +156,10 @@ export function renderReview() {
     <div class="card doc-bar"><span class="file-badge">XLS</span>
       <div><span class="name">${esc(d.filename)}</span><small>${d.template ? `Saved layout “${esc(d.template.name)}” (v${esc(d.template.version)})` : esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
       <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? 'Saved to Oracle' : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
-      ${undoButtons()}<button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
+      ${undoButtons()}<a class="button ghost small" href="/api/drafts/${esc(id(d.id))}/original" download title="The file exactly as uploaded (SHA-256 ${esc((d.filehash || '').slice(0, 12))}…)">Original file</a><button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
+    ${d.outcome ? outcomeBanner(d) : ''}
     ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}
+    ${coverageBanner(d)}
     ${p && !p.live ? '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected, so existing masters and order numbers could not be checked. Start the database and press <b>Check &amp; continue</b> again.</div></div>' : ''}
     <section id="mapping-panel" class="card" ${needMap || state.showMapping ? '' : 'hidden'} style="margin-bottom:14px"></section>
     <div id="orders">${d.orders.map((o, i) => orderScreen(o, i)).join('')}
@@ -163,6 +168,24 @@ export function renderReview() {
   if (needMap || state.showMapping) renderMapping($('#mapping-panel'), d, applyMapping);
   if (locked) $$('#orders input, #orders select, #orders button').forEach(e => { e.disabled = true; });
   renderSide();
+}
+
+// What of the file is not in any order (backend/coverage.py): shown, never dropped silently.
+function coverageBanner(d) {
+  const c = d.coverage; if (!c || !c.exclusions.length) return '';
+  const t = c.totals;
+  return `<details class="banner warning coverage"><summary><span class="b-ic">!</span><b>Not read from the file: ${plural(c.exclusions.length, 'part')}</b>
+    <span class="muted small-text"> · ${fmt(t.numbers_read, 0)} of ${fmt(t.numbers, 0)} numbers in the file are in the order${d.orders.length === 1 ? '' : 's'}</span></summary>
+    <ul class="small-text">${c.exclusions.map(e => `<li>${esc(e)}</li>`).join('')}</ul>
+    <p class="muted small-text">These cells are kept in the original file but will not be saved. If they belong to the order, use <b>Read this file differently</b> or type them in.</p></details>`;
+}
+
+function outcomeBanner(d) {
+  const o = d.outcome;
+  const text = o.state === 'unknown' ? 'Oracle did not confirm the save of this order and could not be reached to check. It may or may not be saved.'
+    : 'A save of this order was started and its result is being checked with Oracle.';
+  return `<div class="banner error" role="alert"><span class="b-ic">?</span><div><b>${esc(text)}</b><br>Nothing will be saved twice. Nothing can be changed until Oracle answers.
+    <div style="margin-top:8px"><button class="primary small" data-act="reconcile">Check again</button></div></div></div>`;
 }
 
 function counts(oi) {
@@ -213,8 +236,15 @@ function unitSrc(o) {
 function field(o, oi, [k, text, req, list, type]) {
   if (k === '__orderno') return `<div class="f"><label class="f-label">${text}<span class="src"><span class="chip calc">automatic</span></span></label><input readonly value="Generated by Oracle on save"></div>`;
   const path = `orders.${oi}.${k}`; const v = o[k] ?? ''; const issue = at(path); void req;
-  return `<div class="f ${cls(issue)}" data-field="${esc(path)}"><label class="f-label" for="f-${esc(path)}"><span>${esc(text)}</span>${isRequired(k) ? '<span class="req" title="Required">*</span>' : ''}<span class="src">${issue ? '' : srcOf(o, k)}</span></label>
+  return `<div class="f ${cls(issue)}" data-field="${esc(path)}"><label class="f-label" for="f-${esc(path)}"><span>${esc(text)}</span>${isRequired(k) ? '<span class="req" title="Required">*</span>' : ''}${notSavedChip(k)}<span class="src">${issue ? '' : srcOf(o, k)}</span></label>
     <input id="f-${esc(path)}" data-path="${esc(path)}" ${type ? `type="${type}"` : ''} value="${esc(v)}" ${list ? `list="list-${list}"` : ''} ${k === 'order_ref' ? 'placeholder="e.g. PK/26-27/S/1320" maxlength="30"' : ''} ${issue ? 'aria-invalid="true"' : ''}>${msgHtml(issue)}</div>`;
+}
+
+// A field whose value will not reach Oracle says so on the field itself (it is still kept in the POPPYS import record).
+function notSavedChip(k) {
+  const dest = (state.draft.destinations || {})[k]; if (!dest) return '';
+  const tip = dest.kept === 'unverified' ? `Not saved to Oracle yet: its place (${dest.column}) is not confirmed. Kept in the POPPYS import record.` : 'Oracle has no place for this field. It is kept in the POPPYS import record only.';
+  return `<span class="chip not-saved" title="${esc(tip)}">not in Oracle</span>`;
 }
 
 function orderTab(o, oi) {
@@ -545,6 +575,11 @@ export async function onAction(btn) {
     case 'tab': state.tab[oi] = btn.dataset.tab; renderReview(); return true;
     case 'next-issue': nextIssue(); return true;
     case 'ask-file': askFile(); return true;
+    case 'reconcile': await busy('Asking Oracle whether the order was saved…', async () => {
+      state.draft = await api(`/api/drafts/${id(d.id)}/reconcile`, { method: 'POST' });
+      if (state.draft.result) { state.saved = true; notify('Oracle confirms the order is saved.', 'success'); return showSaved(state.draft.result); }
+      notify('Oracle confirms the order was not saved. You can check and approve it again.', 'info'); renderReview();
+    }); return true;
     case 'new-upload': if (state.dirty && !await confirmDialog('Discard your corrections?', '<p>Corrections not yet checked will be lost.</p>', 'Discard')) return true; resetWorkspace(); return true;
     case 'show-mapping': state.showMapping = true; renderReview(); $('#mapping-panel').scrollIntoView({ behavior: 'smooth' }); return true;
     case 'hide-mapping': state.showMapping = false; renderReview(); return true;
@@ -600,6 +635,7 @@ async function applyMapping(body) {
     try { state.draft = await api(`/api/drafts/${id(state.draft.id)}/map`, { method: 'POST', body: { version: state.draft.version, ...body } }); }
     catch (e) {
       if (e.status === 409 && e.data?.rejected?.length) return { rejected: e.data.rejected };
+      if (e.status === 409 && e.data?.name_taken) return { nameTaken: e.data };
       if (e.status === 409 && /pack/i.test(e.message)) return { rejected: [{ field: 'qty_unit', reason: e.message }] };
       throw e;
     }
@@ -648,12 +684,35 @@ export function showApprove() {
     ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected. This view used the saved database structure, so existing masters were not checked. Start the database and check again to approve.</div></div>'}
     <div class="kpis">${[['New records', inserts.length], ['Oracle tables', tables.size], ['Existing masters reused', reuse.length], ['Pieces', fmt(plan.totals.pieces, 0)], ['Fabric (kg)', fmt(plan.totals.fabric_kg)]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
     ${plan.warnings.length ? `<div class="banner warning"><span class="b-ic">!</span><div><b>Please read before approving</b><ul>${plan.warnings.map(w => `<li>${esc(d.orders.length === 1 ? strip(w) : w)}</li>`).join('')}</ul></div></div>` : ''}
+    ${exceptionsCard(d)}
     ${flowCard('Where this order will be saved', 'Nothing is in Oracle yet. Click a table to see the exact rows and values that will be written.')}
-    <div class="action-bar"><p>${canApprove ? `Accepting writes these ${plural(inserts.length, 'record')} in <b>one Oracle transaction</b>, reads every row back to confirm it, and records who approved it. If anything fails, nothing is saved.` :
+    <div class="action-bar"><p>${canApprove ? `Accepting writes these ${plural(inserts.length, 'record')} in <b>one Oracle transaction</b> and records who approved it. If Oracle refuses any row, nothing is saved. After saving, every row is read back from Oracle to verify it.` :
       !plan.live ? 'Saving is disabled until Oracle is connected.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Your role cannot approve. An approver or administrator must accept this entry.'}</p>
-      <button class="primary big" data-act2="approve" ${canApprove ? '' : 'disabled'}>Accept and save to Oracle →</button></div>`;
+      <button class="primary big" data-act2="approve" ${canApprove && !needsAck(plan) ? '' : 'disabled'}>Accept and save to Oracle →</button></div>`;
   mountFlow(root, plan.graph || { nodes: [], edges: [] }, { planned: true, columns: plan.columns, onReferenceOnly: t => backToReview(t === 'ORDACC' ? 'trims' : 'fabric') });
   stage('approve');
+}
+
+const needsAck = plan => !!plan.exceptions?.digest && state.exceptionsSeen !== plan.exceptions.digest;
+
+// Everything that will not be in Oracle exactly as the file says, in business words, before the approval.
+function exceptionsCard(d) {
+  const ex = d.plan.exceptions; if (!ex?.digest) return '';
+  const many = d.orders.length > 1; const who = i => many ? `Order ${i + 1} · ` : '';
+  const ns = ex.not_saved.map(x => `<li><b>${esc(who(x.order) + x.label)}</b>${x.values.length ? ` “${esc(x.values.join('”, “'))}”${x.count > x.values.length ? ` and ${x.count - x.values.length} more` : ''}` : ` (${plural(x.count, 'row')})`}: ${esc(x.reason)}</li>`).join('');
+  const conv = ex.conversions.map(x => `<li><b>${esc(who(x.order))}Quantity unit</b>: ${esc(x.text)}</li>`).join('');
+  const excl = ex.exclusions.map(x => `<li>${esc(x)}</li>`).join('');
+  return `<section class="card exceptions" aria-labelledby="ex-title"><h2 id="ex-title">What will not be saved exactly as in the file</h2>
+    ${conv ? `<h3>Converted</h3><ul>${conv}</ul>` : ''}
+    ${ns ? `<h3>Not saved to Oracle (kept in the POPPYS import record)</h3><ul>${ns}</ul>` : ''}
+    ${excl ? `<h3>Not read from the file</h3><ul>${excl}</ul>` : ''}
+    <label class="check"><input type="checkbox" id="ex-seen" ${state.exceptionsSeen === ex.digest ? 'checked' : ''}> I have read what will not be saved</label></section>`;
+}
+
+export function exceptionsSeen(checked) {
+  const ex = state.draft?.plan?.exceptions; state.exceptionsSeen = checked && ex ? ex.digest : null;
+  const b = $('#stage-approve [data-act2="approve"]'); const plan = state.draft.plan;
+  if (b) b.disabled = !(plan.live && !plan.errors.length && can('approve')) || needsAck(plan);
 }
 
 export function backToReview(tab) {
@@ -669,12 +728,15 @@ export async function approve() {
     <ul>${Object.entries(counts).map(([t, n]) => `<li><b>${esc(t)}</b>: ${n} new record${n === 1 ? '' : 's'}</li>`).join('')}</ul>
     <p class="muted">This cannot be undone from POPPYS AI. Existing orders are never overwritten.</p>`, 'Yes, save to Oracle');
   if (!ok) return;
-  await busy('Saving in one transaction and reading every row back…', async () => {
+  await busy('Saving in one transaction…', async () => {
     let result;
-    try { result = await api(`/api/drafts/${id(d.id)}/accept`, { method: 'POST', body: { version: d.version, plan_hash: plan.hash } }); }
+    try { result = await api(`/api/drafts/${id(d.id)}/accept`, { method: 'POST', body: { version: d.version, plan_hash: plan.hash, exceptions_seen: plan.exceptions?.digest || null } }); }
     catch (e) {
+      // The server says what Oracle confirmed (saved / not saved / unknown); nothing is claimed here on a guess.
       try { state.draft = await api(`/api/drafts/${id(d.id)}`); } catch (_) { /* keep current */ }
-      throw new Error(`${e.message}\nNothing was partially saved. Check again and retry.`);
+      if (state.draft.result) { state.saved = true; return showSaved(state.draft.result); }
+      if (e.data?.outcome === 'unknown') { renderReview(); stage('review'); }
+      throw e;
     }
     state.draft.result = result; state.saved = true;
     await showSaved(result);
@@ -683,27 +745,43 @@ export async function approve() {
 
 // ---------------------------------------------------------------- saved
 export async function showSaved(result, target = $('#stage-saved'), standalone = false) {
-  target.innerHTML = `<section class="card saved-hero"><span class="tick">✓</span><div><span class="eyebrow">${result.already_committed ? 'Already saved' : 'Saved and verified'}</span>
-      <h1>${result.already_committed ? 'This order is in Oracle.' : 'The order is saved in Oracle.'}</h1>
+  const partial = result.complete === false || (result.reference_only || []).length;
+  target.innerHTML = `<section class="card saved-hero"><span class="tick" data-saved-tick>…</span><div><span class="eyebrow" data-saved-state>Saved · reading it back from Oracle…</span>
+      <h1>${result.already_committed ? 'This order is in Oracle.' : 'The order is saved in Oracle.'}${partial ? ' Some details were not saved — see below.' : ''}</h1>
       <p class="muted">Approved by ${esc(result.approver || '—')} · ${esc(new Date(result.committed_at).toLocaleString())} · ${plural((result.rows || []).length, 'new record')}${(result.reused || []).length ? `, ${plural(result.reused.length, 'existing master')} linked` : ''}</p>
       <div class="ids">${(result.orders || []).map(o => `<span><b>${esc(o.order_ref)}</b> · ORDMASID <code>${esc(o.ordmasid)}</code></span>`).join('')}</div></div>
       <div style="display:grid;gap:8px">${(result.orders || []).map(o => `<button class="secondary" data-explore-order="${esc(o.ordmasid)}">Open in Database</button>`).join('')}${standalone ? '' : '<button class="primary" data-act2="another">Start another order</button>'}</div></section>
     ${flowCard('Where your data was saved', 'Reading the rows back from Oracle…', '<span class="pill" data-flow-pill>checking</span>')}
-    ${(result.reference_only || []).length ? `<div class="banner info" style="margin-top:12px"><span class="b-ic">i</span><div>Not saved (mapping not verified yet): ${result.reference_only.map(r => `${esc(r.business)} (${r.rows} rows)`).join(', ')}.</div></div>` : ''}`;
+    ${result.local_record ? `<div class="banner warning" style="margin-top:12px"><span class="b-ic">!</span><div>${esc(result.local_record)}</div></div>` : ''}
+    ${savedExceptions(result)}`;
   if (!standalone) stage('saved');
+  const setState = (text, ok) => { const e = target.querySelector('[data-saved-state]'); if (e) e.textContent = text; const t = target.querySelector('[data-saved-tick]'); if (t) { t.textContent = ok ? '✓' : '!'; t.classList.toggle('warn', !ok); } };
   try {
     const graph = await api(`/api/history/${id(result.job_id)}/graph`);
     target.querySelector('[data-flow-sub]').textContent = `${plural(graph.nodes.length, 'table')} · the values below come from a fresh SELECT, not from the save receipt`;
     const pill = target.querySelector('[data-flow-pill]');
     pill.textContent = graph.verified ? '✓ Verified in Oracle' : '⚠ Differences found'; pill.className = `pill ${graph.verified ? 'ok' : 'err'}`;
+    setState(graph.verified ? (partial ? 'Saved and verified · with exceptions' : 'Saved and verified') : 'Saved · Oracle shows differences', graph.verified);
     mountFlow(target, graph, { planned: false });
   } catch (e) {
     target.querySelector('[data-flow-sub]').textContent = `Could not read back from Oracle: ${e.message}`;
     const pill = target.querySelector('[data-flow-pill]'); pill.textContent = 'not verified'; pill.className = 'pill warn';
+    setState('Saved · not verified yet (Oracle could not be read back)', false);
   }
 }
 
+function savedExceptions(result) {
+  const ns = result.not_saved || []; const ex = result.exclusions || []; const conv = result.conversions || [];
+  const ref = (result.reference_only || []).filter(r => !ns.some(x => x.column === r.table));
+  if (!ns.length && !ex.length && !conv.length && !ref.length) return '<div class="banner info" style="margin-top:12px"><span class="b-ic">i</span><div>Everything read from the file is in Oracle.</div></div>';
+  return `<section class="card exceptions" style="margin-top:12px"><h2>Not saved exactly as in the file</h2>
+    ${conv.length ? `<h3>Converted</h3><ul>${conv.map(x => `<li>${esc(x.text)}</li>`).join('')}</ul>` : ''}
+    ${ns.length || ref.length ? `<h3>Not saved to Oracle (kept in the POPPYS import record)</h3><ul>${ns.map(x => `<li><b>${esc(x.label)}</b>${x.values.length ? ` “${esc(x.values.join('”, “'))}”` : ` (${plural(x.count, 'row')})`}: ${esc(x.reason)}</li>`).join('')}${ref.map(r => `<li><b>${esc(r.business)}</b> (${plural(r.rows, 'row')}): ${esc(r.reason)}</li>`).join('')}</ul>` : ''}
+    ${ex.length ? `<h3>Not read from the file</h3><ul>${ex.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</section>`;
+}
+
 export function bindWorkspace() {
+  $('#stage-approve').addEventListener('change', e => { if (e.target.id === 'ex-seen') exceptionsSeen(e.target.checked); });
   const root = $('#stage-review');
   root.addEventListener('input', onInput);
   root.addEventListener('change', e => { if (e.target.dataset.act === 'only-problems') return onAction(e.target); onChange(e); });

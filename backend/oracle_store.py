@@ -140,9 +140,42 @@ def jsonable(v):
     return v
 
 
+def receipt_extras(checked, draft):
+    """What the import receipt says beyond the rows written: what did NOT reach Oracle and why, and the conversions
+    applied. complete is True only when nothing from the file is left out (docs/TRANSACTION_AND_RECONCILIATION.md)."""
+    not_saved = checked.get('not_saved') or []
+    exclusions = list(((draft.get('coverage') or {}).get('exclusions')) or [])
+    return dict(not_saved=not_saved, exclusions=exclusions, conversions=checked.get('conversions') or [],
+                complete=not not_saved and not exclusions and not checked.get('reference_only'),
+                filehash=draft.get('filehash'), plan_hash=checked.get('hash'))
+
+
+def _write_timeout_ms(default_s=60, low=5, high=600):
+    """WRITE_TIMEOUT_S from .env.poppys (seconds per statement of a save); anything that is not a number in range → default."""
+    try:
+        seconds = float(setting('WRITE_TIMEOUT_S', '') or default_s)
+    except ValueError:
+        seconds = default_s
+    return int((seconds if low <= seconds <= high else default_s) * 1000)
+
+
+WRITE_TIMEOUT_MS = _write_timeout_ms()
+
+
+def _rollback(conn):
+    """Roll back unless the driver has dropped the connection (then Oracle rolls back the session itself; touching the
+    dropped connection can crash python-oracledb, see backend/insight/service.py usable())."""
+    try:
+        if conn.is_healthy():
+            conn.rollback()
+    except Exception:
+        pass
+
+
 def commit(draft, expected_hash, approver, mapping=None):
     mapping = mapping or current_mapping()
     with connect() as conn:
+        conn.call_timeout = WRITE_TIMEOUT_MS        # a stuck lock or statement cannot hold the save (and the approver) forever
         c = conn.cursor(); c.execute('SELECT ID FROM PP_WRITE_LOCK WHERE ID=1 FOR UPDATE WAIT 10')
         previous = read_result(c, draft['id'])
         if previous:
@@ -185,14 +218,15 @@ def commit(draft, expected_hash, approver, mapping=None):
                     outorders.append(dict(order_ref=vals['DOCID'], ordmasid=ident))
             result = dict(job_id=draft['id'], orders=outorders, rows=inserted, reused=reused, totals=checked['totals'],
                           reference_only=checked.get('reference_only', []),
-                          committed_at=datetime.now().astimezone().isoformat(), approver=approver, already_committed=False)
+                          committed_at=datetime.now().astimezone().isoformat(), approver=approver, already_committed=False,
+                          **receipt_extras(checked, draft))
             c.setinputsizes(payload=oracledb.DB_TYPE_CLOB)
             c.execute('INSERT INTO PP_IMPORT_LOG(JOBID,FILEHASH,PLANHASH,APPROVER,RESULT_JSON) VALUES (:job,:filehash,:hash,:who,:payload)',
                       job=draft['id'], filehash=draft['filehash'], hash=expected_hash, who=approver,
                       payload=json.dumps(result, ensure_ascii=False))
             conn.commit(); return result
         except Exception:
-            conn.rollback(); raise
+            _rollback(conn); raise
 
 
 def history():

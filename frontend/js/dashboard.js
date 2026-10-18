@@ -3,7 +3,7 @@
 import { $, esc, fmt, state, timeAgo } from './util.js';
 import { api } from './api.js';
 
-const STATUS_PILL = { 'Needs attention': 'err', 'Ready to approve': 'ok', 'Checked offline': 'warn', Draft: '' };
+const STATUS_PILL = { 'Save outcome unknown': 'err', Saving: 'warn', 'Needs attention': 'err', 'Ready to approve': 'ok', 'Checked offline': 'warn', Draft: '' };
 
 export async function loadDashboard() {
   let o;

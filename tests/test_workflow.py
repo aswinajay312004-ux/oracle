@@ -17,7 +17,12 @@ def env(tmp_path, monkeypatch):
                                  'UNITMAS': [dict(id=8, label='PCS', cancelled=False)]}).install(monkeypatch)
     with TestClient(main.app) as c:
         assert c.post('/api/setup', json={'username': 'admin', 'password': PW}).status_code == 200
+        assert c.put('/api/settings', json={'allow_self_approval': True}).status_code == 200   # one person; see test_roles_and_four_eyes
         yield c, oracle
+
+
+def approval(p):
+    return {'version': p['version'], 'plan_hash': p['plan']['hash'], 'exceptions_seen': (p['plan'].get('exceptions') or {}).get('digest')}
 
 
 def login(c, user):
@@ -45,7 +50,7 @@ def test_full_order_flow_with_readback_graph(env):
     assert d['orders'][0]['exporter'] == 'POPPYS KNITWEAR PRIVATE LIMITED'
     p = ready(c, d)
     assert p['plan']['live'] and not p['plan']['errors'], p['plan']['errors']
-    r = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']})
+    r = c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p))
     assert r.status_code == 200, r.text
     receipt = r.json(); assert receipt['orders'][0]['order_ref'] == 'TEST/ORD/1'
     assert {row['table'] for row in receipt['rows']} >= {'ORDMAS', 'ORDSTYLE', 'ORDSIZE'}
@@ -58,7 +63,7 @@ def test_full_order_flow_with_readback_graph(env):
     line = tables['ORDSTYLE']['records'][0]
     assert line['decoded']['COMBO'] in ('WHITE AOP', 'PINK SOLID')
     # retrying the same approval returns the stored receipt, never a second insert
-    again = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).json()
+    again = c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).json()
     assert again['already_committed'] is True
     assert c.put(f'/api/drafts/{d["id"]}', json={'version': p['version'] + 1, 'orders': []}).status_code == 409
     # same file again is blocked at preview
@@ -89,14 +94,14 @@ def test_roles_and_four_eyes(env):
     assert c.post('/api/uploads', files={'file': ('x.xlsx', merch_bom())}).status_code == 403
     login(c, 'op')
     d = upload(c); p = ready(c, d)
-    assert c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).status_code == 403
+    assert c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).status_code == 403
     assert c.post('/api/mapping/status', json={'table': 'ORDFAB', 'status': 'verified'}).status_code == 403
     assert c.get('/api/users').status_code == 403
     login(c, 'appr')
-    assert c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).status_code == 200
+    assert c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).status_code == 200
     # the uploader approving their own upload is refused while four-eyes is on
     d2 = upload(c, merch_bom(sample=(1, 1, 1, 1))); p2 = ready(c, d2, ref='TEST/ORD/9')
-    assert c.post(f'/api/drafts/{d2["id"]}/accept', json={'version': p2['version'], 'plan_hash': p2['plan']['hash']}).status_code == 403
+    assert c.post(f'/api/drafts/{d2["id"]}/accept', json=approval(p2)).status_code == 403
     login(c, 'admin')
     assert c.patch('/api/users/admin', json={'role': 'viewer'}).status_code == 409   # last admin protected
 
@@ -116,7 +121,7 @@ def test_bom_rows_saved_only_after_admin_verifies_mapping(env):
                     assert c.post('/api/mapping/status', json={'table': t['table'], 'column': col['column'], 'status': 'verified', 'evidence': proof}).status_code == 200
     d = upload(c, merch_bom(sample=(2, 2, 2, 2))); p = ready(c, d, ref='TEST/BOM/1')
     assert not p['plan']['errors'], p['plan']['errors']
-    r = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).json()
+    r = c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).json()
     saved = {row['table'] for row in r['rows']}
     assert {'ORDFAB', 'ORDYARN', 'ORDACC'} <= saved
     g = c.get(f'/api/history/{d["id"]}/graph').json()
@@ -155,5 +160,5 @@ def test_offline_preview_is_marked_and_cannot_be_approved(env, monkeypatch):
     monkeypatch.setattr(oracle_store, 'connect', down)
     d = upload(c); p = ready(c, d)
     assert p['plan']['live'] is False and 'Oracle is not connected' in p['plan']['warnings'][0]
-    assert c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash']}).status_code == 409
+    assert c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).status_code == 409
     assert c.get('/api/health').json()['database']['connected'] is False

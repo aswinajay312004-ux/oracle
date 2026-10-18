@@ -258,7 +258,11 @@ def _pieces(orders):
 def _status(d):
     p = d.get('plan')
     if d.get('result'):
-        return 'Saved to Oracle'
+        return 'Saved with exceptions' if d['result'].get('complete') is False else 'Saved to Oracle'
+    if (d.get('outcome') or {}).get('state') == 'unknown':
+        return 'Save outcome unknown'
+    if d.get('outcome'):
+        return 'Saving'
     if not p:
         return 'Draft'
     if p.get('errors'):

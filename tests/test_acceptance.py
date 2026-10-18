@@ -46,6 +46,8 @@ def offline_ai(monkeypatch):
 
 def signed_in(client):
     assert client.post('/api/setup', json={'username': 'admin', 'password': PW}).status_code == 200
+    # One person plays every role in these tests; the four-eyes rule (on by default) has its own tests in test_workflow.py.
+    assert client.put('/api/settings', json={'allow_self_approval': True}).status_code == 200
     return client
 
 
@@ -124,7 +126,12 @@ def preview(c, d):
 
 
 def accept(c, d):
-    return c.post(f'/api/drafts/{d["id"]}/accept', json={'version': d['version'], 'plan_hash': d['plan']['hash']})
+    return c.post(f'/api/drafts/{d["id"]}/accept', json=approval(d))
+
+
+def approval(d):
+    """The approve request of a person who read the preview, including its "What will not be saved" list."""
+    return {'version': d['version'], 'plan_hash': d['plan']['hash'], 'exceptions_seen': (d['plan'].get('exceptions') or {}).get('digest')}
 
 
 def map_layout(c, d, definition, **body):
@@ -309,6 +316,62 @@ def test_B_new_buyer_gets_no_template_and_no_data_from_another_buyer(env, varian
     assert ((s.get('definition') or {}).get('table') or {}).get('header_row') == header_row, f'B: the size table of the new file starts at row {header_row}'
     if variant == 'one-anchor-renamed':
         assert chosen.get('ship_date') != 'B8', 'B: the cell labelled "Order Date" must not be pre-selected as Ship date'
+
+
+BLUE_LOOKALIKE = dict(BLUE_RENAMED, ship_label='Ship Date', lines=(('TEAL', '', (10, 20, 30, 40)), ('CORAL', '', (5, 5, 5, 5))))
+
+
+def test_B_another_buyers_lookalike_file_reuses_the_layout_but_never_its_unit(env):
+    """Audit LAYOUT_TEMPLATE_CAPABILITY_MATRIX §7 scenario 2: a BLUE BAY file built exactly like ZEN KIDS was read with
+    ZEN's template and ZEN's "packs of 3", so 120 source units became 360 pieces without a question."""
+    c, _ = env
+    zen_template(c)                                                   # ZEN KIDS: packs of 3, sample
+    d = upload(c, zen_kids_po(**BLUE_LOOKALIKE), 'bluebay-lookalike.xlsx')
+    assert 'ZEN KIDS PO' in d['format'], 'the layout itself may be reused (same structure)'
+    o = d['orders'][0]
+    assert o['buyer'] == 'BLUE BAY' and unit(o) == ('', None, 'unconfirmed'), \
+        f'§2.3: ZEN KIDS\'s unit and quantity basis must not be applied to BLUE BAY: {unit(o)}'
+    assert any('saved for buyer “ZEN KIDS”' in w for w in o['warnings']), o['warnings']
+    question = o['provenance']['qty_unit']['question']
+    assert 'packs of 3' in question and 'BLUE BAY' in question, question
+    p = preview(c, edit(c, d, order_ref='TEST/ACC/B9', order_date='2026-10-17'))
+    assert 'orders.0.qty_unit' in errors(p['plan']), 'saving is blocked until the unit for BLUE BAY is answered'
+    p = preview(c, edit(c, p, qty_unit='PCS', pieces_per_unit=1, quantity_basis='sample'))
+    assert not p['plan']['errors'] and p['plan']['totals']['pieces'] == 120, p['plan']['totals']
+    zen = next(t for t in c.get('/api/templates').json() if t['name'] == 'ZEN KIDS PO')
+    assert zen['unit'] == {'qty_unit': 'PACK', 'pieces_per_unit': 3}, f'BLUE BAY\'s answer must not change ZEN\'s template: {zen["unit"]}'
+
+
+def test_B_a_buyers_own_layout_wins_over_a_better_scoring_one_of_another_buyer(env):
+    c, _ = env
+    zen_template(c)
+    d = upload(c, zen_kids_po(**BLUE_LOOKALIKE), 'bluebay-1.xlsx')
+    r = map_layout(c, d, ZEN_DEFINITION, save_template=True, template_name='BLUE BAY PO', qty_unit='PCS', quantity_basis='sample')
+    assert r.status_code == 200, r.text
+    c.get('/api/templates')
+    d = upload(c, zen_kids_po(**dict(BLUE_LOOKALIKE, style='BB-3301', po='BB/PO/0043')), 'bluebay-2.xlsx')
+    assert 'BLUE BAY PO' in d['format'] and unit(d['orders'][0]) == ('PCS', 1, 'sample'), (d['format'], unit(d['orders'][0]))
+    d = upload(c, zen_kids_po(**SECOND_ZEN), 'zen-2.xlsx')
+    assert 'ZEN KIDS PO' in d['format'] and unit(d['orders'][0]) == ('PACK', 3, 'sample'), (d['format'], unit(d['orders'][0]))
+
+
+def test_B_a_different_structure_never_silently_takes_over_a_saved_layout_name(env):
+    """Audit scenario S1b: saving a second structure under the first one's (default) name retired the first."""
+    c, _ = env
+    zen_template(c, name='ZEN KIDS layout')
+    d = upload(c, blue_bay_po(), 'zen-other-structure.xlsx')
+    other = {'fields': {'buyer': 'E4', 'style': 'E5', 'po_number': 'B4'},
+             'table': {'type': 'matrix', 'header_row': 9, 'color_col': 1, 'first_size_col': 2, 'last_size_col': 5, 'total_col': 6}}
+    r = map_layout(c, d, other, save_template=True, template_name='ZEN KIDS layout', qty_unit='PCS', quantity_basis='sample')
+    assert r.status_code == 409 and r.json()['name_taken'] and r.json()['suggested_name'] == 'ZEN KIDS layout (2)', r.text
+    assert [(t['name'], t['version'], t['active']) for t in c.get('/api/templates').json()] == [('ZEN KIDS layout', 1, True)]
+    r = map_layout(c, d, other, save_template=True, template_name='ZEN KIDS layout (2)', qty_unit='PCS', quantity_basis='sample')
+    assert r.status_code == 200, r.text
+    assert sorted((t['name'], t['active']) for t in c.get('/api/templates').json()) == [('ZEN KIDS layout', True), ('ZEN KIDS layout (2)', True)]
+    assert 'ZEN KIDS layout' in upload(c, zen_kids_po(**SECOND_ZEN), 'zen-2.xlsx')['format'], 'the first structure is still read'
+    d = upload(c, blue_bay_po(), 'replace.xlsx')
+    r = map_layout(c, d, other, save_template=True, template_name='ZEN KIDS layout', replace_layout=True, qty_unit='PCS', quantity_basis='sample')
+    assert r.status_code == 200 and r.json()['template']['version'] == 2, 'replacing is allowed when the person asks for it'
 
 
 # --- C: missing unit -----------------------------------------------------------------------------------

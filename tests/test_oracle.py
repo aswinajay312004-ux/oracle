@@ -11,7 +11,7 @@ def fixture_order():
     o=workbooks.base_order()
     o.update(buyer='DEMO BUYER TEXTILES',style='DEMO-ST-001',description='TEST SAMPLE BODYSUIT',
         po_number='TEST-PO',order_ref='TEST-'+secrets.token_hex(5).upper(),order_date='2026-10-17',
-        ship_date='2026-10-24',qty_unit='PCS',pieces_per_unit=1,quantity_basis='sample',
+        ship_date='2026-10-24',qty_unit='PCS',pieces_per_unit=1,quantity_basis='sample',sample_type='DEVELOPMENT SAMPLE',
         lines=[dict(label='Test sample',color='TEST BLUE',declared_total=10,
                     sizes=[dict(size='M',quantity=4,source={}),dict(size='L',quantity=6,source={})])])
     return o

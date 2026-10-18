@@ -54,6 +54,7 @@ def test_registry_planner_reproduces_verified_order_mapping(case):
 
 def order_from_fixture(**changes):
     o = workbooks.parse(merch_bom())['orders'][0]
+    o['sample_type'] = 'DEVELOPMENT SAMPLE'      # the upload fills this company default (main._new_order_defaults)
     o.update(order_ref='TEST/1', order_date='2026-10-17', quantity_basis='order_demo', lines=deepcopy(o['order_lines']))
     o.update(qty_unit='PCS', pieces_per_unit=1)   # §5: this BOM's size total (150) ≠ QTY(IN PIECES) (200), so the unit is asked
     o.update(changes)

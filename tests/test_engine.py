@@ -47,7 +47,7 @@ def article_code_sheet():
 def ready_order(**kw):
     o = workbooks.base_order()
     o.update(buyer='B', style='S1', description='D', po_number='P', order_ref='R/1', order_date='2026-10-17', ship_date='2026-11-01',
-             quantity_basis='sample', lines=[dict(label='S1', color='RED', declared_total=None, sizes=[dict(size='M', quantity=10, source={})])])
+             quantity_basis='sample', sample_type='DEVELOPMENT SAMPLE', lines=[dict(label='S1', color='RED', declared_total=None, sizes=[dict(size='M', quantity=10, source={})])])
     o.update(kw)
     return o
 
@@ -645,7 +645,7 @@ def test_quantities_written_as_text_with_grouping_or_units():
     assert lines_of(o) == [('RED', [('S', 1500), ('M', 2000)])] and o['lines'][0]['sizes'][0]['source']['value'] == '1,500 pcs'
     assert (o['qty_unit'], o['pieces_per_unit']) == ('PCS', 1) and 'the quantities say “1,500 pcs”' in o['provenance']['qty_unit']['evidence']
     assert not errors(plan(dict(o, buyer='B', description='D', po_number='P', order_ref='R/9', order_date='2026-10-01',
-                                ship_date='2026-11-01', quantity_basis='sample')))
+                                ship_date='2026-11-01', quantity_basis='sample', sample_type='DEVELOPMENT SAMPLE')))
     wb, _ = book([['Style', 'Colour', 'Size', 'Qty'], ['Q-2', 'RED', 'S', '1,500'], ['Q-2', 'RED', 'M', '1,5']])
     d = workbooks.parse(save(wb))                                         # "1,5" is never read as 15
     assert d['orders'] == [] and '1 of 2 filled rows hold a quantity' in d['notes'][0]

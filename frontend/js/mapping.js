@@ -108,6 +108,7 @@ function bind() {
   root.onchange = e => {
     if (e.target.id === 'map-sheet') switchSheet(e.target.value);
     if (e.target.id === 'map-save') { ctx.save = e.target.checked; $('#map-name', root).disabled = !ctx.save; drawVersion(); }
+    if (e.target.id === 'map-replace') ctx.replace = e.target.checked;
   };
   root.onkeydown = e => { if (e.key === 'Escape' && ctx.pick) { e.stopPropagation(); cancelPick(); } };
 }
@@ -371,9 +372,11 @@ function drawSave() {
   const box = $('#mf-save', ctx.container); if (!box) return;
   const on = ctx.save;
   if (!ctx.nameTouched) ctx.name = defaultName();
+  const taken = ctx.taken && norm(ctx.name) === norm(ctx.taken.existing.name);
   box.innerHTML = `<label class="check"><input type="checkbox" id="map-save" ${on ? 'checked' : ''}> Save as this buyer’s layout template</label>
     <label class="field" for="map-name">Template name<input id="map-name" maxlength="80" value="${esc(ctx.name)}" ${on ? '' : 'disabled'} aria-describedby="map-version"></label>
     <p class="muted small-text" id="map-version"></p>
+    ${taken ? `<label class="check"><input type="checkbox" id="map-replace" ${ctx.replace ? 'checked' : ''}> Replace the other layout saved as “${esc(ctx.taken.existing.name)}” (it will no longer read its files)</label>` : ''}
     <button type="button" class="primary" data-m="apply">Read the file with this layout →</button>`;
   drawVersion();
 }
@@ -420,10 +423,17 @@ async function submit() {
   const save = ctx.save; const name = ($('#map-name', ctx.container).value || '').trim() || defaultName();
   if (bad.length) return showBad(bad, 'Some choices are missing — they are outlined in red.');
   const body = { sheet: ctx.sheet, definition: def, save_template: save, template_name: save ? name : null };
+  if (save && ctx.replace && ctx.taken && norm(name) === norm(ctx.taken.existing.name)) body.replace_layout = true;
   if (u.qty_unit === 'PCS') Object.assign(body, { qty_unit: 'PCS', pieces_per_unit: 1 });
   if (u.qty_unit === 'PACK') Object.assign(body, { qty_unit: 'PACK', pieces_per_unit: u.pieces_per_unit });
   if (u.touched && !u.qty_unit && ctx.sug?.unit?.value) body.qty_unit = '';   // the person wants to be asked, not the file's unit
   const r = await ctx.apply(body);
+  if (r?.nameTaken) {
+    // Another structure is saved under this name: keep both by default (a new name), replacing only on request.
+    ctx.taken = r.nameTaken; ctx.name = r.nameTaken.suggested_name; ctx.nameTouched = true; ctx.replace = false;
+    drawSave(); notify(r.nameTaken.detail, 'warning'); $('#map-name', ctx.container)?.focus();
+    return;
+  }
   if (r?.rejected) showBad(r.rejected.map(x => ({ targets: targetsOf(x), reason: x.reason })), 'This layout does not fit the file — the wrong choices are outlined in red.');
   else if (r?.ok) { ctx.bad = []; ctx.templates = null; $$('#toasts .toast.warning').forEach(x => x.remove()); }
 }
