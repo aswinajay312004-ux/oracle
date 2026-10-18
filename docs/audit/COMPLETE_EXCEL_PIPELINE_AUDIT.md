@@ -458,8 +458,8 @@ Status: IMPLEMENTED (`test_mapping_new_layout_saves_template_for_next_upload`, a
 - `provenance{field: {sheet, cell, value, formula, derivation?, question?}}` and `warnings[]`.
 
 Downstream, the planner takes `o['lines']` only. It multiplies each quantity by the unit factor (`erp/planner.py:114-138`,
-`:300`). It requires `quantity_basis` to be `sample` or `order_demo` (`planner.py:272-275`). It compares the size total
-with `declared_total` (`planner.py:304-307`). The frontend swaps `lines` for `order_lines` or `sample_lines` when the basis
+`:310`). It requires `quantity_basis` to be `sample` or `order_demo` (`planner.py:272-275`). It compares the size total
+with `declared_total` (`planner.py:311-314`). The frontend swaps `lines` for `order_lines` or `sample_lines` when the basis
 changes (`frontend/js/workspace.js:565-566`).
 
 ---
@@ -589,7 +589,7 @@ changes (`frontend/js/workspace.js:565-566`).
 | X1 | Formula subset of 8 functions; limits | `formulas.py:19-31` |
 | X2 | Worker defaults 60 s, 1536 MB, 2 workers, 384 MB reply | `readers.py:91-92`, `isolation.py:37-40` |
 | S1 | Default exporter is the company's own name; default sample type; self-approval on | `main.py:35` |
-| S2 | Edit limits 500 lines and 5 000 size rows; planner 1–100 lines and 1–100 sizes per line | `main.py:416-420`, `planner.py:288-293` |
+| S2 | Edit limits 500 lines and 5 000 size rows; planner 1–100 lines and 1–100 sizes per line | `main.py:416-419`, `planner.py:296-303` |
 | T1 | Client regression tests hard-wire absolute Windows paths | `tests/test_import.py:6-7` |
 
 ---
@@ -624,7 +624,7 @@ changes (`frontend/js/workspace.js:565-566`).
 | B24 | `.xlt` uploads | NOT IMPLEMENTED | E7: `'o.xlt'.endswith(readers.ACCEPT)` gave `False`. |
 | B25 | Very wide sheets sent to the LLM | Weak | E24: 600-cell cap reached at AD20 (`ai.py:83`). |
 | B26 | Real Ollama behaviour, Windows Job Object, client workbooks | NOT VERIFIED | All AI tests mock `_chat`. The client tests are skipped (`tests/test_import.py:10`, `:24`). |
-| B27 | Duplicate size rows in a flat table | Kept twice, then the planner refuses | E26 gave `[('S',5),('S',7)]`; the planner reports "duplicate size … review before combining" (`planner.py:296-298`). |
+| B27 | Duplicate size rows in a flat table | Kept twice, then the planner refuses | E26 gave `[('S',5),('S',7)]`; the planner reports "duplicate size … review before combining" (`planner.py:305-307`). |
 
 ---
 
@@ -673,7 +673,7 @@ changes (`frontend/js/workspace.js:565-566`).
 | `.xlt` accepted | `RESEARCH_DECISIONS.md` .xls row | Not in `ACCEPT` | DOCUMENTED ONLY (gap 13) |
 | XLSB record pass for merges and hidden rows | `RESEARCH_DECISIONS.md` .xlsb row ("Deferred") | Absent | NOT IMPLEMENTED (declared deferred) |
 | "Calculated from formula" chip | `formulas.py:12` docstring | `computed` flag not propagated | DOCUMENTED ONLY |
-| Σ size = row total; Σ rows = grand total excluding totals | `RESEARCH_DECISIONS.md` "Validators" | `planner.py:304-307`; `_total_note` (`workbooks.py:1124-1133`) | IMPLEMENTED |
+| Σ size = row total; Σ rows = grand total excluding totals | `RESEARCH_DECISIONS.md` "Validators" | `planner.py:311-314`; `_total_note` (`workbooks.py:1124-1133`) | IMPLEMENTED |
 
 ---
 
