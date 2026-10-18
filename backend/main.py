@@ -649,6 +649,7 @@ def mapping(id: str, data: Mapping, user=Depends(require('edit'))):
         kept = [o for o in d['orders'] if workbooks.order_sheet(o) != sheet['name']]
         d['orders'] = kept + store.identify(_new_order_defaults([workbooks.finish(o) for o in orders]))
         d['format'] = 'Reviewed layout mapping'; d['version'] += 1; d['plan'] = None; d['template'] = None
+        d['layout_changes'] = [x for x in d.get('layout_changes') or [] if x['sheet'] != sheet['name']]   # the person mapped it now
         cover(d)
         if data.save_template:
             name = (data.template_name or '').strip() or f'{d["filename"]} · {sheet["name"]}'
@@ -715,7 +716,9 @@ def exceptions(d):
     data in the file that is in no order, values with no verified place in Oracle, and quantity conversions."""
     plan = d.get('plan') or {}; cov = d.get('coverage') or {}
     items = dict(exclusions=list(cov.get('exclusions') or []), not_saved=list(plan.get('not_saved') or []),
-                 conversions=list(plan.get('conversions') or []))
+                 conversions=list(plan.get('conversions') or []),
+                 layout_changes=[f'Sheet “{x["sheet"]}” was read with the saved layout “{x["template"]}”, found again by its labels: {c}.'
+                                 for x in d.get('layout_changes') or [] for c in x['changes']])
     items['digest'] = (hashlib.sha256(json.dumps(items, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
                        if any(items.values()) else None)
     return items

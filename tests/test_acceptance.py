@@ -653,3 +653,62 @@ def test_F_real_oracle_existing_order_opens_with_lines_sizes_and_decoded_masters
         cur.execute(f'SELECT b.BUYERNAME FROM {OWNER}.ORDMAS o JOIN {OWNER}.BUYMAS b ON b.BUYMASID = o.BUYER WHERE o.ORDMASID = :id', id=row[0])
         buyer = cur.fetchone()[0]
     check_order_view(opened_order(c, ref), buyer, lines=lines, pieces=row[1])
+
+
+# --- saved layouts found again by their labels (backend/layouts.py) -------------------------------------------
+def shifted_zen(rows=0, cols=0, extra_size=None, **kw):
+    """The ZEN KIDS layout with rows inserted at the top, a column inserted at the left, or one more size before Total."""
+    from openpyxl import load_workbook
+    from io import BytesIO
+    wb = load_workbook(BytesIO(zen_kids_po(**kw))); ws = wb.active
+    if extra_size:
+        ws.insert_cols(7)
+        ws.cell(11, 7, extra_size)
+        for r in range(12, 12 + len(kw.get('lines', SECOND_ZEN['lines']))):
+            ws.cell(r, 7, 7); ws.cell(r, 8, (ws.cell(r, 8).value or 0) + 7)
+    if rows:
+        ws.insert_rows(1, rows); ws['A1'] = 'Revised file'
+    if cols:
+        ws.insert_cols(1, cols)
+    return save_wb(wb)
+
+
+def save_wb(wb):
+    from io import BytesIO
+    b = BytesIO(); wb.save(b); return b.getvalue()
+
+
+@pytest.mark.parametrize('change,expect', [
+    (dict(rows=1), ['all 6 order details moved 1 row down', 'size table moved from row 11 to row 12']),
+    (dict(cols=1), ['all 6 order details moved 1 column right', 'colour column moved from a to b']),
+    (dict(rows=2, cols=1), ['moved 2 rows down and 1 column right', 'size table moved from row 11 to row 13']),
+])
+def test_a_saved_layout_is_found_again_after_rows_or_columns_are_inserted(env, change, expect):
+    c, _ = env
+    zen_template(c)
+    d = upload(c, shifted_zen(**change, **SECOND_ZEN), 'zen-shifted.xlsx')
+    assert 'ZEN KIDS PO' in d['format'] and len(d['orders']) == 1, d['format']
+    o = d['orders'][0]
+    assert {k: o.get(k) for k in ('buyer', 'style', 'po_number', 'ship_date')} == dict(buyer='ZEN KIDS', style='ZK-2002', po_number='ZK/PO/7790', ship_date='2027-03-01')
+    assert [(l['color'], [(s['size'], s['quantity']) for s in l['sizes']]) for l in o['lines']] == SECOND_LINES
+    assert unit(o) == ('PACK', 3, 'sample'), 'the same buyer keeps its unit'
+    changes = ' '.join(x for m in d['layout_changes'] for x in m['changes']).lower()
+    assert all(e in changes for e in expect), changes
+    p = preview(c, edit(c, d, order_ref='TEST/ACC/MOVE', order_date='2026-10-17'))
+    assert p['plan']['exceptions']['layout_changes'] and p['plan']['totals']['pieces'] == SECOND_PIECES
+
+
+def test_a_size_added_before_total_widens_the_saved_size_range(env):
+    c, _ = env
+    zen_template(c)
+    d = upload(c, shifted_zen(extra_size='XXL', **SECOND_ZEN), 'zen-xxl.xlsx')
+    o = d['orders'][0]
+    assert [s['size'] for s in o['lines'][0]['sizes']] == ['S', 'M', 'L', 'XL', 'XXL'] and o['lines'][0]['sizes'][-1]['quantity'] == 7
+    assert any('now has 5 size columns' in x for m in d['layout_changes'] for x in m['changes'])
+
+
+def test_a_renamed_label_is_not_forced_into_the_saved_layout(env):
+    c, _ = env
+    zen_template(c)
+    d = upload(c, shifted_zen(rows=1, **dict(SECOND_ZEN, ship_label='ETD')), 'zen-etd.xlsx')
+    assert 'ZEN KIDS PO' not in d['format'] and not d.get('layout_changes')

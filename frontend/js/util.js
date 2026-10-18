@@ -71,7 +71,7 @@ export function closeDrawer() {
   if (open && drawerReturn?.isConnected) drawerReturn.focus();
   drawerReturn = null;
 }
-document.addEventListener('keydown', e => {
+if (typeof document !== 'undefined') document.addEventListener('keydown', e => {   // (the module is also imported by Node tests)
   const d = $('#drawer'); if (e.key !== 'Tab' || !d || d.hidden) return;
   const items = [...d.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter(x => !x.disabled && x.offsetParent);
   if (!items.length) return;

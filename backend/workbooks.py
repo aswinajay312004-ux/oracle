@@ -985,7 +985,36 @@ def choose_template(sheets, sheet, templates, fields):
         refused.append(dict(id=t['id'], name=t['name'], version=t.get('version', 1), sheet=sheet['name'], reasons=reasons))
     if fits:
         return fits[0][0], fits[0][1], refused
+    moved = relocated_template(sheets, sheet, templates, fields, ranked)
+    if moved:
+        return moved[0], moved[1], [r for r in refused if r['id'] != moved[0]['id']]
     return None, None, refused
+
+
+def relocated_template(sheets, sheet, templates, fields, ranked=None):
+    """(template with its definition moved onto this sheet, orders) when a saved layout is found again by its labels
+    after rows or columns were inserted, moved or added (backend/layouts.py); the buyer's own layout first."""
+    from . import layouts, matcher
+    ranked = ranked or sorted(((template_score(sheet, t), t) for t in templates), key=lambda x: -x[0])
+    tries = []
+    for score, t in ranked:
+        if not t.get('anchors'):
+            continue
+        definition, changes, reasons = layouts.relocate(sheet, t, fields)
+        if not definition or not changes:
+            continue
+        _, rejected = matcher.check(sheet, definition, fields)
+        if rejected:
+            continue
+        try:
+            orders = apply_template(sheets, sheet, definition, fields)
+        except ValueError:
+            continue
+        tries.append((own_template(t, orders), score, dict(t, definition=definition, changes=changes), orders))
+    if not tries:
+        return None
+    tries.sort(key=lambda x: (not x[0], -x[1]))
+    return tries[0][2], tries[0][3]
 
 
 def _unit_words(unit):
@@ -1034,14 +1063,14 @@ def restore_from_template(orders, t):
         if basis in ('sample', 'order_demo') and o.get('quantity_basis') not in ('sample', 'order_demo'):
             o['quantity_basis'] = basis
             prov['quantity_basis'] = dict(derivation=f'Confirmed for the {tag}', reason='template', template=t['id'])
-        review_notes(o, f'Read with the {tag}.')
+        review_notes(o, f'Read with the {tag}' + (f', found again by its labels: {"; ".join(t["changes"])}.' if t.get('changes') else '.'))
     return orders
 
 
 def parse_sheets(sheets, templates=(), fields=None):
     from . import matcher
     Fv = F.resolve(fields)
-    orders = []; formats = []; used = []; notes = []; refusals = []; origin = []
+    orders = []; formats = []; used = []; notes = []; refusals = []; origin = []; moved = []
     for sheet in sheets:
         if sheet['hidden']:
             continue
@@ -1055,6 +1084,8 @@ def parse_sheets(sheets, templates=(), fields=None):
             if t:
                 restore_from_template(found, t)
                 formats.append(f'Template: {t["name"]}'); used.append(t['id'])
+                if t.get('changes'):
+                    moved.append(dict(sheet=sheet['name'], template=t['name'], version=t.get('version', 1), changes=t['changes']))
         if not found:
             o = merch_bom(g)
             if o:
@@ -1116,7 +1147,7 @@ def parse_sheets(sheets, templates=(), fields=None):
     orders = [finish(o, month_first) for _, o in origin]
     same_order_on_two_sheets(origin)
     return dict(sheets=sheets, orders=orders, format=', '.join(dict.fromkeys(formats)) or 'Needs column mapping',
-                templates_used=used, notes=notes, templates_refused=refusals)
+                templates_used=used, notes=notes, templates_refused=refusals, layout_changes=moved)
 
 
 def rival_dates(g, o):

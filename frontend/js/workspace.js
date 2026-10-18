@@ -708,10 +708,12 @@ function exceptionsCard(d) {
   const ns = ex.not_saved.map(x => `<li><b>${esc(who(x.order) + x.label)}</b>${x.values.length ? ` “${esc(x.values.join('”, “'))}”${x.count > x.values.length ? ` and ${x.count - x.values.length} more` : ''}` : ` (${plural(x.count, 'row')})`}: ${esc(x.reason)}</li>`).join('');
   const conv = ex.conversions.map(x => `<li><b>${esc(who(x.order))}Quantity unit</b>: ${esc(x.text)}</li>`).join('');
   const excl = ex.exclusions.map(x => `<li>${esc(x)}</li>`).join('');
+  const moved = (ex.layout_changes || []).map(x => `<li>${esc(x)}</li>`).join('');
   return `<section class="card exceptions" aria-labelledby="ex-title"><h2 id="ex-title">What will not be saved exactly as in the file</h2>
     ${conv ? `<h3>Converted</h3><ul>${conv}</ul>` : ''}
     ${ns ? `<h3>Not saved to Oracle (kept in the POPPYS import record)</h3><ul>${ns}</ul>` : ''}
     ${excl ? `<h3>Not read from the file</h3><ul>${excl}</ul>` : ''}
+    ${moved ? `<h3>The file’s layout changed since it was saved — check these values</h3><ul>${moved}</ul>` : ''}
     <label class="check"><input type="checkbox" id="ex-seen" ${state.exceptionsSeen === ex.digest ? 'checked' : ''}> I have read what will not be saved</label></section>`;
 }
 
