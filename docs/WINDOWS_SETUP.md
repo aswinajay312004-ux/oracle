@@ -63,6 +63,8 @@ Open **http://127.0.0.1:8008**. The first time, create the administrator account
 - **approvers**: save to Oracle
 - **viewers**: read-only access
 
+To change the administrator's username (for example a new Gmail address) or password, or if the password is lost, stop the app and run `.\.venv\Scripts\python.exe scripts\reset_login.py`. It lists the accounts, asks you to type `DELETE`, removes all sign-in accounts and signs everyone out. Drafts, mappings, the audit history and Oracle are not touched. Start the app again and create the new administrator on the first-run screen.
+
 ## 5. Optional: local AI
 
 ```powershell

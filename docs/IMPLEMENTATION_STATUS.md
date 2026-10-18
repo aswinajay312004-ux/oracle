@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-18 (session 2, batch 11) | **434 passed, 0 failed, 18 skipped**; ruff clean | Sign-in reset script; Windows guide points at the current branch |
 | 2026-10-17 (session 2, batch 10) | **432 passed, 0 failed, 18 skipped**; ruff clean | Two readings compared (rules vs. local AI), M-Schema cards for the model, "orders NEXT ZARA" fixed (was AND of two buyers → 0 rows) |
 | 2026-10-17 (session 2, batch 9) | **426 passed, 0 failed, 18 skipped**; ruff clean | Local read-only MCP server; repository assessment written |
 | 2026-10-17 (session 2, batch 8) | **420 passed, 0 failed, 18 skipped**; ruff clean | Ask AI accuracy benchmark (golden questions + hand-written SQL). It found and fixed: lines/sizes of cancelled orders were counted (241 instead of 240) |
@@ -53,6 +54,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | B13 | Local read-only MCP server (stdio, protocol 2025-11-25 + `server/discover`): search_catalog, describe_table, relationship_path, evidence, ask, run_intent, accuracy_report; `run_select` only with `--allow-sql` and still safety-reviewed + row-capped; every call audited; no write tool | Implemented, Cloud-tested (incl. stdio subprocess) | `backend/mcp_server.py`, `scripts/mcp_server.py`, `tests/test_mcp.py` |
 | B14 | Weak questions read twice (rules + local AI): same compiled SQL or same result → confidence up; different result → AI reading shown with the rules reading as a "Did you mean" button. The model sees M-Schema catalog cards (types, keys, example values, link lines) | Implemented, Cloud-tested with a stand-in model; **needs a run with the real Ollama model** | `engine.ask`, `understand.schema_cards`, `tests/test_agreement.py` |
 | B15 | Two values for the same column mean either (`IN`), also in saved examples | Fixed | `understand._either`, `engine.generalize/specialize` |
+| S1 | Sign-in reset on the laptop: `scripts/reset_login.py` lists the accounts, removes all after typed `DELETE`, signs everyone out, audits `login_reset`; the first-run screen then creates the new administrator. No other data touched | Implemented, Cloud-tested | `scripts/reset_login.py`, `tests/test_reset_login.py` |
 | B10 | Oracle sessions named MODULE='POPPYS AI', ACTION='read-only questions' / 'writer account' (visible in V$SESSION) | Implemented | `backend/oracle_store.py` `_tag()`; needs Local Oracle check |
 | C1 | Explorer: search, rows, keyset paging, linked records | Implemented, Cloud-tested | `/api/explorer/*`, `frontend/js/explorer.js` |
 | C2 | Relationship graph / flowchart (no CDN, SVG) | Implemented | `frontend/js/graph.js`, `flow.js` |
