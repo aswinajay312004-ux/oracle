@@ -1,6 +1,7 @@
 # POPPYS AI audit: Ask AI correctness, test coverage and production risks (areas 7, 8, 9)
 
-- Repository: `/home/user/oracle`, branch `claude/fervent-babbage-jqo8r4`, commit `e811402` (2026-10-18).
+- Repository: `/home/user/oracle`, branch `claude/fervent-babbage-jqo8r4`. The audited code is at commit `e811402`
+  (2026-10-18). The commits after it during the audit only add files under `docs/audit/`.
 - Scope: documentation only. The only change to the repository is this file. The `coverage` package was installed into the
   cloud Python only (`pip install coverage`). It was not added to any requirements file.
 - Not read: `.env.poppys` and the `data/` folder. The reproduction scripts below build their own in-memory databases.
@@ -250,7 +251,7 @@ default-base guess, which turns a 0.45 guess into a high-confidence answer (A.3)
   - Not covered by any test: `understand.py` lines 366, 368 and 370-371 never ran in the 465-test coverage run
     (B.3).
   - Both golden sets contain only answerable questions (`config/golden_questions.json`, 12; `tests/golden/demo.json`,
-    16). The golden-file format requires hand-written SQL for every entry (`backend/insight/benchmark.py:44-46`), so
+    16). The golden-file format requires hand-written SQL for every entry (`backend/insight/benchmark.py:45-49`), so
     a "should refuse" question cannot even be expressed.
   - Labels: abstention for count questions that name nothing — **NOT IMPLEMENTED**; metadata questions —
     **NOT IMPLEMENTED**; low-confidence warning — **IMPLEMENTED** (`engine.py:200`, `:229`; `chat.js:59-61`).
@@ -584,7 +585,7 @@ Verdict: **PARTIALLY IMPLEMENTED.**
 | Ask AI row cap | `query.py:22` (max 1000), `:126` (default 200/100), fetch of limit+1 (`engine.py:210-211`) | IMPLEMENTED |
 | Exact text filters use the index on big tables (stated as a remaining risk, `:133-141`) | `query.py:28-38`, `:352-362`, `:397-398` | IMPLEMENTED (`test_large_db.py:192-208`); the doc is stale |
 | Timings at 300k and 3M orders (`:29-75`) | Synthetic replica in a 4-vCPU container (`:14-27`) | NOT VERIFIED on the client database (about 4× larger) |
-| Concurrency: "All of this is single-user… no connection pool was measured" (`:151-152`) | One new Oracle connection per request (`main.py:912-928`); service runs `--workers 1 --limit-concurrency 64` (`PoppysAI.xml:30`) | NOT IMPLEMENTED (pools: `RESEARCH_DECISIONS.md:53`, `:131`) |
+| Concurrency: "All of this is single-user… no connection pool was measured" (`:153-154`) | One new Oracle connection per request (`main.py:912-928`); service runs `--workers 1 --limit-concurrency 64` (`PoppysAI.xml:30`) | NOT IMPLEMENTED (pools: `RESEARCH_DECISIONS.md:53`, `:131`) |
 | First question builds the value index if it is empty (`:147-149`) | `main.py:990-1027` (startup thread, 5 s wait, retry after 300 s) | IMPLEMENTED; not covered by tests (B.6) |
 
 ### C.4 Backup and restore
@@ -602,10 +603,10 @@ Tests: `tests/test_backup.py`, 35 tests (34 passed, 1 skipped for PowerShell). L
 
 What it does not do, or what nobody has verified:
 - **Oracle is not backed up** by POPPYS AI (`docs/RUNBOOK.md:20`).
-- Uploaded files are included only with `-IncludeUploads` (`deploy/windows/backup-task.ps1:26-27`).
+- Uploaded files are included only with `-IncludeUploads` (`deploy/windows/backup-task.ps1:25-26`).
 - Scheduling is a Windows Task Scheduler entry (`backup-task.ps1:1-20`). The script says itself "Not yet tested on
-  real Windows" (`:18`), and so does the runbook (`RUNBOOK.md:7`, `:439-461`, items 5-6): **NOT VERIFIED**.
-- RPO/RTO are targets only (C.3 of B.7).
+  real Windows" (`:19`), and so does the runbook (`RUNBOOK.md:7`, `:439-461`, items 5-6): **NOT VERIFIED**.
+- RPO/RTO are targets only (B.7, part 3).
 
 ### C.5 Deployment
 
@@ -614,7 +615,7 @@ What it does not do, or what nobody has verified:
 | `setup.ps1` | Needs Python 3.13 + the `py` launcher; creates the venv; installs packages (PyPI, or `-Offline` hash-checked wheelhouse); runs `bootstrap_local.py` (Docker `sqlplus / as sysdba`, expects exactly 19 GARMENT_DEMO tables, `scripts/bootstrap_local.py:26-29`), `grant_bom_tables.py`, `create_readonly_user.py`, `check_oracle.py` | Laptop run passed 2026-10-18 (`IMPLEMENTATION_STATUS.md:133`) | IMPLEMENTED; verified once |
 | `start.ps1` | `uvicorn backend.main:app --host 127.0.0.1 --port 8008` (`:5`) | No laptop run recorded | NOT VERIFIED |
 | `deploy/windows/install-service.ps1`, `upgrade.ps1`, `rollback.ps1`, `uninstall-service.ps1`, `PoppysAI.xml` | WinSW 2.12.0 service as LOCAL SERVICE, junction-based releases, readiness wait (falls back from the missing `/readyz`) | Parsed and analysed only (`RUNBOOK.md:443-449`); `test_backup.py:447-511` checks the files as data | NOT VERIFIED on Windows |
-| `scripts/build_release.py` | Windows wheelhouse via `uv` + `pip download`, `requirements.lock` with hashes, `SHA256SUMS`, zip; optional python.org installer | 0 % test coverage; manual cloud run recorded (`IMPLEMENTATION_STATUS.md:70`); no embeddable Python, no signing (`RUNBOOK.md:461`) | PARTIALLY IMPLEMENTED |
+| `scripts/build_release.py` | Windows wheelhouse via `uv` + `pip download`, `requirements.lock` with hashes, `SHA256SUMS`, zip; optional python.org installer | 0 % test coverage; manual cloud run recorded (`IMPLEMENTATION_STATUS.md:70`); no embeddable Python, no signing (`RUNBOOK.md:459`) | PARTIALLY IMPLEMENTED |
 | Health endpoint for supervisors | `/api/health` needs a signed-in user (`main.py:255-256`); no unauthenticated `/healthz` or `/readyz` | — | NOT IMPLEMENTED |
 
 ### C.6 Tenant isolation
@@ -647,7 +648,7 @@ finds nothing).
    it.
 6. **Golden questions:** `config/golden_questions.json` (values picked from the DB, so partly portable) and
    `data/golden_questions.json` for the site's own.
-7. **Field registry and aliases:** `backend/fields.py:21-53` defaults, plus `field_settings` overrides; buyer
+7. **Field registry and aliases:** `backend/fields.py:21-49` defaults, plus `field_settings` overrides; buyer
    layout templates.
 8. **Setup scripts that hardcode the schema:**
    - `scripts/bootstrap_local.py:28-34` (19-table check, GARMENT_DEMO grants, Docker container, sysdba);
@@ -690,7 +691,7 @@ Axpert/GARMENT_DEMO-specific.
 | 4 | Single-tenant hard lock and Axpert/GARMENT_DEMO-specific code and scripts | **High** (for a second company) | `config.py:15-17`; C.6-C.8 | No: needs code changes, new config and new provisioning |
 | 5 | Windows service, upgrade/rollback and nightly backup never run on Windows; no `/readyz` | **Medium** | `RUNBOOK.md:7`, `:439-461`; `main.py` has no such route | Partial: scripts analysed, `backup.py` tested on Linux, `start.ps1` fallback |
 | 6 | Secrets stored as plain text in `.env.poppys`; ACL hardening untested | **Medium** | `config.py:10-13`; `IMPLEMENTATION_STATUS.md:108`; `RUNBOOK.md:19` | Partial: git-ignored, secret scan, excluded from backups |
-| 7 | Scale and concurrency: single worker, a new Oracle connection per request, no pool, OFFSET paging without a key, timings only on a replica | **Medium** | `main.py:912-928`; `PoppysAI.xml:30`; `PERFORMANCE.md:151-152`; `main.py:1491` | Partial: per-query timeouts, budgets, statistics-based counts |
+| 7 | Scale and concurrency: single worker, a new Oracle connection per request, no pool, OFFSET paging without a key, timings only on a replica | **Medium** | `main.py:912-928`; `PoppysAI.xml:30`; `PERFORMANCE.md:153-154`; `main.py:1491` | Partial: per-query timeouts, budgets, statistics-based counts |
 | 8 | "Offline" relies on configuration: `OLLAMA_URL` and `ORACLE_DSN` accept any host | **Medium** | `ai.py:14-15`; `oracle_store.py:30`, `:59-60` | Partial: loopback defaults, CSP, no CDN |
 | 9 | Ask AI feedback has no ownership check; operators can save global examples that answer at 0.95 | **Medium** | `main.py:1268-1277`; `engine.py:274-280` | Partial: admins can delete examples; actions audited |
 | 10 | Upload parsing falls back to the server process when the worker cannot start; Windows memory cap untested | **Medium** | `readers.py:771-775`; `isolation.py` (Windows branch) | Partial: size caps, sniffing, error logged |
