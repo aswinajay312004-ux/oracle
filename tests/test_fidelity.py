@@ -297,3 +297,67 @@ def test_the_same_business_order_from_another_workbook_is_flagged_before_approva
     assert c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).status_code == 200
     again = ready(c, upload(c, flat_qty_orders(qty_header='Quantity'), 'resent.xlsx'), ref='TEST/DUP/2', buyer='testbuyer ', po_number='PO-1')
     assert any('were already saved as TEST/DUP/1' in w for w in again['plan']['warnings']), again['plan']['warnings']
+
+
+# --- edge cases of real files (audit COMPLETE_EXCEL_PIPELINE_AUDIT B6, B18, B22) -----------------------------------
+def matrix_sheet(rows, merged=()):
+    wb = Workbook(); ws = wb.active; ws.title = 'PO'
+    ws['A1'], ws['B1'] = 'Style No', 'MX-1'
+    for c, h in enumerate(['Colour', 'S', 'M', 'L'], 1):
+        ws.cell(3, c, h)
+    for r, row in enumerate(rows, 4):
+        for c, v in enumerate(row, 1):
+            if v is not None:
+                ws.cell(r, c, v)
+    for rng in merged:
+        ws.merge_cells(rng)
+    from backend import workbooks
+    sheets = workbooks.inspect(save(wb), 'x.xlsx')
+    d = {'fields': {'style': 'B1'}, 'table': {'type': 'matrix', 'header_row': 3, 'color_col': 1, 'first_size_col': 2, 'last_size_col': 4}}
+    return sheets, workbooks.apply_template(sheets, sheets[0], d)[0]
+
+
+def test_a_merged_colour_cell_belongs_to_every_row_it_covers():
+    _, o = matrix_sheet([('NAVY', 1, 2, 3), (None, 4, 5, 6)], merged=['A4:A5'])
+    assert [l['color'] for l in o['lines']] == ['NAVY', 'NAVY'] and o['lines'][1]['provenance']['color']['cell'] == 'A4'
+
+
+def test_a_blank_size_is_not_ordered_and_says_so_but_an_error_cell_is_never_a_quantity():
+    from backend.erp import catalog, mapping, planner
+    _, o = matrix_sheet([('NAVY', 10, None, 30), ('RED', 5, '#N/A', 7)])
+    o.update(buyer='B', description='D', po_number='P', order_ref='R/BL', order_date='2026-10-17', ship_date='2026-11-01',
+             quantity_basis='sample', qty_unit='PCS', pieces_per_unit=1, sample_type='DEVELOPMENT SAMPLE')
+    p = planner.plan(catalog.SnapshotCatalog(), [o], 'h' * 64, mapping.effective())
+    assert any('size M is blank in the file and treated as not ordered' in w for w in p['warnings'])
+    assert [op['values']['RQTY'] for op in p['operations'] if op['table'] == 'ORDSIZE'][:2] == [10, 30], 'no size row for the blank M'
+    assert any(i['path'] == 'orders.0.lines.1.sizes.1.quantity' and i['severity'] == 'error' for i in p['issues']), \
+        'an Excel error in a quantity cell blocks the save on that cell'
+
+
+def test_an_excel_error_in_a_header_field_is_asked_never_used_as_the_value():
+    wb = Workbook(); ws = wb.active; ws.title = 'PO'
+    ws['A1'], ws['B1'] = 'Buyer', '#N/A'
+    ws['A2'], ws['B2'] = 'Style No', 'MX-2'
+    for c, h in enumerate(['Colour', 'S'], 1):
+        ws.cell(4, c, h)
+    ws.append(['NAVY', 3])
+    from backend import workbooks
+    sheets = workbooks.inspect(save(wb), 'x.xlsx')
+    [o] = workbooks.apply_template(sheets, sheets[0], {'fields': {'buyer': 'B1', 'style': 'B2'}, 'table': {
+        'type': 'matrix', 'header_row': 4, 'color_col': 1, 'first_size_col': 2, 'last_size_col': 2}})
+    assert o['buyer'] == '' and 'Excel error #N/A' in o['provenance']['buyer']['question']
+
+
+def test_a_size_matrix_with_a_style_column_becomes_one_order_per_style():
+    wb = Workbook(); ws = wb.active; ws.title = 'PO'
+    for c, h in enumerate(['Style', 'Colour', 'S', 'M'], 1):
+        ws.cell(1, c, h)
+    for row in [('ST-1', 'NAVY', 1, 2), ('ST-1', 'RED', 3, 4), ('ST-2', 'NAVY', 5, 6)]:
+        ws.append(row)
+    from backend import workbooks
+    sheets = workbooks.inspect(save(wb), 'x.xlsx')
+    orders = workbooks.apply_template(sheets, sheets[0], {'fields': {}, 'table': {'type': 'matrix', 'header_row': 1, 'label_col': 1, 'color_col': 2,
+                                                                                    'first_size_col': 3, 'last_size_col': 4}})
+    assert [(o['style'], [l['color'] for l in o['lines']], o['provenance']['style']['cell']) for o in orders] == [
+        ('ST-1', ['NAVY', 'RED'], 'A2'), ('ST-2', ['NAVY'], 'A4')]
+    assert coverage.manifest(sheets, orders)['totals']['numbers_not_read'] == 0

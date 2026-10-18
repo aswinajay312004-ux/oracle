@@ -214,6 +214,7 @@ def match_template(sheet, templates, threshold=0.8):
 
 # --- cell helpers ----------------------------------------------------------------
 MERGE_LOOKUP_AREA = 64      # merged headings are small; larger merged areas are not expanded for lookups
+EXCEL_ERRORS = frozenset({'#N/A', '#REF!', '#VALUE!', '#DIV/0!', '#NAME?', '#NUM!', '#NULL!', '#SPILL!', '#CALC!', '#GETTING_DATA', '#FIELD!', '#BLOCKED!', '#UNKNOWN!', '#BUSY!', '#CONNECT!', '#ERROR'})
 
 
 class Grid:
@@ -231,6 +232,9 @@ class Grid:
         self.hidden_cols = {c['col'] for c in hidden} - cols
         self.hidden_rows = {c['row'] for c in hidden if c['col'] not in self.hidden_cols} - rows
         self.rows = sheet['rows']; self.cols = sheet['cols']
+        # Excel error results (#N/A, #REF! …) are not values: a field reading one is asked, never filled with the code.
+        self.errors = {(c['row'], c['col']) for c in self.cells.values()
+                       if c.get('error') or (isinstance(c.get('value'), str) and c['value'].strip().upper() in EXCEL_ERRORS)}
         self.merge_top = {}
         for rng in sheet.get('merged') or ():
             try:
@@ -1356,10 +1360,13 @@ def matrix_order(g, t):
         if sum(1 for c in sizes if heads[c] and norm(g.v(r, c)) == heads[c]) >= 2:
             stop = r; break                            # the size headings again: a second table starts here
         read += sum(qty_value(g.v(r, c))[0] or 0 for c in sizes if g.v(header, c) is not None)
-        lines.append(dict(label=text(g.v(r, label_col)) if label_col else '', color=text(g.v(r, color_col)) if color_col else '',
+        # A colour or garment written once in a merged block (A5:A6) belongs to every row of the block.
+        lab = g.head_at(r, label_col) if label_col else None; col = g.head_at(r, color_col) if color_col else None
+        lines.append(dict(label=text(g.v(*lab)) if lab and lab[0] > header else '', color=text(g.v(*col)) if col and col[0] > header else '',
                           declared_total=quantity_of(g.v(r, total_col)) if total_col else None,
-                          provenance={'color': g.p(r, color_col)} if color_col else {},
-                          sizes=[dict(size=text(g.v(header, c)), quantity=quantity_of(g.v(r, c)), source=g.p(r, c), size_source=g.p(header, c))
+                          provenance=dict(({'color': g.p(*col)} if col else {}), **({'label': g.p(*lab)} if lab and lab[0] > header else {})),
+                          sizes=[dict(size=text(g.v(header, c)), quantity=quantity_of(g.v(r, c)), source=g.p(r, c), size_source=g.p(header, c),
+                                      **({'blank': True} if g.v(r, c) in (None, '') and (r, c) not in g.hidden else {}))
                                  for c in sizes if g.v(header, c) is not None]))
     else:
         if end < g.rows and any(g.v(r, c) not in (None, '') for r in range(end + 1, min(end + 50, g.rows) + 1) for c in sizes):
@@ -1372,6 +1379,29 @@ def matrix_order(g, t):
     return o
 
 
+def matrix_orders(g, t, style_field):
+    """A size matrix whose first column is headed Style (ST-1, ST-2 …) holds one order per style; any other matrix is one
+    order. (Audit B5: two styles became one order with an empty style.)"""
+    o = matrix_order(g, t); lc = t.get('label_col')
+    heading = norm(g.head(int(t['header_row']), lc)) if lc else ''
+    if style_field or not heading or heading not in {norm(a) for a in g.fields.aliases('style')}:
+        return [o]
+    groups = {}
+    for line in o['lines']:
+        groups.setdefault(canon(line['label']), []).append(line)
+    orders = []
+    for key, lines in groups.items():
+        x = deepcopy(o); x['lines'] = lines; x['order_lines'] = deepcopy(lines)
+        x['style'] = lines[0]['label']
+        if lines[0]['provenance'].get('label'):
+            x['provenance']['style'] = dict(lines[0]['provenance']['label'])
+        if len(groups) > 1:
+            x['warnings'] = x['warnings'] + [f'The size table on “{g.sheet["name"]}” holds {len(groups)} styles; this is style {x["style"] or "(blank)"}, '
+                                             f'one order per style.']
+        orders.append(x)
+    return orders
+
+
 def apply_template(sheets, sheet, d, fields=None):
     Fv = F.resolve(fields)
     validate_definition(sheet, d, Fv)
@@ -1381,11 +1411,15 @@ def apply_template(sheets, sheet, d, fields=None):
         fixed = {} if 'style' in cols else {'style': fields['style']}    # a style written once above the table
         orders = parse_mapping([sheet], dict(sheet=sheet['name'], header_row=int(t['header_row']), columns=cols, fixed=fixed), Fv)
     else:
-        orders = [matrix_order(g, t)]
+        orders = matrix_orders(g, t, 'style' in fields)
     unit = unit_evidence(g, t)
     for o in orders:
         for k, ref in fields.items():
             r, c = cell_ref(ref)
             o[k] = field_value(g, r, c, k); o['provenance'][k] = g.p(r, c)
+            if (r, c) in g.errors:
+                o[k] = ''
+                o['provenance'][k]['question'] = f'{address(c, r)} holds the Excel error {text(g.v(r, c))}, not a value — enter the {g.fields.label(k).lower()}.'
+                o['warnings'].append(f'{address(c, r)} ({g.fields.label(k)}) holds the Excel error {text(g.v(r, c))}; it was not used as a value.')
         review_notes(set_unit(o, deepcopy(unit)))
     return orders

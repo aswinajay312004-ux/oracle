@@ -301,7 +301,15 @@ def plan(catalog, orders, filehash, mapping, required=()):
             sizes = line.get('sizes', []); names = set(); sizedata = []; total = 0
             if not sizes or len(sizes) > LIMITS['sizes']:
                 issues.error(f'{where}: provide 1–100 sizes.', lpath + '.sizes')
+            blank = [s for s in sizes if s.get('blank') and (s.get('quantity') is None or str(s.get('quantity')).strip() == '')]
+            if blank and len(blank) < len(sizes):
+                issues.warn(f'{where}: size{"s" if len(blank) > 1 else ""} {", ".join(str(x.get("size")) for x in blank)} '
+                            f'{"are" if len(blank) > 1 else "is"} blank in the file and treated as not ordered (no size row is saved).', lpath + '.sizes')
+            else:
+                blank = []
             for si, s in enumerate(sizes):
+                if any(s is b for b in blank):
+                    continue                       # keeps the draft's own index in the paths below
                 name = str(s.get('size', '')).strip()
                 if normalize(name) in names:
                     issues.error(f'{where}: duplicate size {name}; review before combining quantities.', f'{lpath}.sizes.{si}.size')
