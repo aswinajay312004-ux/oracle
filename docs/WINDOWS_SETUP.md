@@ -153,6 +153,16 @@ The same records are visible in the app under **Database** → *Find an order by
 
 ## 10. Tests
 
+All local checks in one command (connection, every test including the live Oracle ones, Ask AI accuracy); the output is
+also saved to `data\local_verification.txt`. The Oracle tests save a few orders whose reference starts with `TEST-`
+(and any buyer, colour or size names they need); nothing is updated or deleted.
+
+```powershell
+.\verify_local.ps1
+```
+
+Or step by step:
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 $env:POPPYS_TEST_ORACLE='1'; .\.venv\Scripts\python.exe -m pytest -q     # adds live Oracle tests (labelled TEST rows)

@@ -281,10 +281,13 @@ oracle_only = pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE') != '1', reason=
 @oracle_only
 def test_oracle_call_timeout_is_plain_and_connection_stays_usable():
     from backend import oracle_store
+    from backend.config import OWNER
     with oracle_store.connect() as conn:
         ex = service.OracleExecutor(conn)
+        endless = (f'WITH r (n) AS (SELECT 1 FROM {OWNER}.ORDMAS UNION ALL SELECT n + 1 FROM r WHERE n < 1000000000) '
+                   'SELECT COUNT(*) FROM r')   # slow on any data, and inside the ERP schema the safety review allows
         with pytest.raises(service.TimedOut):
-            ex.limited(1000)('SELECT COUNT(*) FROM all_objects a, all_objects b, all_objects c', {}, 1)
+            ex.limited(1000)(endless, {}, 1)
         assert ex('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1) == [(1,)] and conn.call_timeout == service.TIMEOUT_MS
 
 

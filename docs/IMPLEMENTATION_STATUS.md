@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-18 (session 2, batch 12) | **435 passed, 0 failed, 18 skipped**; ruff clean | Before the first laptop test run, found and fixed: (1) the local Oracle timeout test used `all_objects`, which the batch 7 safety review refuses, so it would fail; it now uses a slow recursive query inside GARMENT_DEMO; (2) the MCP server crashed on Windows on any "→" because pipes default to cp1252; it now reads and writes UTF-8. All 413 Oracle statements the explorer, Ask AI, value index, live lookups and golden SQL generate were run through the safety review with an Oracle-dialect stand-in: none refused. `verify_local.ps1` runs the whole local check in one command (dry-run on PowerShell 7 in the cloud) |
 | 2026-10-18 (session 2, batch 11) | **434 passed, 0 failed, 18 skipped**; ruff clean | Sign-in reset script; Windows guide points at the current branch |
 | 2026-10-17 (session 2, batch 10) | **432 passed, 0 failed, 18 skipped**; ruff clean | Two readings compared (rules vs. local AI), M-Schema cards for the model, "orders NEXT ZARA" fixed (was AND of two buyers → 0 rows) |
 | 2026-10-17 (session 2, batch 9) | **426 passed, 0 failed, 18 skipped**; ruff clean | Local read-only MCP server; repository assessment written |
@@ -88,10 +89,9 @@ session so this file can be updated.
 git fetch origin; git checkout claude/fervent-babbage-jqo8r4; git pull
 # Docker Desktop running, container oracle26ai healthy
 .\setup.ps1 -Dev                      # venv, packages, POPPYS_APP (if new), grants, POPPYS_RO, connection check
-python scripts\check_oracle.py         # expect: Connected ... / Read-only account for Ask AI: POPPYS_RO, no write privileges
-python scripts\discover_schema.py      # asks the GARMENT_DEMO password (typed, never saved); writes data\schema_discovery.*
-$env:POPPYS_TEST_ORACLE='1'; python -m pytest -q    # runs the 18 local Oracle tests too (TEST-labelled rows only)
-python scripts\run_benchmark.py       # Ask AI accuracy on the real data: expect "12 of 12 correct"
+.\.venv\Scripts\python.exe scripts\discover_schema.py   # asks the GARMENT_DEMO password (typed, never saved); writes data\schema_discovery.*
+.\verify_local.ps1                     # connection check + every test incl. the local Oracle ones + Ask AI accuracy (expect 12 of 12);
+                                       # saves data\local_verification.txt; Oracle tests add TEST- orders only, nothing updated or deleted
 .\start.ps1                            # then open http://127.0.0.1:8008
 ```
 
@@ -100,6 +100,7 @@ Demo A (Excel → Oracle) and Demo B (Ask AI) are then run in the browser; recor
 | Date | Check | Result |
 |---|---|---|
 | 2026-10-18 | `setup.ps1 -Dev` + `check_oracle.py` (laptop, `D:\oracle`, Python 3.13.15, Oracle 23.26.3.0.0) | **Passed.** Existing `.env.poppys` and POPPYS_APP kept; SELECT on 19 GARMENT_DEMO tables + INSERT on ORDFAB/ORDYARN/ORDACC granted; POPPYS_RO created with SELECT on 19 tables/views and 0 other privileges; connected as POPPYS_APP; PP_IMPORT_LOG 4 rows, PP_ORDER_KEYS 4 rows (earlier saves). ACCMAS/COUNTMAS/FABMAS visible=NO: not in GARMENT_DEMO (expected) |
+| 2026-10-18 | `discover_schema.py` (as GARMENT_DEMO, read-only) | **Passed.** 19 tables, 727 columns, 0 triggers, 0 code objects, 31.9 s. Declared: primary keys on every table except STYLENUM (the join check probes it instead), one foreign key ORDMAS.BUYER → BUYMAS. ORDSIZE.SUB3_SUBNO → ORDSTYLE.SUBNO 38/38 rows; ORDMAS.BUYER/STYLENO/STYLEDESC/UOM/MERCH and ORDSTYLE.COMBO, ORDSIZE.GSIZE resolve 100% in their masters. ORDFAB/ORDYARN/ORDACC/ORDCOMP/ORDSHIP/ORDCMTFAB/ORDERENTRY/ORDDOC are empty, so their links have no row evidence yet |
 | — | `POPPYS_TEST_ORACLE=1 pytest` | not run yet |
 | — | `run_benchmark.py` | not run yet |
 | — | Demo A / Demo B | not run yet |

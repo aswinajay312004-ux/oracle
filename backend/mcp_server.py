@@ -244,8 +244,18 @@ def _text(text, error=False):
     return dict(content=[dict(type='text', text=text)], isError=error)
 
 
+def _utf8(stream, **options):
+    """MCP messages are UTF-8 with plain newlines. On Windows a pipe defaults to the ANSI code page (cp1252), which
+    cannot write "→" or "≈" and garbles names a client sends, so the process's own streams are switched first."""
+    try:
+        stream.reconfigure(encoding='utf-8', **options)
+    except (AttributeError, ValueError):
+        pass
+    return stream
+
+
 def serve(allow_sql=False, stdin=None, stdout=None):
-    stdin = stdin or sys.stdin; stdout = stdout or sys.stdout
+    stdin = stdin or _utf8(sys.stdin); stdout = stdout or _utf8(sys.stdout, newline='\n')
     from . import evidence, local_store
     local_store.init(); evidence.init()
     server = Server(allow_sql=allow_sql)

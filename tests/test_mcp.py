@@ -113,6 +113,23 @@ def test_entry_script_speaks_mcp_over_stdio(tmp_path):
     msgs = [dict(jsonrpc='2.0', id=1, method='initialize', params=dict(protocolVersion='2025-11-25', capabilities={}, clientInfo=dict(name='t', version='1'))),
             dict(jsonrpc='2.0', method='notifications/initialized'), dict(jsonrpc='2.0', id=2, method='tools/list')]
     p = subprocess.run([sys.executable, str(ROOT / 'scripts' / 'mcp_server.py')], input='\n'.join(map(json.dumps, msgs)) + '\n',
-                       capture_output=True, text=True, timeout=60, env=env, cwd=tmp_path)
+                       capture_output=True, text=True, encoding='utf-8', timeout=60, env=env, cwd=tmp_path)
     replies = [json.loads(x) for x in p.stdout.splitlines()]
     assert [r['id'] for r in replies] == [1, 2] and len(replies[1]['result']['tools']) == 7, p.stderr
+
+
+def test_stdio_is_utf8_even_when_the_pipe_is_not(server, monkeypatch):
+    """Windows pipes default to cp1252: the server must still read and write UTF-8 ("→" cannot be written in cp1252)."""
+    server()
+    msgs = [dict(jsonrpc='2.0', id=1, method='tools/call', params=dict(name='accuracy_report', arguments={})),
+            dict(jsonrpc='2.0', id=2, method='tools/call', params=dict(name='search_catalog', arguments=dict(query='வாங்குபவர் buyer')))]
+    raw_in = io.BytesIO(('\n'.join(map(json.dumps, msgs)) + '\n').encode('utf-8')); raw_out = io.BytesIO()
+    monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(raw_in, encoding='cp1252'))
+    monkeypatch.setattr(sys, 'stdout', io.TextIOWrapper(raw_out, encoding='cp1252', newline='\r\n'))
+    mcp_server.serve()
+    sys.stdout.flush()
+    data = raw_out.getvalue()
+    assert b'\r\n' not in data
+    replies = [json.loads(x) for x in data.decode('utf-8').splitlines()]
+    assert 'Setup → Answer accuracy' in replies[0]['result']['structuredContent']['note']
+    assert replies[1]['result']['structuredContent']['query'] == 'வாங்குபவர் buyer'
