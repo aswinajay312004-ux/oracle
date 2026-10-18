@@ -170,6 +170,10 @@ def plan(catalog, orders, filehash, mapping, required=()):
     if mapping.get('owner') and mapping['owner'].upper() != OWNER:
         issues.error(f'The write mapping was made for the Oracle schema {mapping["owner"]}, but this installation reads {OWNER}. '
                      'Saving stays off until a write mapping for this schema is prepared and verified.')
+    ref_target = _written(mapping).get('order.order_ref')
+    if not ref_target or ref_target[2] != 'verified':
+        issues.error('The order reference has no verified column in the write mapping, so a saved order could not be found '
+                     'again. Mark its column verified in Setup → Write mapping before saving.')
     if not orders or len(orders) > LIMITS['orders']:
         issues.error('Import must contain 1–50 orders.')
     if catalog.file_committed(filehash):

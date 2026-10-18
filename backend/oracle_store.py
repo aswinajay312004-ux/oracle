@@ -215,7 +215,7 @@ def commit(draft, expected_hash, approver, mapping=None):
                 inserted.append(dict(table=table, key=op['key'], pk=ident, business=op.get('business'), where=op.get('where'),
                                      values={col: jsonable(v) for col, v in zip(cols, rows[0])}))
                 if table == 'ORDMAS':
-                    outorders.append(dict(order_ref=vals['DOCID'], ordmasid=ident))
+                    outorders.append(dict(order_ref=draft['orders'][int(op['path'].split('.')[1])]['order_ref'].strip(), ordmasid=ident))
             result = dict(job_id=draft['id'], orders=outorders, rows=inserted, reused=reused, totals=checked['totals'],
                           reference_only=checked.get('reference_only', []),
                           committed_at=datetime.now().astimezone().isoformat(), approver=approver, already_committed=False,

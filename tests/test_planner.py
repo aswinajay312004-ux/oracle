@@ -155,6 +155,16 @@ def test_duplicate_file_and_existing_order_reference_are_blocked():
     assert any('already exists' in e for e in p['errors'])
 
 
+def test_order_reference_without_a_verified_column_blocks_saving():
+    # Found on the owner's laptop: DOCID marked unverified in Setup → Write mapping, and the save failed after the
+    # inserts. An order saved without its reference could not be found again, so the preview refuses it.
+    m = mapping.effective([dict(table='ORDMAS', column='DOCID', status='proposed')])
+    p = planner.plan(snapshot(), [order_from_fixture(accessories=[])], 'f' * 64, m)
+    assert any('order reference has no verified column' in e for e in p['errors'])
+    assert not any('order reference has no verified column' in e
+                   for e in planner.plan(snapshot(), [order_from_fixture(accessories=[])], 'f' * 64, mapping.effective())['errors'])
+
+
 def test_plan_hash_changes_when_mapping_changes():
     o = order_from_fixture(accessories=[])
     a = planner.plan(snapshot(), [o], 'f' * 64, mapping.effective())

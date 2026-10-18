@@ -7,6 +7,13 @@ from backend import oracle_store as db,workbooks
 
 pytestmark=pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE')!='1',reason='Set POPPYS_TEST_ORACLE=1 for existing local Oracle tests')
 
+
+@pytest.fixture(autouse=True)
+def shipped_mapping(tmp_path,monkeypatch):
+    """The tests check the shipped write mapping, not the Setup → Write mapping choices kept in this computer's data folder."""
+    from backend import local_store
+    monkeypatch.setattr(local_store,'DATA',tmp_path)
+
 def fixture_order():
     o=workbooks.base_order()
     o.update(buyer='DEMO BUYER TEXTILES',style='DEMO-ST-001',description='TEST SAMPLE BODYSUIT',
