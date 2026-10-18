@@ -23,14 +23,24 @@ def now():
 
 @contextmanager
 def db():
-    with sqlite3.connect(DATA / 'poppys.sqlite3', timeout=20) as conn:
+    """One transaction on the local store, and the connection is closed afterwards (`with sqlite3.connect()` alone only
+    commits; on Windows the open handles also blocked backups and upgrades). synchronous=FULL: a power cut never loses a
+    committed draft, receipt or audit line."""
+    conn = sqlite3.connect(DATA / 'poppys.sqlite3', timeout=20)
+    try:
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys=ON')
-        yield conn
+        conn.execute('PRAGMA synchronous=FULL')
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init():
     with db() as c:
+        # Write-ahead log: readers (the screens) never wait for a writer (a save), and a crash leaves the store consistent.
+        c.execute('PRAGMA journal_mode=WAL')
         c.executescript('''
         CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,salt TEXT NOT NULL,password_hash TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,username TEXT NOT NULL,expires REAL NOT NULL);

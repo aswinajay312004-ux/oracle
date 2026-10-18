@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -16,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
-from . import auth, coverage, evidence, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
+from . import auth, coverage, evidence, logs, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
 from .config import DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
@@ -46,17 +47,41 @@ DEFAULT_SETTINGS = dict(allow_self_approval=False, company_exporter='POPPYS KNIT
 
 @asynccontextmanager
 async def lifespan(app):
+    logs.setup()
     store.init()
     evidence.init()
+    log.info('POPPYS AI started', extra=dict(event='startup'))
     start_value_index()   # background: the server answers at once, the first question does not pay for the build
     yield
 
-app = FastAPI(title='POPPYS AI — Order entry automation', lifespan=lifespan)
+# The interactive API pages are for development only (they list every endpoint): POPPYS_DEV=1 turns them on.
+_dev = os.environ.get('POPPYS_DEV') == '1'
+app = FastAPI(title='POPPYS AI — Order entry automation', lifespan=lifespan,
+              docs_url='/docs' if _dev else None, redoc_url=None, openapi_url='/openapi.json' if _dev else None)
+log = logging.getLogger('poppys.http')
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
 
 
 @app.middleware('http')
 async def protect(request, call_next):
+    rid = uuid.uuid4().hex[:12]; token = logs.request_id.set(rid); started = time.perf_counter()
+    try:
+        response = await _protected(request, call_next)
+    except Exception:
+        log.exception('Unhandled error', extra=dict(method=request.method, path=request.url.path, event='error'))
+        response = JSONResponse({'detail': f'Something went wrong on the server. Nothing was saved by this request. '
+                                           f'Error reference {rid} (an administrator can find it in data/logs/poppys.log).',
+                                 'request_id': rid}, status_code=500)
+    response.headers['X-Request-ID'] = rid
+    if request.url.path.startswith('/api/') or response.status_code >= 500:
+        (log.warning if response.status_code >= 500 else log.info)(
+            'request', extra=dict(method=request.method, path=request.url.path, status=response.status_code,
+                                  ms=round((time.perf_counter() - started) * 1000), event='request'))
+    logs.request_id.reset(token)
+    return response
+
+
+async def _protected(request, call_next):
     if int(request.headers.get('content-length', '0') or 0) > 14 * 1024 * 1024:
         return JSONResponse({'detail': 'Request exceeds 14 MB.'}, status_code=413)
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
@@ -261,6 +286,38 @@ def change_user(username: str, data: UserChange, user=Depends(require('users')))
 
 
 # --- status ----------------------------------------------------------------------
+@app.get('/healthz')
+def healthz():
+    """Liveness: the process answers. No sign-in, no details."""
+    return {'status': 'ok'}
+
+
+@app.get('/readyz')
+def readyz():
+    """Readiness for scripts (install-service, upgrade, rollback, restore drill): 200 with status pass or warn when the
+    app can serve people, 503 when its own store is unusable. Oracle and the local AI being down is a warning: uploads,
+    review and previews still work. No sign-in; booleans and plain reasons only, never settings or secrets."""
+    checks = []
+    try:
+        with store.db() as c:
+            c.execute('SELECT COUNT(*) FROM users').fetchone()
+        probe = DATA / '.ready-probe'
+        probe.write_text('ok', encoding='utf-8'); probe.unlink()
+        checks.append(dict(name='local store', status='pass'))
+    except Exception as exc:
+        checks.append(dict(name='local store', status='fail', detail=type(exc).__name__))
+    try:
+        with oracle.connect() as conn:
+            conn.ping()
+        checks.append(dict(name='oracle', status='pass'))
+    except Exception:
+        checks.append(dict(name='oracle', status='warn', detail='not reachable: saving and database questions wait for it'))
+    checks.append(dict(name='local ai', status='pass' if ai.available() else 'warn',
+                       **({} if ai.available() else {'detail': 'not running: rules still answer'})))
+    worst = 'fail' if any(c['status'] == 'fail' for c in checks) else 'warn' if any(c['status'] == 'warn' for c in checks) else 'pass'
+    return JSONResponse({'status': worst, 'checks': checks}, status_code=503 if worst == 'fail' else 200)
+
+
 @app.get('/api/health')
 def health(user=Depends(authenticated)):
     status = {'connected': False, 'owner': OWNER}

@@ -15,11 +15,29 @@ def url():
     return setting('OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
 
 
+def local_only(address):
+    """True when the model server is on this computer or the private network: the runtime never sends a workbook to an
+    internet address, whatever .env.poppys says (spec §12). A host name other than localhost is refused unless it is
+    named in AI_ALLOWED_HOST (no DNS lookup decides it)."""
+    import ipaddress
+    from urllib.parse import urlparse
+    host = (urlparse(address).hostname or '').lower()
+    if host in ('localhost', setting('AI_ALLOWED_HOST', '').lower() or None):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
 def model():
     return setting('OLLAMA_MODEL', 'qwen2.5:7b')
 
 
 def status():
+    if not local_only(url()):
+        return dict(available=False, models=[], model=model(), error='OLLAMA_URL must point to this computer or the local network.')
     try:
         r = httpx.get(url() + '/api/tags', timeout=2); r.raise_for_status()
         return dict(available=True, models=[m['name'] for m in r.json().get('models', [])], model=model())
@@ -68,6 +86,8 @@ def heuristic(sheet, fields=None):
 
 
 def _chat(messages, num_predict=600, fmt=None):
+    if not local_only(url()):
+        raise RuntimeError('The local AI address is not on this computer or the local network; nothing was sent.')
     body = {'model': model(), 'stream': False, 'options': {'temperature': 0, 'num_predict': num_predict}, 'messages': messages}
     if fmt:
         body['format'] = fmt
