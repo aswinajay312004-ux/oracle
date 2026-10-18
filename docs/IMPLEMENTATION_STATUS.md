@@ -99,7 +99,7 @@ Demo A (Excel → Oracle) and Demo B (Ask AI) are then run in the browser; recor
 
 | Date | Check | Result |
 |---|---|---|
-| — | `check_oracle.py` | not run yet |
+| 2026-10-18 | `setup.ps1 -Dev` + `check_oracle.py` (laptop, `D:\oracle`, Python 3.13.15, Oracle 23.26.3.0.0) | **Passed.** Existing `.env.poppys` and POPPYS_APP kept; SELECT on 19 GARMENT_DEMO tables + INSERT on ORDFAB/ORDYARN/ORDACC granted; POPPYS_RO created with SELECT on 19 tables/views and 0 other privileges; connected as POPPYS_APP; PP_IMPORT_LOG 4 rows, PP_ORDER_KEYS 4 rows (earlier saves). ACCMAS/COUNTMAS/FABMAS visible=NO: not in GARMENT_DEMO (expected) |
 | — | `POPPYS_TEST_ORACLE=1 pytest` | not run yet |
 | — | `run_benchmark.py` | not run yet |
 | — | Demo A / Demo B | not run yet |
