@@ -134,6 +134,66 @@ def test_oracle_executor_turns_a_call_timeout_into_a_plain_message_and_restores_
         ex('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1)
 
 
+class DroppedConn(FakeConn):
+    """A connection the driver drops when the time limit hits, as python-oracledb thin does on a busy server. Touching
+    call_timeout or rollback on it afterwards crashed the real driver, so here it fails the test."""
+
+    class Err:
+        full_code = 'DPY-4011'
+
+    def __init__(self, slow_s=0.0):
+        self.healthy = True; self.slow_s = slow_s; self.closed = False
+        super().__init__()
+
+    def is_healthy(self):
+        return self.healthy
+
+    def __setattr__(self, name, value):
+        if name == 'call_timeout' and not getattr(self, 'healthy', True):
+            raise AssertionError('call_timeout set on a dropped connection (segfault in python-oracledb)')
+        super().__setattr__(name, value)
+
+    def cursor(self):
+        conn = self
+
+        class Cursor:
+            arraysize = 0
+
+            def execute(self, sql, binds=None):
+                if sql.startswith('SELECT') and 'ORDMAS' in sql:
+                    time.sleep(conn.slow_s); conn.healthy = False
+                    raise RuntimeError(DroppedConn.Err())
+
+            def fetchmany(self, n):
+                return [(1,)]
+        return Cursor()
+
+    def rollback(self):
+        assert self.healthy, 'rollback on a dropped connection'
+        self.rolled += 1
+
+    def close(self):
+        self.closed = True
+
+
+def test_a_connection_dropped_by_the_time_limit_is_never_touched_and_the_next_query_reconnects():
+    first = DroppedConn(slow_s=0.06); fresh = []
+    ex = service.OracleExecutor(first, timeout_ms=20000, reconnect=lambda: fresh.append(DroppedConn()) or fresh[-1])
+    with pytest.raises(service.TimedOut, match='more than 0.05 seconds'):
+        ex.limited(50)('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1)
+    assert first.rolled == 0 and not first.closed            # left to its owner, which only closes it
+    assert ex('SELECT 1 FROM GARMENT_DEMO.STYLEMAS', {}, 1) == [(1,)] and len(fresh) == 1 and ex.conn is fresh[0]
+    assert fresh[0].call_timeout == 20000 and fresh[0].rolled == 1
+
+
+def test_a_connection_lost_quickly_is_not_called_a_time_limit_and_without_reconnect_says_so():
+    ex = service.OracleExecutor(DroppedConn(), timeout_ms=20000)
+    with pytest.raises(service.ConnectionLost, match='connection to the database was lost'):
+        ex('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1)
+    with pytest.raises(service.ConnectionLost):
+        ex('SELECT 1 FROM GARMENT_DEMO.STYLEMAS', {}, 1)
+
+
 def test_query_time_limit_is_configurable(monkeypatch):
     monkeypatch.setenv('POPPYS_QUERY_TIMEOUT_S', '45')
     assert service._ms('QUERY_TIMEOUT_S', 20) == 45000
@@ -279,16 +339,22 @@ oracle_only = pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE') != '1', reason=
 
 
 @oracle_only
-def test_oracle_call_timeout_is_plain_and_connection_stays_usable():
+def test_oracle_call_timeout_is_plain_and_the_next_question_still_works():
+    """The CI segmentation fault (run 49): on a busy server the driver cannot recover the connection from the time
+    limit and drops it (DPY-4011); setting call_timeout on that connection crashed the process. Now the dropped
+    connection is left alone and the next question opens a new one."""
     from backend import oracle_store
     from backend.config import OWNER
     with oracle_store.connect() as conn:
-        ex = service.OracleExecutor(conn)
+        ex = service.OracleExecutor(conn, reconnect=oracle_store.connect)
         endless = (f'WITH r (n) AS (SELECT 1 FROM {OWNER}.ORDMAS UNION ALL SELECT n + 1 FROM r WHERE n < 1000000000) '
                    'SELECT COUNT(*) FROM r')   # slow on any data, and inside the ERP schema the safety review allows
-        with pytest.raises(service.TimedOut):
-            ex.limited(1000)(endless, {}, 1)
-        assert ex('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1) == [(1,)] and conn.call_timeout == service.TIMEOUT_MS
+        try:
+            with pytest.raises(service.TimedOut):
+                ex.limited(1000)(endless, {}, 1)
+            assert ex('SELECT 1 FROM GARMENT_DEMO.ORDMAS', {}, 1) == [(1,)] and ex.conn.call_timeout == service.TIMEOUT_MS
+        finally:
+            ex.close()
 
 
 @oracle_only

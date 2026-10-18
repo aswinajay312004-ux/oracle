@@ -919,13 +919,16 @@ def query_sources():
         conn = None
         why = str(exc) if isinstance(exc, RuntimeError) else None
     local = insight.uploads_db()
+    executor = insight.OracleExecutor(conn, reconnect=oracle.connect_readonly) if conn else None
     try:
-        yield {'db': (insight.OracleExecutor(conn), Dialect('oracle', OWNER)) if conn else None,
+        yield {'db': (executor, Dialect('oracle', OWNER)) if executor else None,
                'local': (insight.SqliteExecutor(local), Dialect('sqlite')), 'why': why}
     finally:
         local.close()
+        if executor:
+            executor.close()
         if conn:
-            conn.close()
+            conn.close()      # also safe on a connection the driver dropped after a time limit
 
 
 def _require_db(sources):

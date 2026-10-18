@@ -1,0 +1,9 @@
+# Gitleaks findings checked by hand and accepted (2026-10-18). Each line is one finding's fingerprint
+# (commit:file:rule:line), so only that exact occurrence is ignored: a new secret anywhere is still caught.
+# All six are made-up passwords that tests type into a throwaway test app; none was ever a real credential.
+01dd9b66ebe084ab12bb136c849873493d858939:tests/test_auth.py:generic-api-key:72
+01dd9b66ebe084ab12bb136c849873493d858939:tests/test_auth.py:generic-api-key:144
+4176636c6aad33dfd28789571e9dbfaf3d1dff9b:tests/test_ui_browser.py:generic-api-key:574
+4176636c6aad33dfd28789571e9dbfaf3d1dff9b:tests/test_ui_browser.py:generic-api-key:575
+4176636c6aad33dfd28789571e9dbfaf3d1dff9b:tests/test_ui_browser.py:generic-api-key:587
+064a52864db884aa0663b540de10eb59e9673f8a:tests/test_ops.py:generic-api-key:136

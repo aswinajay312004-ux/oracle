@@ -166,6 +166,8 @@ jobs:
           python scripts/bootstrap_local.py
           echo "::add-mask::$(sed -n 's/^ORACLE_PASSWORD=//p' .env.poppys)"
           python scripts/grant_bom_tables.py
+          python scripts/create_readonly_user.py   # the read-only account Ask AI and the explorer use
+          echo "::add-mask::$(sed -n 's/^ORACLE_RO_PASSWORD=//p' .env.poppys)"
           python scripts/check_oracle.py
 
       - name: Real-Oracle tests

@@ -226,33 +226,76 @@ def _guard(sql, dialect='oracle', owner=OWNER):
     policy.check(sql, dialect, owner)
 
 
+def usable(conn):
+    """False once the driver has dropped the connection. python-oracledb (thin mode) closes a connection whose call
+    timeout it cannot recover from: the query is cut off with DPY-4011 instead of DPY-4024. Such a connection must not
+    be touched again except to close it: setting call_timeout on it crashes the whole process (python-oracledb 4.0.2,
+    reproduced on Oracle 23.26; this was the CI segmentation fault)."""
+    check = getattr(conn, 'is_healthy', None)
+    return check() if check else True
+
+
+class ConnectionLost(QueryError):
+    def __init__(self):
+        super().__init__('The connection to the database was lost while answering. Nothing was changed. Ask again; '
+                         'if this keeps happening, check that the Oracle container is running.')
+
+
 class OracleExecutor:
     """Read-only execution: SET TRANSACTION READ ONLY, call timeout, bounded fetch, always rolled back.
-    A query that hits its time limit raises TimedOut (a plain-English QueryError); the connection stays usable."""
+    A query that hits its time limit raises TimedOut (a plain-English QueryError). When the driver could not recover
+    the connection from the time limit, the dead connection is left alone and the next query opens a new one through
+    reconnect (without reconnect, it raises ConnectionLost)."""
 
-    def __init__(self, conn, timeout_ms=TIMEOUT_MS, owner=OWNER):
-        self.conn = conn; self.timeout_ms = timeout_ms; self.owner = owner; conn.call_timeout = timeout_ms
+    def __init__(self, conn, timeout_ms=TIMEOUT_MS, owner=OWNER, reconnect=None):
+        self.conn = conn; self.timeout_ms = timeout_ms; self.owner = owner; self.reconnect = reconnect
+        self._own = []          # connections this executor opened itself, closed by close()
+        conn.call_timeout = timeout_ms
+
+    def _connection(self):
+        if usable(self.conn):
+            return self.conn
+        if not self.reconnect:
+            raise ConnectionLost()
+        self.conn = self.reconnect(); self._own.append(self.conn)
+        self.conn.call_timeout = self.timeout_ms
+        return self.conn
 
     def __call__(self, sql, binds, max_rows, timeout_ms=None):
         _guard(sql, 'oracle', self.owner)
-        c = self.conn.cursor()
+        conn = self._connection()
+        c = conn.cursor()
         limit = int(timeout_ms or self.timeout_ms)
-        self.conn.call_timeout = limit
+        conn.call_timeout = limit
+        started = time.monotonic()
         try:
             c.execute('SET TRANSACTION READ ONLY')
             c.arraysize = max(50, min(int(max_rows), 1000))
             c.execute(sql, binds)
             return c.fetchmany(int(max_rows))
         except Exception as exc:
-            if timed_out(exc):
+            lost = not usable(conn)
+            if timed_out(exc) or (lost and time.monotonic() - started >= limit / 1000):
                 raise TimedOut(limit / 1000) from None
+            if lost:
+                raise ConnectionLost() from None
             raise
         finally:
-            self.conn.call_timeout = self.timeout_ms
-            self.conn.rollback()
+            if usable(conn):
+                conn.call_timeout = self.timeout_ms
+                conn.rollback()
 
     def limited(self, timeout_ms):
         return lambda sql, binds, max_rows: self(sql, binds, max_rows, timeout_ms=min(int(timeout_ms), self.timeout_ms))
+
+    def close(self):
+        """Close the connections this executor opened; the one it was given stays with its owner."""
+        for conn in self._own:
+            try:
+                conn.close()
+            except Exception:       # already dropped by the driver
+                pass
+        self._own.clear()
 
 
 class SqliteExecutor:

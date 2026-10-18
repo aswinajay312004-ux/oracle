@@ -9,6 +9,8 @@ broken, what is next. Update it and push after every work batch.
   "Local Oracle-tested" needs the commands in [Local verification](#local-verification) run on the laptop.
 
 Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests pass here) ·
+**Replica Oracle-tested** (passed against a real Oracle Free 23.26 in a throwaway container holding the synthetic
+GARMENT_DEMO replica of `tests/oracle_replica.py`; real Oracle, but not the laptop's data and not Axpert) ·
 **Local Oracle-tested** (passed against the real local database) · **Fully verified** · **Blocked** · **Broken**.
 
 ## Current test run

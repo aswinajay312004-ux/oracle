@@ -55,12 +55,14 @@ REFERENCES = {
 
 
 def connect():
+    """(connection, reopen): reopen() opens a new connection with the same password, without asking again."""
     import oracledb
     from dotenv import dotenv_values
     cfg = dotenv_values(ROOT / '.env.poppys')
     dsn = os.environ.get('POPPYS_ORACLE_DSN') or cfg.get('ORACLE_DSN') or '127.0.0.1:1521/FREEPDB1'
     password = os.environ.get('POPPYS_DISCOVERY_PASSWORD') or getpass.getpass(f'{OWNER} password for {dsn}: ')
-    return oracledb.connect(user=OWNER, password=password, dsn=dsn, tcp_connect_timeout=6)
+    reopen = lambda: oracledb.connect(user=OWNER, password=password, dsn=dsn, tcp_connect_timeout=6)   # noqa: E731
+    return reopen(), reopen
 
 
 def rows(c, sql, **binds):
@@ -116,18 +118,30 @@ def typed(value, col):
 class Run:
     """Statements with a time limit; a slow or failing one is recorded and skipped instead of stopping the run."""
 
-    def __init__(self, conn, timeout_s):
-        self.conn = conn; self.c = conn.cursor(); conn.call_timeout = int(timeout_s * 1000)
-        self.timeout_s = timeout_s; self.statements = 0; self.errors = []
+    def __init__(self, conn, timeout_s, reopen=None):
+        self.timeout_s = timeout_s; self.statements = 0; self.errors = []; self.reopen = reopen
+        self._use(conn)
+
+    def _use(self, conn):
+        self.conn = conn; self.c = conn.cursor(); conn.call_timeout = int(self.timeout_s * 1000)
 
     def __call__(self, what, sql, **binds):
         self.statements += 1
+        if not self.conn.is_healthy():
+            # The driver dropped the connection after an earlier time limit. It must not be touched again (setting
+            # call_timeout on it crashes python-oracledb 4.0.2), so the rest of the run continues on a new one.
+            if not self.reopen:
+                self.errors.append(f'{what}: skipped, the connection was lost after an earlier time limit')
+                return None
+            self._use(self.reopen())
+        started = time.time()
         try:
             self.c.execute(sql, binds)
             return self.c.fetchall()
         except Exception as exc:
             code = getattr(exc.args[0], 'full_code', '') if exc.args else ''
-            self.errors.append(f'{what}: ' + (f'took longer than {self.timeout_s:g} s, skipped' if code == 'DPY-4024' else str(exc)[:160]))
+            limit = code == 'DPY-4024' or (not self.conn.is_healthy() and time.time() - started >= self.timeout_s)
+            self.errors.append(f'{what}: ' + (f'took longer than {self.timeout_s:g} s, skipped' if limit else str(exc)[:160]))
             return None
 
 
@@ -172,7 +186,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     out_dir = Path(args.out)
     started = time.time()
-    conn = connect(); c = conn.cursor(); run = Run(conn, args.timeout)
+    conn, reopen = connect(); c = conn.cursor(); run = Run(conn, args.timeout, reopen)
     tables = rows(c, 'select table_name, num_rows, last_analyzed from all_tables where owner=:o order by table_name', o=OWNER)
     columns = rows(c, '''select table_name, column_name, data_type, data_length, data_precision, data_scale, nullable, column_id
         from all_tab_columns where owner=:o order by table_name, column_id''', o=OWNER)
