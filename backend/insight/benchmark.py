@@ -151,6 +151,10 @@ def run(questions, ask, execute, dialect):
             items.append(dict(item, status='refused', detail=str(exc)[:200])); continue
         except Exception as exc:
             items.append(dict(item, status='error', detail=f'{type(exc).__name__}: {str(exc)[:200]}')); continue
+        if answer.get('kind') == 'confirm':           # abstained: asked the person instead of answering (not correct, not wrong)
+            items.append(dict(item, status='asked back', detail=answer.get('message'), understood=answer.get('understood'),
+                              confidence='low', source_used=answer.get('source'), ms=round((time.perf_counter() - t0) * 1000)))
+            continue
         ok, why = compare(q['compare'], expected, answer)
         failed = [c['title'] for c in answer.get('checks') or [] if c['status'] == 'failed']
         items.append(dict(item, status='skipped' if ok is None else 'correct' if ok else 'wrong', detail=why, understood=answer.get('understood'),
@@ -159,5 +163,5 @@ def run(questions, ask, execute, dialect):
     counted = [i for i in items if i['status'] != 'skipped']
     correct = sum(i['status'] == 'correct' for i in counted)
     return dict(total=len(counted), correct=correct, accuracy=round(correct / len(counted), 4) if counted else None,
-                by_status={s: sum(i['status'] == s for i in items) for s in ('correct', 'wrong', 'refused', 'not understood', 'error', 'skipped')},
+                by_status={s: sum(i['status'] == s for i in items) for s in ('correct', 'wrong', 'asked back', 'refused', 'not understood', 'error', 'skipped')},
                 seconds=round(time.perf_counter() - started, 1), items=items)

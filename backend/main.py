@@ -1363,7 +1363,7 @@ def _answer(fn, question, user):
             if sources.get('db'):
                 _ensure_values(kb, sources)
             result = fn(kb, sources)
-            result.update(kind='answer')
+            result.setdefault('kind', 'answer')
             counted = table_counts(kb, sources, [n['table'] for n in result.get('graph', {}).get('nodes', [])])
             for n in result.get('graph', {}).get('nodes', []):
                 n['rows'], n['approx'] = counted.get(n['table'], (None, True))
@@ -1487,7 +1487,8 @@ def chat_feedback(cid: str, data: Feedback, user=Depends(require('view'))):
     store.chat_feedback(cid, 'correct' if data.correct else 'wrong')
     saved = None
     p = entry['payload']
-    if data.correct and p.get('kind') == 'answer' and p.get('masked') and 'preview' in PERMISSIONS[user['role']]:
+    # A confirmed example changes how later questions are answered: approvers and administrators only.
+    if data.correct and p.get('kind') == 'answer' and p.get('masked') and 'approve' in PERMISSIONS[user['role']]:
         saved = store.save_example(p['masked'], p['question'], engine.generalize(p['intent'], p.get('linked_values') or []), user['username'])
     store.audit(user['username'], 'chat_feedback', cid, correct=data.correct, question=entry['question'], example=saved)
     return dict(ok=True, example=saved)

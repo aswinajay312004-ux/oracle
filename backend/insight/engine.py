@@ -9,10 +9,10 @@ from decimal import Decimal
 import json
 import re
 import time
-from . import policy, verify
+from . import catalog_qa, policy, verify
 from .knowledge import norm
 from .query import QueryError, compile_intent
-from .understand import interpret, ai_intent, NotUnderstood
+from .understand import interpret, ai_intent, lexicon, NotUnderstood
 
 OPS_TEXT = {'eq': 'is', 'ne': 'is not', 'contains': 'contains', 'starts': 'starts with', 'gt': 'above', 'gte': 'at least',
             'lt': 'below', 'lte': 'at most', 'between': 'between', 'in': 'in'}
@@ -253,11 +253,31 @@ def _same_result(a, b):
     return not a['truncated'] and not b['truncated'] and rows(a) == rows(b)
 
 
+def gate(result):
+    """A reading with low confidence is not answered with a number: the person is asked whether that is what they meant
+    (spec §11: abstain rather than guess). The checked plan travels with the question, so "Yes" runs exactly it."""
+    c = result.get('confidence') or {}
+    if result.get('kind') or c.get('level') != 'low':
+        return result
+    keep = ('question', 'understood', 'intent', 'source', 'confidence', 'alternatives', 'masked', 'linked_values')
+    return dict({k: result[k] for k in keep if k in result}, kind='confirm',
+                message=f'I am not sure I understood. Did you mean “{result.get("understood")}”?')
+
+
 def ask(question, kb, sources, *, finder, live_finder=None, examples=(), ai_chat=None, today=None, lex=None, samples=None):
+    return gate(_ask(question, kb, sources, finder=finder, live_finder=live_finder, examples=examples, ai_chat=ai_chat, today=today,
+                     lex=lex, samples=samples))
+
+
+def _ask(question, kb, sources, *, finder, live_finder=None, examples=(), ai_chat=None, today=None, lex=None, samples=None):
     """Rules first; the local AI as a fallback or as a second reader of a weak parse. When both read the question,
     both readings run (each through every check) and are compared, as XiYan-SQL picks among candidates: the same
     result raises confidence; a different result is shown with the other reading offered as "Did you mean"."""
     stored = stored_spellings(finder)
+    lex = lex or lexicon(kb)
+    about_catalog = catalog_qa.answer(question, kb, lex)     # "how many tables…": the data dictionary, never order rows
+    if about_catalog:
+        return about_catalog
     try:
         intent, conf = interpret(question, kb, finder, live_finder, today=today, lex=lex)
     except NotUnderstood:

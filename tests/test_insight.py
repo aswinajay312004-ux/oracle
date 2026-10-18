@@ -263,3 +263,44 @@ def test_two_values_of_the_same_column_mean_either(world):
     assert ex['intent']['filters'][0]['value'] == ['{v0}', '{v1}']
     again = ask(world, 'orders H&M KIDS ZARA', examples=[ex])
     assert again['source'] == 'saved example' and again['intent']['filters'][0]['value'] == ['H&M KIDS', 'ZARA'] and len(again['rows']) == 1
+
+
+# --- questions about the database itself, and questions that name nothing (audit Part A) --------------------
+def test_how_many_tables_is_answered_from_the_data_dictionary_not_by_counting_orders(world, api):
+    erp = [n for n, t in world['kb'].tables.items() if t.get('source') != 'local']
+    for q in ('how many table present in database', 'How many tables are in the database?', 'number of tables'):
+        r = api.post('/api/chat/ask', json={'question': q}).json()
+        assert r['kind'] == 'catalog' and r['sql'] is None and r['row_count'] == len(erp), (q, r.get('kind'), r.get('understood'))
+        assert r['summary'].startswith(f'The ERP database has {len(erp)} tables') and 'order' not in r['understood'].lower()
+    cols = api.post('/api/chat/ask', json={'question': 'what columns does the order table have'}).json()
+    assert cols['kind'] == 'catalog' and cols['understood'] == 'Columns of order (ORDMAS)' and cols['rows']
+    link = api.post('/api/chat/ask', json={'question': 'how is size linked to order'}).json()
+    assert link['kind'] == 'catalog' and link['joins'] and 'reaches Order (ORDMAS)' in link['summary']
+    assert 'kind' not in ask(world, 'how many orders'), 'a business count is still a business answer'
+
+
+def test_a_count_that_names_nothing_is_asked_back_never_answered_with_the_default_table(world):
+    with pytest.raises(NotUnderstood) as e:
+        ask(world, 'how many are there')
+    assert 'Count what?' in str(e.value) and 'How many tables are in the database?' in e.value.suggestions
+
+
+def test_a_low_confidence_reading_asks_before_showing_any_number(world, api, monkeypatch):
+    real = engine.run
+
+    def doubtful(*a, **k):
+        r = real(*a, **k); r['confidence'] = dict(score=0.3, level='low', reasons=['Not used: “gizmo”.']); return r
+    monkeypatch.setattr(engine, 'run', doubtful)
+    r = api.post('/api/chat/ask', json={'question': 'how many orders for NEXT'}).json()
+    assert r['kind'] == 'confirm' and 'rows' not in r and 'summary' not in r and r['intent']['base'] == 'ORDMAS'
+    assert r['message'].startswith('I am not sure I understood. Did you mean')
+    monkeypatch.setattr(engine, 'run', real)
+    yes = api.post('/api/chat/run', json={'intent': r['intent'], 'question': r['question']}).json()
+    assert yes['kind'] == 'answer' and yes['rows']
+
+
+def test_only_approvers_can_turn_an_answer_into_a_remembered_example(api):
+    assert api.post('/api/users', json={'username': 'op', 'password': PW, 'role': 'operator'}).status_code == 200
+    api.post('/api/logout'); assert api.post('/api/login', json={'username': 'op', 'password': PW}).status_code == 200
+    r = api.post('/api/chat/ask', json={'question': 'size wise quantity for order PK/26-27/S/9001'}).json()
+    assert api.post(f'/api/chat/{r["id"]}/feedback', json={'correct': True}).json()['example'] is None

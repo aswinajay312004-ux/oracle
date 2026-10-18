@@ -366,9 +366,14 @@ def interpret(question, kb, finder, live_finder=None, today=None, lex=None):
             target = column_mentions[0][1].split('.')[0]
         if not target and group:
             target = None
+        if not target and not filter_tables:
+            # Nothing to count was named ("how many are there?", "how many table present in database" before catalog
+            # questions existed): asking back is right, counting the default table was not (audit Part A).
+            raise NotUnderstood('Count what? The question names nothing to count.', suggestions=[
+                'How many orders?', 'How many buyers?', 'How many tables are in the database?'])
         if not target:
             target = _default_base(kb, filter_tables)
-            confidence -= 0.25; reasons.append(f'Counted {kb.table(target)["plural"]} (nothing specific was named).')
+            confidence -= 0.25; reasons.append(f'Counted {kb.table(target)["plural"]} for the value you named.')
         base = target; measures = [dict(agg='count', column=None)]
     else:
         if explicit_tables:

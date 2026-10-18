@@ -82,6 +82,24 @@ function checkList(checks) {
 
 function draw(aid) {
   const entry = answers.get(aid); const r = entry.result; const el = $(`#ans-${aid}`);
+  if (r.kind === 'catalog') {      // answered from the data dictionary: no data read, no SQL run
+    el.innerHTML = `<div class="answer-top"><span class="understood">Understood as: <b>${esc(r.understood)}</b></span><span class="spacer"></span>
+        <span class="pill ok">From the data dictionary</span></div>
+      <div class="answer-summary">${esc(r.summary)}</div>
+      ${checkStrip(r.checks)}
+      <div class="answer-body">${r.rows.length ? `<div class="tbl-wrap"><table><thead><tr>${r.columns.map(c => `<th class="${c.type === 'NUMBER' ? 'num' : ''}">${esc(c.label)}</th>`).join('')}</tr></thead>
+        <tbody>${r.rows.map(row => `<tr>${row.map((v, i) => `<td class="${r.columns[i]?.type === 'NUMBER' ? 'num' : ''} ${v == null ? 'null' : ''}">${v == null ? '—' : esc(typeof v === 'number' ? fmt(v, 0) : String(v))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}</div>`;
+    return;
+  }
+  if (r.kind === 'confirm') {      // low confidence: no number until the person says this is what they meant
+    el.innerHTML = `<div class="answer-top"><span class="pill warn">Not sure I understood</span></div>
+      <div class="answer-summary">${esc(r.message)}</div>
+      <div class="alternatives"><button class="primary small" data-confirm="${esc(aid)}">Yes, answer that</button>
+        ${(r.alternatives || []).map((a, i) => `<button class="secondary small" data-alt="${esc(aid)}" data-alt-i="${i}">${esc(a.understood)}</button>`).join('')}
+        <span class="muted small-text">or rephrase the question</span></div>
+      ${(r.confidence?.reasons || []).length ? `<details class="how"><summary>Why I am not sure</summary><div class="how-body">${r.confidence.reasons.map(x => `<div>• ${esc(x)}</div>`).join('')}</div></details>` : ''}`;
+    return;
+  }
   if (r.kind !== 'answer') {
     el.innerHTML = `<div class="answer-top"><span class="pill ${r.kind === 'refused' ? 'err' : 'warn'}">${r.kind === 'refused' ? 'Cannot answer safely' : 'Please rephrase'}</span></div>
       <div class="answer-summary">${esc(r.message)}</div>
@@ -241,6 +259,8 @@ export function bindChat() {
       catch (err) { notify(err.message, 'error'); }
       return;
     }
+    const ok = e.target.closest('[data-confirm]');
+    if (ok) return rerun(ok.dataset.confirm, answers.get(ok.dataset.confirm).result.intent, 'Answered as you confirmed.');
     const alt = e.target.closest('[data-alt]');
     if (alt) { const a = answers.get(alt.dataset.alt).result.alternatives[Number(alt.dataset.altI)]; return rerun(alt.dataset.alt, a.intent, 'Answered with the other reading.'); }
     const rm = e.target.closest('[data-remove-col]'); if (rm) { e.stopPropagation(); return removeColumn(rm.dataset.aid, rm.dataset.removeCol); }
