@@ -711,6 +711,14 @@ class Approval(Version):
     exceptions_seen: str | None = Field(default=None, max_length=64)   # digest of the "not saved" list the approver saw
 
 
+def _new_masters(plan):
+    """Master records the save would create (spec §8.4: a new buyer, colour or size is a decision, not a side effect of
+    an unmatched spelling): one line per record, with the similar existing names the planner found."""
+    masters = {m['table']: m for m in oracle.current_mapping()['masters'].values()}
+    return [dict(business=masters[op['table']]['business'], table=op['table'], label=op['values'].get(masters[op['table']]['label']))
+            for op in plan.get('operations') or [] if op['table'] in masters and op['action'] == 'insert']
+
+
 def exceptions(d):
     """Everything the approver must know will NOT be in Oracle as the file says, before approving (zero silent loss):
     data in the file that is in no order, values with no verified place in Oracle, and quantity conversions."""
@@ -718,7 +726,8 @@ def exceptions(d):
     items = dict(exclusions=list(cov.get('exclusions') or []), not_saved=list(plan.get('not_saved') or []),
                  conversions=list(plan.get('conversions') or []),
                  layout_changes=[f'Sheet “{x["sheet"]}” was read with the saved layout “{x["template"]}”, found again by its labels: {c}.'
-                                 for x in d.get('layout_changes') or [] for c in x['changes']])
+                                 for x in d.get('layout_changes') or [] for c in x['changes']],
+                 new_masters=_new_masters(plan))
     items['digest'] = (hashlib.sha256(json.dumps(items, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
                        if any(items.values()) else None)
     return items
@@ -837,8 +846,8 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
         ex = d['plan'].get('exceptions') or exceptions(d)
         if ex['digest'] and data.exceptions_seen != ex['digest']:
             return JSONResponse(status_code=409, content={
-                'detail': 'Some of this file will not be in Oracle exactly as written (listed under “What will not be saved”). '
-                          'Read the list and tick “I have read what will not be saved” before approving.',
+                'detail': 'Some of this file will not be in Oracle exactly as written (listed under “Read before approving”). '
+                          'Read the list and tick “I have read this list” before approving.',
                 'exceptions_unseen': True, 'exceptions': ex})
         # Durable intent before Oracle is touched: if this process stops mid-save, the draft says "saving" and is
         # reconciled from Oracle's own import log, never shown as saved or unsaved on a guess.

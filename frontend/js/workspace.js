@@ -709,12 +709,14 @@ function exceptionsCard(d) {
   const conv = ex.conversions.map(x => `<li><b>${esc(who(x.order))}Quantity unit</b>: ${esc(x.text)}</li>`).join('');
   const excl = ex.exclusions.map(x => `<li>${esc(x)}</li>`).join('');
   const moved = (ex.layout_changes || []).map(x => `<li>${esc(x)}</li>`).join('');
-  return `<section class="card exceptions" aria-labelledby="ex-title"><h2 id="ex-title">What will not be saved exactly as in the file</h2>
+  const masters = (ex.new_masters || []).map(x => `<li><b>${esc(x.business)}</b> “${esc(x.label)}” <span class="muted small-text">(${esc(x.table)})</span></li>`).join('');
+  return `<section class="card exceptions" aria-labelledby="ex-title"><h2 id="ex-title">Read before approving: what is created, changed or left out</h2>
     ${conv ? `<h3>Converted</h3><ul>${conv}</ul>` : ''}
+    ${masters ? `<h3>New master records that will be created (they were not found in Oracle)</h3><ul>${masters}</ul>` : ''}
     ${ns ? `<h3>Not saved to Oracle (kept in the POPPYS import record)</h3><ul>${ns}</ul>` : ''}
     ${excl ? `<h3>Not read from the file</h3><ul>${excl}</ul>` : ''}
     ${moved ? `<h3>The file’s layout changed since it was saved — check these values</h3><ul>${moved}</ul>` : ''}
-    <label class="check"><input type="checkbox" id="ex-seen" ${state.exceptionsSeen === ex.digest ? 'checked' : ''}> I have read what will not be saved</label></section>`;
+    <label class="check"><input type="checkbox" id="ex-seen" ${state.exceptionsSeen === ex.digest ? 'checked' : ''}> I have read this list</label></section>`;
 }
 
 export function exceptionsSeen(checked) {

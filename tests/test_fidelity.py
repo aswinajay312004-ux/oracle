@@ -361,3 +361,11 @@ def test_a_size_matrix_with_a_style_column_becomes_one_order_per_style():
     assert [(o['style'], [l['color'] for l in o['lines']], o['provenance']['style']['cell']) for o in orders] == [
         ('ST-1', ['NAVY', 'RED'], 'A2'), ('ST-2', ['NAVY'], 'A4')]
     assert coverage.manifest(sheets, orders)['totals']['numbers_not_read'] == 0
+
+
+def test_new_master_records_are_listed_for_the_approver(env):
+    c, _, _ = env
+    p = ready(c, upload(c, flat_qty_orders()), ref='TEST/NM/1')
+    made = {(x['business'], x['label']) for x in p['plan']['exceptions']['new_masters']}
+    assert ('Style number', 'FL-500') in made and ('Colour / combo', 'RED') in made
+    assert not any(x['label'] == 'TESTBUYER' for x in p['plan']['exceptions']['new_masters']), 'an existing buyer is reused, not listed'
