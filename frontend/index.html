@@ -184,7 +184,7 @@
         <h1 id="auth-title">Welcome back</h1>
         <p id="auth-text" class="muted">Sign in to prepare and approve ERP entries.</p>
         <label>Username<input id="auth-user" autocomplete="username" required minlength="2" maxlength="50" pattern="[A-Za-z0-9._@\-]+"></label>
-        <label>Password<input id="auth-pass" type="password" autocomplete="current-password" required maxlength="200"></label>
+        <label>Password<span class="pw-field"><input id="auth-pass" type="password" autocomplete="current-password" required maxlength="200"><button type="button" id="auth-pass-show" class="pw-toggle" aria-controls="auth-pass" aria-pressed="false" aria-label="Show password">Show</button></span></label>
         <p id="auth-error" class="field-error" role="alert" hidden></p>
         <button type="submit" class="primary big full" id="auth-submit">Sign in</button>
         <small class="muted">Accounts are stored only in this local workspace.</small>

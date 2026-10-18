@@ -84,13 +84,20 @@ async function receipt(jobId) {
   });
 }
 
+function showPassword(visible) {
+  $('#auth-pass').type = visible ? 'text' : 'password';
+  const b = $('#auth-pass-show'); b.textContent = visible ? 'Hide' : 'Show';
+  b.setAttribute('aria-pressed', String(visible)); b.setAttribute('aria-label', visible ? 'Hide password' : 'Show password');
+}
+
 function bind() {
   onUnauthorized(() => session());
+  $('#auth-pass-show').addEventListener('click', () => { showPassword($('#auth-pass').type === 'password'); $('#auth-pass').focus(); });
   $('#auth-form').addEventListener('submit', async e => {
     e.preventDefault(); $('#auth-error').hidden = true; $('#auth-submit').disabled = true;
     try {
       await api(state.setup ? '/api/setup' : '/api/login', { method: 'POST', body: { username: $('#auth-user').value.trim(), password: $('#auth-pass').value } });
-      $('#auth-pass').value = '';
+      $('#auth-pass').value = ''; showPassword(false);
       if (await session()) start();
     } catch (err) { $('#auth-error').textContent = err.message; $('#auth-error').hidden = false; }
     finally { $('#auth-submit').disabled = false; }
