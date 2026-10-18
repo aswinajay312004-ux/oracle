@@ -30,6 +30,10 @@ POPPYS AI is a local, approval-controlled automation tool for POPPYS Garments (A
 - **People and audit:** admin, approver, operator and viewer roles, an optional four-eyes rule, and a full audit trail of uploads, corrections, previews, approvals and mapping changes.
 - **Offline:** UI, server, document reading, local AI (Ollama) and Oracle all run on the laptop.
 
+## User manual
+
+**[docs/USER_MANUAL.txt](docs/USER_MANUAL.txt)**: every screen, role, command and fix, in Thanglish.
+
 ## Run it on Windows
 
 See **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)**. In short:

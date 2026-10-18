@@ -65,7 +65,7 @@ def test_an_account_from_an_earlier_version_signs_in_once_and_is_rehashed(client
 
 
 @pytest.mark.parametrize('password,why', [('short-pass1', 'at least 12'), ('qwerty123456', 'too easy'), ('Password2024!', 'too easy'),
-                                          ('Garments@2026', 'too easy'), ('aaaaaaaaaaaa', 'too easy'), ('new.person-secret-9', 'username')])
+                                          ('Poppys@2026!', 'too easy'), ('aaaaaaaaaaaa', 'too easy'), ('new.person-secret-9', 'username')])
 def test_weak_new_passwords_are_refused_with_the_reason(client, password, why):
     r = client.post('/api/users', json=dict(username='new.person', password=password, role='operator'))
     assert r.status_code == 422 and why in r.json()['detail']

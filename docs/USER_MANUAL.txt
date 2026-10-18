@@ -1,0 +1,720 @@
+================================================================================
+  POPPYS AI - FULL USER MANUAL (Thanglish)
+  Buyer Excel -> Axpert / Oracle order entry + Ask AI + Database explorer
+  Version: branch claude/fervent-babbage-jqo8r4, 2026-10-18
+================================================================================
+
+Indha file la POPPYS AI pathi ellame irukku: enna pannum, enna pannaadhu,
+ovvoru screen um eppadi use pannanum, yaaru enna pannalaam, commands,
+prachanai vandhaa enna pannanum, innum enna baaki irukku.
+
+Mukkiyamaana 3 vishayam mudhalla:
+  1. App use panna, PowerShell la .\start.ps1 run aagitte irukkanum.
+     Andha window ah close panna app nikkum.
+  2. Browser la open panna vendiya link: http://127.0.0.1:8008
+  3. Docker Desktop um "oracle26ai" container um odanum. Illana Oracle ku
+     save aagaadhu, Ask AI um Oracle ah padikkaadhu.
+
+
+--------------------------------------------------------------------------------
+PART 1. POPPYS AI NA ENNA?
+--------------------------------------------------------------------------------
+
+POPPYS AI unga laptop la mattum odra oru order entry assistant. Idhu moonu
+velai pannum:
+
+  A) EXCEL -> ORACLE ORDER ENTRY
+     Buyer anuppura Excel file (PO, contract, merch BOM) ah upload panna, adhula
+     irukura buyer, style, PO, colours, size wise quantity, fabric, trims ellame
+     padichu, Axpert "Sample Order Entry" screen madhiri kaattum. Neenga check
+     panni approve panna dhaan Oracle (GARMENT_DEMO) la save aagum. Save
+     aanadhum Oracle la irundhu thirumba padichu "sariyaa save aagiduchu" nu
+     proof kaattum.
+
+  B) ASK AI
+     Database pathi saadharana English la kelvi kekkalaam:
+       "How many orders for NEXT?"
+       "Size wise quantity for order PK/26-27/S/9001"
+       "Buyer wise order quantity this year"
+     Answer table / chart aa varum. Ovvoru answer um 6 checks pass panni dhaan
+     varum. Ask AI Oracle la edhaiyum maatha mudiyaadhu (read-only account).
+
+  C) DATABASE EXPLORER
+     Oracle tables ah business names oda paakalaam: order, adhoda lines, sizes,
+     buyer ellame link aa. Padikka mattum dhaan, maatha mudiyaadhu.
+
+Idhu ellame offline. Internet, cloud AI, ChatGPT, Claude API edhuvum runtime la
+use aagaadhu. Unga data laptop ah vittu veliya pogaadhu.
+
+Idhu PANNAADHU (venumne vechirukom):
+  - PDF, Word, scan panna image, CAD files padikkaadhu. Excel family mattum.
+  - Already Oracle la irukura order ah maathaadhu, delete pannaadhu. Pudhusa
+    mattum add pannum.
+  - Approve pannama edhuvum save aagaadhu.
+  - Ask AI SQL ezhudhaadhu. Kelvi -> verified intent -> safe read-only query.
+  - Client oda production database ah thodaadhu. GARMENT_DEMO mattum.
+
+
+--------------------------------------------------------------------------------
+PART 2. SCREENS - ORU PAARVAI
+--------------------------------------------------------------------------------
+
+Left side menu la 6 screens:
+
+  Overview       Inniku enna velai baaki, last saves, connection lights,
+                 Ask AI accuracy score.
+  New order      Excel upload -> Review -> Check & approve -> Saved.
+  Saved orders   Oracle ku save aana ellaa orders um, proof flowchart oda.
+  Ask AI         Database pathi kelvi kekkalaam.
+  Database       Oracle tables, records, linked records paakalaam.
+  Setup          Mapping, data dictionary, order fields, templates, accuracy
+                 check, users, audit history, settings.
+
+Setup la sila parts admin ku mattum theriyum (Users & roles, Audit history,
+Settings).
+
+
+--------------------------------------------------------------------------------
+PART 3. YAARU ENNA PANNALAAM (ROLES)
+--------------------------------------------------------------------------------
+
+  Role        Enna pannalaam
+  ----------  ----------------------------------------------------------------
+  viewer      Paakka mattum: Overview, Saved orders, Ask AI, Database.
+  operator    viewer + Excel upload, edit, "Check & continue" (preview).
+  approver    operator + Oracle ku save panna approve, audit history paakalaam.
+  admin       Ellame + users create/maathuradhu, write mapping verify,
+              data dictionary, order fields, templates, settings.
+
+Mudhal account eppovume admin. Apram admin, Setup -> Users & roles la matha
+aalungalai add pannalaam.
+
+Four-eyes rule (oruthar upload, innoruthar approve): Setup -> Settings la
+"Allow the person who uploaded a file to approve it" ah OFF pannunga.
+Default ah adhu ON aa irukku.
+
+
+--------------------------------------------------------------------------------
+PART 4. DAILY START / STOP
+--------------------------------------------------------------------------------
+
+START (ovvoru naalum):
+  1. Docker Desktop open pannunga. "Engine running" varra varaikum wait.
+     oracle26ai container thaane start aagum. Check panna:
+       docker ps
+     STATUS la "(healthy)" irukkanum.
+  2. PowerShell open pannunga:
+       cd D:\oracle
+       Set-ExecutionPolicy -Scope Process Bypass -Force
+       .\start.ps1
+     "Uvicorn running on http://127.0.0.1:8008" vandhaa ready.
+  3. Browser la http://127.0.0.1:8008 open panni login pannunga.
+
+STOP:
+  start.ps1 odra PowerShell window la Ctrl + C. Apram window close
+  pannalaam.
+
+PUDHU VERSION (naan GitHub la update panna apram):
+  start.ps1 window la Ctrl + C, apram:
+       cd D:\oracle
+       git pull
+       .\start.ps1
+  Browser la Ctrl + F5. (Pudhu package vandhaa mattum .\setup.ps1 -Dev
+  thirumba run pannanum. Apdi irundha naan solluven.)
+
+GNYABAGAM VECHUKKONGA:
+  - Pudhu PowerShell window eppovume C:\Users\ASUS2025 la open aagum.
+    Mudhalla "cd D:\oracle" pannanum. Illana "not a git repository" or
+    ".\start.ps1 is not recognized" nu error varum.
+  - Rendu window la start.ps1 run panna, rendavadhu "address already in use"
+    nu sollum. Onnu podhum.
+  - Windows service aa install pannina (PART 15), start.ps1 thevai illa.
+    Laptop on aanaale app odum.
+
+
+--------------------------------------------------------------------------------
+PART 5. LOGIN, PASSWORD, ACCOUNTS
+--------------------------------------------------------------------------------
+
+MUDHAL THADAVA (accounts illana):
+  "Set up POPPYS AI" screen varum. Username (Gmail kooda podalaam) and password
+  kudutha, adhu admin account aagum.
+
+PASSWORD RULES (pudhu password ku):
+  - 12 or adhuku mela characters.
+  - Common passwords accept aagaadhu (qwerty123456, Password2024! madhiri).
+  - "garments", "poppys", "oracle", "password", "admin" madhiri words mattum
+    vechu password accept aagaadhu (Poppys@2026! kooda accept aagaadhu).
+  - Username password kulla irukka koodaadhu.
+  Nalla example: Knit-Order-Plan-2026
+
+SHOW BUTTON:
+  Password field ulla "Show" button irukku. Click panna type pannadhu theriyum,
+  "Hide" click panna marainjidum.
+
+THAPPU PASSWORD:
+  5 thadava thappu password pottaa, adutha try ku sila seconds wait pannanum.
+  Thappu continue aanaa wait time double aagum (max 15 nimisham). "Too many
+  wrong passwords. Wait N seconds" nu sollum. Wait panni correct password
+  pottaa sariyaagidum. Idhu yaarum password guess panna koodaadhu nu.
+
+AUTOMATIC LOGOUT:
+  - 30 nimisham edhuvum pannalana thaane logout aagum.
+  - 8 mani neram aanaa (use pannittu irundhaalum) thirumba login pannanum.
+  - Admin unga role ah maathunaa, password reset pannunaa, illa account ah
+    off pannunaa, neenga logout aagiduveenga. Thirumba login pannunga.
+
+PUDHU USER ADD PANNA (admin):
+  Setup -> Users & roles -> Username, Temporary password (12+), Role ->
+  Add. Andha aalukku password ah neril sollunga. Avanga login panni use
+  pannalaam.
+
+USER OTHAA PASSWORD MARANDHAA (admin):
+  Setup -> Users & roles -> andha user row la reset -> pudhu password. Avanga
+  sessions ellam logout aagum.
+
+ADMIN PASSWORD EH MARANDHAA (yaarum login panna mudiyala):
+  App ah nirutthunga (Ctrl + C), apram:
+       cd D:\oracle
+       .\.venv\Scripts\python.exe scripts\reset_login.py
+  Accounts list kaattum. DELETE nu type panni Enter. Ellaa login accounts um
+  delete aagum (orders, mapping, Oracle data, audit history edhuvum delete
+  aagaadhu). Apram .\start.ps1, browser la pudhu admin create pannunga.
+
+
+--------------------------------------------------------------------------------
+PART 6. OVERVIEW SCREEN
+--------------------------------------------------------------------------------
+
+Login aanadhum mudhal screen.
+  - Work queue: upload pannittu innum save aagaadha files. Click panna andha
+    file ku pogum.
+  - Counts: draft / checked / saved evlo nu (unmaiyaana count mattum; Oracle
+    connect aagalana "-" kaattum, poi number kaattaadhu).
+  - Recently saved to Oracle: last saves, yaaru approve pannanga.
+  - Connections: Oracle (writer account), Ask AI read-only account, local AI
+    (Ollama) - green na ok.
+  - Ask AI accuracy: last accuracy check la "X of Y correct".
+
+
+--------------------------------------------------------------------------------
+PART 7. NEW ORDER - EXCEL IRUNDHU ORACLE KU (MAIN WORK)
+--------------------------------------------------------------------------------
+
+Mela 4 steps theriyum: 1 Upload -> 2 Review -> 3 Check & approve -> 4 Saved.
+
+STEP 1 - UPLOAD
+  "Drag & drop the order file" box la file ah podunga, illa "choose a file".
+  Accept aagura files:
+    .xlsx .xlsm .xltx .xltm .xls .xlsb .ods
+    Excel XML (2003) and HTML exports (.xml .htm .html, ERP la irundhu
+    "Excel" nu export aagura files)
+    .csv .tsv .txt (tab text), .json
+  Size: 12 MB varaikum. File laptop laye irukkum.
+  "Recent files" la munnadi upload pannadhu irukkum, thirumba open pannalaam.
+
+  Upload aanadhum "Reading your file..." screen varum. Enna kandupidichadhu nu
+  kaattum (header, sizes, packs, fabric kg, trims). "Open the order entry ->"
+  click pannunga.
+
+STEP 2 - REVIEW (Axpert madhiri screen)
+  Order header: buyer, style, description, PO / contract number, order
+  reference (OC number), order date, ship date, season, merchandiser,
+  exporter, sample type, quantity unit...
+  Style & size quantities: colour x size table.
+  Fabric planning: portion wise fabric, kg calculation
+    (kg = pieces x g/pc / 1000 x rejection).
+  Trims & accessories: file la irukura trim tables apdiye.
+
+  Ovvoru value um Excel la endha cell la irundhu vandhuchu nu theriyum.
+
+  RED / ORANGE OUTLINE:
+    Edhavadhu missing or thappu na andha field ae red la outline aagum, keela
+    oru line la karanam irukkum. "Show me the next one >" click panna adutha
+    prachanai ku pogum. Orange = padichu paakkanum (warning), red = fix
+    pannanum (error).
+
+  Usually neenga fill panna vendiyadhu (file la illana):
+    - Order reference (OC No) - unique aa irukkanum.
+    - Order confirmation date, ship date (ship date >= order date).
+    - Quantities to save: "Sample section", "Buyer order" (demo ku), illa
+      "Type them" (neengale type pannradhu).
+    - Quantity unit: pieces (PCS) illa packs (PACK); pack na "Pieces in one
+      pack" kudukkanum. Packs pieces aa convert aagi save aagum.
+
+  UNDO / REDO: mela buttons, illa Ctrl + Z / Ctrl + Y. Type panna ellame onnu
+  onna thirumba edukkalaam (approve pannuradhuku munnadi varaikum).
+
+  "Read this file differently": file ah thappaa purinjikitta, column
+  mapping ah neengale kaattalaam (PART 7A).
+  "Ask about this file": indha file pathi kelvi kekkalaam.
+  "+ Add another order manually": file illama order type pannalaam.
+  New size column add panna "+ size" la size name type pannunga.
+
+  Mudinjadhum "Check & continue ->" click pannunga. Oracle la masters, existing
+  orders, units, totals, column size, relationships ellame check aagum.
+  Prachanai irundha thirumba andha field la red aa kaattum.
+
+STEP 3 - CHECK & APPROVE
+  "Open the approval view ->" click panna:
+  - Flowchart: endha endha Oracle tables la ezhudhum (ORDMAS, ORDSTYLE,
+    ORDSIZE, masters...). Table ah click panna adhula pogura rows table aa
+    keela theriyum, ovvoru value um endha Excel cell la irundhu nu.
+  - "Please read before approving": warnings. Padichutu approve pannunga.
+  - Approver / admin ku "Accept and save to Oracle ->" button varum.
+    Ellaa rows um ORE transaction la save aagum: ellame save, illa onnum
+    illa. Paadhi save aagi nikkaadhu.
+
+STEP 4 - SAVED
+  Oracle la irundhu fresh aa thirumba padichu, adhe flowchart kaattum.
+  Ovvoru row um ezhudhunadhum padichadhum same nu green tick. Table click
+  panna Oracle ippo return panna exact rows. "Open in Database" la andha
+  order ah Database screen la paakalaam. "Start another order" - adutha file.
+
+MASTERS (buyer, style, colour, size, unit, merchandiser) - EPPADI MATCH AAGUM:
+  - Same name Oracle la irundha adhe record use aagum.
+  - Space, dot, comma, capital/small letter, "&" vs "AND", munnadi zero
+    maathiram vithiyaasam na (udhaaranama Excel "Next Ltd." vs Oracle
+    "NEXT LTD"), pudhu record create pannaama irukura record ae use aagum.
+    Andha field la "is the existing buyer NEXT LTD" nu note varum.
+  - 3 letters or kammi (S, XL, PCS) exact aa irundha mattum match.
+  - Unmaiyaana pudhu name na pudhu master record create aagum. Similar name
+    already irundha ("NAVY BLUES" vs "NAVY BLUE") approve ku munnadi note
+    kaattum. Thappu na field la correct name type pannunga. Block pannaadhu.
+  - Style numbers ah similar nu guess pannaadhu (ZK-2002 vs ZK-2003 rendu um
+    vera vera styles).
+  - Rendu existing records ku match aanaa ("NEXT LTD" and "NEXT, LTD"),
+    exact name type pannanum nu sollum.
+
+ENNA ENNA SAVE AAGUM:
+  - Order header (ORDMAS), colour lines (ORDSTYLE), size quantities (ORDSIZE)
+    + thevaiyaana masters.
+  - Fabric (ORDFAB), yarn (ORDYARN), accessories (ORDACC): admin Setup ->
+    Write mapping la verify panna apram dhaan save aagum. Adhuvarai
+    "reference only - not saved" nu kaattum, check mattum aagum.
+  - Save aanadhum POPPYS_APP.PP_IMPORT_LOG la receipt (yaaru, eppo, enna).
+
+RULES (safety):
+  - Ore file rendu thadava save aagaadhu ("already been committed").
+  - Oracle la already irukura order reference ku thirumba save aagaadhu.
+    Existing orders overwrite aagaadhu.
+  - Ore file la 1-50 orders, order ku 1-100 lines, line ku 1-100 sizes.
+  - Approve pannuradhuku munnadi edhaavadhu maathunaa, pazhaya preview
+    cancel aagum; thirumba "Check & continue" pannanum (approve pannunadhu
+    exact aa preview pannadhu dhaan nu guarantee).
+
+PART 7A - PUDHU BUYER FORMAT (LAYOUT TEMPLATE)
+  Pudhu buyer oda Excel format POPPYS AI ku theriyalana, "Read this file
+  differently" la neengale kaattunga: endha cell buyer, endha cell PO,
+  size table enga. Local AI (Ollama) or layout analysis suggest pannum, neenga
+  confirm pannunga. "Save as template" panna, adutha thadava adhe buyer
+  format thaane purinjukkum. Setup -> Layout templates la ellaa templates um
+  paakalaam, versions irukkum.
+
+
+--------------------------------------------------------------------------------
+PART 8. SAVED ORDERS SCREEN
+--------------------------------------------------------------------------------
+
+Oracle ku save aana ellaa imports um: date, approved by, orders.
+"Show where it was saved" click panna Oracle la irundhu ippove padichu
+flowchart + rows kaattum. Yaaravadhu "save aagudha?" nu kettaa idhu dhaan
+proof.
+
+
+--------------------------------------------------------------------------------
+PART 9. ASK AI SCREEN
+--------------------------------------------------------------------------------
+
+EPPADI KEKKANUM:
+  Saadharana English la. Udhaaranam:
+    How many orders for NEXT?
+    Size wise quantity for order PK/26-27/S/9001
+    Buyer wise order quantity this year
+    Top 5 buyers by quantity
+    Colour wise quantity for NEXT
+    Orders by month
+    Orders NEXT ZARA          (rendu buyers - "either" nu purinjukkum)
+    Cancelled orders
+  Order number, buyer name, colour ellame exact aa type panna better.
+
+ANSWER LA ENNA IRUKKUM:
+  - "Understood as": eppadi purinjikittadhu.
+  - Table + chart (theva padumbodhu). "Download CSV".
+  - Summary line (total, "All groups together").
+  - Check strip: "6 of 6 checks passed" madhiri. 6 checks:
+      1 Understand   - kelviya purinjikittadhu
+      2 Build        - catalog la irundhu dhaan query build aachu
+      3 Safety       - query padikka mattum; vera schema, DB link, maathura
+                       command edhuvum illa (independent checker)
+      4 Join check   - rows rendu thadava count aagaadhu nu check
+      5 Execute      - read-only account la run aachu
+      6 Totals       - breakdown ah total oda cross-check (groups add up)
+    "How this was answered and checked" open panna ovvoru check um, exact
+    read-only query um theriyum.
+  - Confidence: high / medium / low. Low na carefully paarunga.
+  - "Did you mean": rendu vidhama purinjikka mudinja, innoru answer button.
+  - Tables flowchart: answer ku use aana tables. "+" linked tables kaattum.
+    Table click panna preview; adhula column ah answer la add pannalaam, sariyaana
+    join oda thirumba run aagum.
+  - "Is this right?":
+      "✓ Correct - remember it" -> adhe madhiri kelvi ku next time indha
+      answer method use aagum (Setup -> Data dictionary -> Confirmed answers).
+      "✗ Not right" -> record aagum.
+
+UPLOAD PANNA FILES PATHI UM KEKKALAAM (Oracle off la irundhaalum).
+
+ASK AI PANNAADHU:
+  - Oracle la edhaiyum maathaadhu (POPPYS_RO account ku SELECT mattum).
+  - GARMENT_DEMO thavira vera schema padikkaadhu.
+  - Romba periya results ah limit pannum (first rows mattum, adhu sollum).
+  - Local AI (Ollama) illama kooda odum (rules vechu). Ollama irundha konjam
+    kashtamaana kelvigalaiyum purinjukkum.
+
+
+--------------------------------------------------------------------------------
+PART 10. DATABASE SCREEN (EXPLORER)
+--------------------------------------------------------------------------------
+
+  - Ellaa GARMENT_DEMO tables um business names oda, row counts oda.
+    (Romba periya tables ku "≈" approximate count.)
+  - Table open panna records. Filter: column + value ("contains" or "is
+    exactly"). "Load more" adutha page.
+  - Record click panna "linked records": parent (Belongs to: buyer, order)
+    and children (lines, sizes). IDs ku badhila names (buyer ID -> NEXT).
+  - Relationship map: "Click a table to open it · + adds its linked tables".
+  - "Unconfirmed link" nu irundha, adhu admin innum confirm pannaadha
+    relationship.
+  Padikka mattum dhaan. Edit / delete illa.
+
+
+--------------------------------------------------------------------------------
+PART 11. SETUP SCREEN (ADMIN)
+--------------------------------------------------------------------------------
+
+WRITE MAPPING
+  Ovvoru business field um endha Oracle TABLE.COLUMN la pogum nu. "Verified"
+  aana columns mattum dhaan Oracle la ezhudhum. "Proposed" na preview la
+  mattum. Fabric / yarn / accessory tables ah verify panna:
+    1. discover_schema.py run pannunga (evidence: fill %, example values,
+       link match %).
+    2. Ovvoru column um evidence oda compare pannunga.
+    3. Agree na Verified pannunga. Ovvoru change um audit la record aagum.
+  "Verified" ku reviewer statement venum (enna check panneenga nu).
+  Master table GARMENT_DEMO la illadha columns (fabric quality, yarn count,
+  accessory item) verify panna mudiyaadhu, adhunaala ezhudhaadhu.
+
+DATA DICTIONARY
+  - Tables & business names: tables / columns ku business name, synonyms
+    (unga team use pannura words). Ask AI andha words ah purinjukkum.
+  - Relationships: table links ah confirm / reject pannalaam. Confirm
+    aagaadha links answer confidence ah kammi pannum.
+  - Confirmed answers: "Correct - remember it" panna answers. Delete
+    pannalaam.
+  - "Refresh from Oracle": Oracle la pudhu table / column add aanaa.
+
+ORDER FIELDS
+  Endha order fields required nu (Required tick), and Excel la andha field
+  ku vera peyargal (aliases: "Del Dt" = delivery date madhiri).
+
+LAYOUT TEMPLATES
+  Save panna buyer formats. Versions, evlo thadava use aachu, off pannalaam.
+
+ANSWER ACCURACY
+  "Run the check" click panna, golden questions (config\golden_questions.json
+  + data\golden_questions.json) ah Ask AI kitta kettu, adhoda answer ah
+  hand-written SQL answer oda compare pannum. "12 of 12 correct" madhiri
+  score. Wrong aanaa endha kelvi, rendu answer um kaattum. Unga company oda
+  kelvigalai data\golden_questions.json la add pannalaam (same format).
+  Data dictionary or AI model maathuna apram idha run pannunga.
+
+USERS & ROLES
+  Users add, role maathu, password reset, off pannu. Kadaisi admin ah off
+  panna mudiyaadhu.
+
+AUDIT HISTORY
+  Ellaa actions um: login, thappu login, upload, edit, preview, approve,
+  save, mapping change, user change, MCP use, accuracy runs. Yaaru, eppo,
+  enna.
+
+SETTINGS
+  - Default exporter (ovvoru order layum pre-fill).
+  - Default sample type.
+  - Allow the person who uploaded a file to approve it (OFF = four-eyes).
+
+
+--------------------------------------------------------------------------------
+PART 12. LOCAL AI (OLLAMA) - OPTIONAL
+--------------------------------------------------------------------------------
+
+  Install: https://ollama.com (Windows installer), apram PowerShell la:
+       ollama pull qwen2.5:7b
+  Ollama odumbodhu Overview la light green aagum.
+  Enna pannum:
+    - Pudhu Excel format la endha cell enna nu SUGGEST pannum (neenga confirm).
+    - Ask AI la kashtamaana kelvigalai purinjukka udhavum. Rules um AI um
+      rendum padikkum; rendum vera answer sonna "Did you mean" kaattum.
+  Enna pannaadhu: SQL ezhudhaadhu, save pannaadhu, Oracle ah thodaadhu.
+  Ollama illama kooda ellame odum.
+
+
+--------------------------------------------------------------------------------
+PART 13. COMMANDS (POWERSHELL, D:\oracle LA)
+--------------------------------------------------------------------------------
+
+  Command                                       Eppo / enna pannum
+  --------------------------------------------  ---------------------------------
+  .\setup.ps1 -Dev                              Mudhal thadava, illa pudhu
+                                                packages vandhaa. Python venv,
+                                                packages, Oracle accounts
+                                                (POPPYS_APP, POPPYS_RO), grants,
+                                                connection check. Data delete
+                                                aagaadhu. Thirumba run
+                                                pannalaam.
+  .\start.ps1                                   App start. Window open aa
+                                                irukkanum.
+  .\verify_local.ps1                            Full check: Oracle connection +
+                                                ellaa tests (Oracle tests um) +
+                                                Ask AI accuracy. Report:
+                                                data\local_verification.txt.
+                                                TEST- nu sila test orders save
+                                                pannum.
+  .\.venv\Scripts\python.exe scripts\check_oracle.py
+                                                Oracle connection, endha tables
+                                                theriyudhu / insert pannalaam.
+  .\.venv\Scripts\python.exe scripts\discover_schema.py
+                                                GARMENT_DEMO structure padikkum
+                                                (password kekkum, save aagaadhu).
+                                                data\schema_discovery.json/.md.
+                                                SELECT mattum.
+  .\.venv\Scripts\python.exe scripts\run_benchmark.py
+                                                Ask AI accuracy check (command
+                                                line la).
+  .\.venv\Scripts\python.exe scripts\reset_login.py
+                                                Ellaa login accounts um delete
+                                                (password marandhaa).
+  .\.venv\Scripts\python.exe scripts\backup.py  Backup / restore (RUNBOOK).
+  .\.venv\Scripts\python.exe scripts\mcp_server.py
+                                                AI coding tool ku read-only MCP
+                                                server (PART 16).
+  python scripts\build_release.py               Offline install package build
+                                                (internet irukura computer la).
+  .\setup.ps1 -Offline                          Internet illadha laptop la
+                                                release package la irundhu
+                                                install.
+
+  Python script run panna eppovume .\.venv\Scripts\python.exe use pannunga
+  (verum "python" vera Python ah edukkalaam).
+
+
+--------------------------------------------------------------------------------
+PART 14. ROLE WISE DAILY WORK
+--------------------------------------------------------------------------------
+
+OPERATOR (merchandiser / data entry):
+  1. New order -> buyer Excel upload.
+  2. Review la red fields fill pannunga (OC No, dates, quantity choice).
+  3. "Check & continue". Red pogura varaikum fix.
+  4. Approver ku sollunga (Overview work queue la theriyum).
+
+APPROVER:
+  1. Overview -> work queue -> file open.
+  2. "Open the approval view": flowchart, rows, warnings ellam padinga.
+  3. Sari na "Accept and save to Oracle".
+  4. Saved screen la green ticks paarunga. Venumna "Open in Database".
+
+ADMIN:
+  - Pudhu staff ku accounts (Users & roles).
+  - Pudhu buyer format vandhaa template confirm.
+  - Fabric / yarn / trims save panna Write mapping verify.
+  - Vaaram oru thadava: Answer accuracy run, Audit history paarunga, backup
+    check (RUNBOOK section 4).
+
+MANAGER / VIEWER:
+  - Ask AI la kelvi: buyer wise, month wise, size wise quantities.
+  - Database la orders paakalaam.
+
+
+--------------------------------------------------------------------------------
+PART 15. BACKUP, WINDOWS SERVICE, UPGRADE
+--------------------------------------------------------------------------------
+
+Full steps docs\RUNBOOK.md la irukku. Surukkam:
+  - Windows service: deploy\windows\install-service.ps1. Laptop on aanaale
+    app odum, start.ps1 thevai illa. (Real Windows la innum test aagala.)
+  - Nightly backup: deploy\windows\backup-task.ps1 -RunNow. Dhinamum 01:30 ku
+    local data (users, drafts, templates, mapping, audit) backup.
+    -SecondCopy D:\PoppysBackups vera drive kum copy.
+  - Restore drill maasam oru thadava (RUNBOOK section 5).
+  - Upgrade: deploy\windows\upgrade.ps1; prachanai na rollback.ps1.
+  - Oracle data backup Oracle / Docker side la thaniyaa pannanum (idhu
+    POPPYS AI local data mattum).
+  - .env.poppys (Oracle passwords) file ah safe aana edathula copy
+    vechukonga. Adhu GitHub ku pogaadhu.
+
+
+--------------------------------------------------------------------------------
+PART 16. MCP SERVER (AI CODING TOOLS KU, OPTIONAL)
+--------------------------------------------------------------------------------
+
+  Claude Code madhiri tool unga laptop la ERP ah study panna:
+  project folder la .mcp.json:
+    {"mcpServers": {"poppys-erp": {"command": ".venv\\Scripts\\python.exe",
+                                    "args": ["scripts\\mcp_server.py"]}}}
+  Tools: search_catalog, describe_table, relationship_path, evidence, ask,
+  run_intent, accuracy_report. Ellame read-only, Ask AI checks oda. Ezhudhura
+  tool edhuvum illa. Ovvoru use um audit la. Raw SQL off (--allow-sql
+  pottaa mattum, adhuvum safety check + read-only).
+
+
+--------------------------------------------------------------------------------
+PART 17. DATA SAFETY - ENNA ENNA PAADHUKAAKKUDHU
+--------------------------------------------------------------------------------
+
+  - Moonu Oracle accounts: GARMENT_DEMO (data owner, POPPYS AI use pannaadhu
+    except discover_schema), POPPYS_APP (save panna; masters + order tables
+    ku INSERT mattum, UPDATE/DELETE illa), POPPYS_RO (Ask AI / Database ku
+    SELECT mattum).
+  - Ask AI query ellam oru independent safety checker (SQLGlot) pass
+    pannanum; Oracle um read-only transaction la run pannum.
+  - Save: write lock, approve panna exact preview hash, ore transaction,
+    row by row read-back, receipt.
+  - Login: strong password hashing (scrypt), thappu password limit, session
+    timeout, vera website la irundhu request block.
+  - Passwords GitHub la illa. Oracle passwords .env.poppys la mattum
+    (git ignore). GARMENT_DEMO password script kekkumbodhu type pannradhu,
+    enga um save aagaadhu.
+  - Oracle la POPPYS AI sessions "POPPYS AI" nu peyar oda theriyum (DBA
+    V$SESSION la paakalaam).
+
+
+--------------------------------------------------------------------------------
+PART 18. PRACHANAI VANDHAA (TROUBLESHOOTING)
+--------------------------------------------------------------------------------
+
+  Prachanai                                 Enna pannanum
+  ----------------------------------------  ------------------------------------
+  Browser: "127.0.0.1 refused to connect"   App odala. PART 4 START steps.
+                                            start.ps1 window close aagiducha nu
+                                            paarunga.
+  "not a git repository" /                  cd D:\oracle mudhalla pannunga.
+  ".\start.ps1 is not recognized"
+  "cannot be loaded because running         Set-ExecutionPolicy -Scope Process
+  scripts is disabled"                      Bypass -Force, apram thirumba.
+  "address already in use" / port 8008      Innoru window la start.ps1 odudhu.
+                                            Adha Ctrl + C, illa Task Manager la
+                                            pazhaya python ah end task.
+  Oracle light red / "Oracle is not         Docker Desktop open; docker ps la
+  connected"                                oracle26ai healthy aa nu paarunga.
+                                            Apram page refresh.
+  "Too many wrong passwords. Wait N         N seconds wait panni correct
+  seconds"                                  password.
+  Password marandhaachu                     PART 5: reset_login.py.
+  Login aagi konja neram la logout          30 nimisham idle. Thirumba login.
+  "That password is too easy to guess"      Vera password (PART 5 rules).
+  File upload aagala / "unsupported"        PDF / Word / image na support illa.
+                                            Excel la "Save As .xlsx" panni try.
+                                            12 MB ku mela na periya file.
+  "already been committed"                  Ore file thirumba save panna
+                                            mudiyaadhu. Saved orders la paarunga.
+  "order reference ... already exists"      OC No vera kudunga. Existing order
+                                            maaraadhu.
+  "Check & continue" pannina apram red      Andha field la keela karanam irukku.
+                                            "Show me the next one".
+  Fabric / trims "reference only - not      Admin Setup -> Write mapping la
+  saved"                                    verify pannanum.
+  Ask AI: "read-only account ... not set    .\setup.ps1 -Dev thirumba (POPPYS_RO
+  up"                                       create aagum).
+  Ask AI answer thappu                      "✗ Not right" click; Data dictionary
+                                            la synonyms add; Answer accuracy
+                                            run. Enakku kelvi + answer anuppunga.
+  Pudhu version vandhum pazhaya screen      Ctrl + F5.
+  Edhavadhu vera error                      Screen + PowerShell screenshot
+                                            anuppunga; Setup -> Audit history
+                                            um paarunga.
+
+
+--------------------------------------------------------------------------------
+PART 19. FOLDERS & FILES - EDHU ENGA
+--------------------------------------------------------------------------------
+
+  D:\oracle                     Project (GitHub la irundhu).
+  D:\oracle\.env.poppys         Oracle passwords (POPPYS_APP, POPPYS_RO).
+                                Yaarukum anuppaadheenga. Safe copy vechukonga.
+  D:\oracle\data\               Local data: poppys.sqlite3 (users, drafts,
+                                templates, mapping, audit, Ask AI history),
+                                uploads, schema_discovery.*, reports.
+                                GitHub ku pogaadhu.
+  D:\oracle\config\             Mapping registry (oracle_mapping.json), golden
+                                questions, common password list.
+  D:\oracle\docs\               Manuals: indha file, WINDOWS_SETUP.md (install),
+                                RUNBOOK.md (operations), IMPLEMENTATION_STATUS.md
+                                (enna mudinjadhu / baaki), ARCHITECTURE.md,
+                                RESEARCH_DECISIONS.md, OPEN_SOURCE_RESEARCH.md.
+  D:\oracle\frontend\           Browser screens.
+  D:\oracle\backend\            Server, Excel reading, Oracle, Ask AI.
+  D:\oracle\scripts\            Commands (PART 13).
+  D:\oracle\deploy\windows\     Windows service, backup task, upgrade/rollback.
+
+
+--------------------------------------------------------------------------------
+PART 20. IPPO NILAMAI - ENNA MUDINJADHU, ENNA BAAKI (2026-10-18)
+--------------------------------------------------------------------------------
+
+MUDINJADHU + CLOUD LA TEST AACHU (465 automated tests pass):
+  Excel reading (ellaa formats), Review screen, validation, approval, Oracle
+  save + read-back, Saved orders, Ask AI (6 checks, accuracy check), Database
+  explorer, Setup (ellaa parts), roles, audit, undo/redo, login security,
+  master matching, MCP server, backup/restore scripts, offline package.
+
+UNGA LAPTOP LA PASS AACHU:
+  setup.ps1 -Dev, Oracle connection (POPPYS_APP + POPPYS_RO), schema
+  discovery (19 tables, 727 columns).
+
+UNGA LAPTOP LA INNUM PANNANUM:
+  1. .\verify_local.ps1 (ellaa tests + accuracy, Summary screenshot).
+  2. Browser la Demo A: Excel upload -> approve -> Oracle save -> Saved
+     screen green ticks.
+  3. Browser la Demo B: Ask AI kelvigal, checks paarunga; Setup -> Answer
+     accuracy -> Run the check.
+  4. Ollama install panni Ask AI test.
+  5. (Venumna) Windows service + nightly backup install.
+  Idhu ellam pass aana dhaan "complete" nu solluvom.
+
+INNUM BUILD PANNA VENDIYADHU (mukkiyam order la):
+  1. Units: DZN, SET, PR, CTN madhiri units ah pieces aa convert.
+  2. Save aanadhum automatic aa fresh connection la read-back + totals
+     (colour / size wise) verify, VERIFIED status.
+  3. Ore order vera format / vera OC No la thirumba vandhaa kandupidikkura
+     import ledger; amendment flow.
+  4. Validators: date range, buyer wise PO pattern, BOM wastage limits.
+  5. Approve la reject + reason; four-eyes default.
+  6. Oracle connection pool, timeouts; READ grants.
+  7. Periya database ku performance (paging, counts), 200+ golden questions.
+  8. Logs, health endpoints, audit chain.
+  9. Passwords Windows DPAPI la (plain .env.poppys ku badhila).
+  Full list: docs\IMPLEMENTATION_STATUS.md -> "Production gaps".
+
+
+--------------------------------------------------------------------------------
+PART 21. CHINNA DICTIONARY
+--------------------------------------------------------------------------------
+
+  Master          Buyer, style, colour, size, unit, merchandiser list tables
+                  (BUYMAS, STYLENUM, COLORMAS, SIZE_MAS, UNITMAS, MERCHMAS).
+  ORDMAS          Order header table (ORDMASID = order record ID,
+                  DOCID = order reference / OC No).
+  ORDSTYLE        Order oda colour / style lines.
+  ORDSIZE         Line oda size wise quantity.
+  ORDFAB/ORDYARN/ORDACC  Fabric, yarn, accessories (BOM).
+  Draft           Upload panni innum save aagaadha order.
+  Preview / plan  Save aaga pogura exact rows.
+  Read-back       Save aanadhum Oracle la irundhu thirumba padichu compare.
+  Template        Oru buyer oda Excel format, save pannadhu.
+  Verified        Evidence oda admin confirm panna mapping / relationship.
+  Golden question Correct answer theriyum kelvi (accuracy check ku).
+  Read-only       Padikka mattum, maatha mudiyaadhu.
+
+================================================================================
+  Kelvi irundha, screen + PowerShell screenshot oda kelunga.
+================================================================================
