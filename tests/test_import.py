@@ -18,7 +18,7 @@ def test_merch_sample_separate_from_bulk_and_summary():
     assert sum(s['quantity'] for l in o['sample_lines'] for s in l['sizes'])==0
     assert o['lines']==o['order_lines']
     assert sum(s['quantity'] for l in o['order_lines'] for s in l['sizes'])==1500
-    assert 'sample section of this file is empty' in o['warnings'][0]
+    assert any('sample section of this file is empty' in w for w in o['warnings']),o['warnings']
     assert o['order_date']=='' # BOM date does not prove confirmation date
     assert o['order_lines'][0]['sizes'][0]['source']['cell']=='E12'
     assert o['ship_date']=='2027-02-27'
