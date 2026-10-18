@@ -166,6 +166,10 @@ def plan(catalog, orders, filehash, mapping, required=()):
     for table, spec in tables.items():
         skipped[table] = [c for c, s in spec['columns'].items() if s['status'] != 'verified']
 
+    from ..config import OWNER
+    if mapping.get('owner') and mapping['owner'].upper() != OWNER:
+        issues.error(f'The write mapping was made for the Oracle schema {mapping["owner"]}, but this installation reads {OWNER}. '
+                     'Saving stays off until a write mapping for this schema is prepared and verified.')
     if not orders or len(orders) > LIMITS['orders']:
         issues.error('Import must contain 1–50 orders.')
     if catalog.file_committed(filehash):
@@ -192,7 +196,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
         if code in known:
             return known[code]
         if table not in registry or pk not in registry[table] or col not in registry[table]:
-            issues.error(f'{where}: the {spec["business"].lower()} master ({table}) is not available in GARMENT_DEMO. '
+            issues.error(f'{where}: the {spec["business"].lower()} master ({table}) is not available in the ERP schema. '
                          f'Leave this column unverified or grant access to the master table.', path)
             return None
         if role not in lookups:

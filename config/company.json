@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "about": "One installation = one company (docs/COMPANY_CONFIGURATION.md). Business defaults below are the starting values of Setup → Settings; a value changed there is kept in the local store and wins. The ERP block says which Oracle schema this installation reads and which write mapping belongs to it.",
+  "company": {
+    "name": "POPPYS KNITWEAR PRIVATE LIMITED"
+  },
+  "defaults": {
+    "company_exporter": "POPPYS KNITWEAR PRIVATE LIMITED",
+    "default_sample_type": "DEVELOPMENT SAMPLE",
+    "allow_self_approval": false
+  },
+  "erp": {
+    "adapter": "axpert-direct-insert",
+    "owner": "GARMENT_DEMO",
+    "write_mapping": "config/oracle_mapping.json"
+  }
+}

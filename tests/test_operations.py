@@ -89,3 +89,23 @@ def test_the_local_ai_is_only_ever_called_on_this_computer_or_the_local_network(
         with pytest.raises(RuntimeError, match='nothing was sent'):
             ai._chat([{'role': 'user', 'content': 'x'}])
         assert not sent and ai.status()['available'] is False
+
+
+def test_another_schema_can_be_read_but_never_written_with_a_mapping_made_for_a_different_one(monkeypatch):
+    from backend import config, workbooks
+    from backend.erp import catalog, mapping, planner
+    o = workbooks.base_order()
+    o.update(buyer='B', style='S', description='D', po_number='P', order_ref='R/1', order_date='2026-10-17', ship_date='2026-11-01',
+             quantity_basis='sample', qty_unit='PCS', pieces_per_unit=1, sample_type='X',
+             lines=[dict(label='S', color='RED', declared_total=None, sizes=[dict(size='M', quantity=1)])])
+    assert not any('write mapping was made' in e for e in planner.plan(catalog.SnapshotCatalog(), [o], 'h' * 64, mapping.effective())['errors'])
+    monkeypatch.setattr(config, 'OWNER', 'OTHER_ERP')
+    errors = planner.plan(catalog.SnapshotCatalog(), [o], 'h' * 64, mapping.effective())['errors']
+    assert any('made for the Oracle schema GARMENT_DEMO, but this installation reads OTHER_ERP' in e for e in errors)
+
+
+def test_the_company_profile_supplies_the_starting_settings():
+    from backend import config
+    assert config.COMPANY['erp']['owner'] == 'GARMENT_DEMO'
+    assert main.DEFAULT_SETTINGS['company_exporter'] == config.COMPANY['defaults']['company_exporter']
+    assert main.DEFAULT_SETTINGS['allow_self_approval'] is False

@@ -18,7 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
 from . import auth, coverage, evidence, logs, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
-from .config import DATA, ROOT, OWNER, setting
+from .config import COMPANY, DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
 from .erp import planner
@@ -42,7 +42,9 @@ PERMISSIONS = {
     'approver': ['view', 'upload', 'edit', 'preview', 'approve', 'audit'],
     'admin': ['view', 'upload', 'edit', 'preview', 'approve', 'audit', 'users', 'mapping', 'templates', 'settings'],
 }
-DEFAULT_SETTINGS = dict(allow_self_approval=False, company_exporter='POPPYS KNITWEAR PRIVATE LIMITED', default_sample_type='DEVELOPMENT SAMPLE')
+# Starting values of Setup → Settings come from the company profile (config/company.json); a saved setting wins.
+DEFAULT_SETTINGS = dict(dict(allow_self_approval=False, company_exporter='', default_sample_type=''),
+                        **{k: v for k, v in (COMPANY.get('defaults') or {}).items() if k in ('allow_self_approval', 'company_exporter', 'default_sample_type')})
 
 
 @asynccontextmanager
