@@ -270,3 +270,30 @@ def test_merch_bom_lists_its_unsaved_summary_block_and_bom_rows(env):
     d = upload(c, merch_bom())
     assert any('rows 20–21' in e for e in d['coverage']['exclusions']), d['coverage']['exclusions']
     _ = BytesIO
+
+
+def test_verified_only_after_an_independent_read_back_with_control_totals(env):
+    c, oracle, _ = env
+    self_approval(c)
+    d = upload(c, flat_qty_orders()); p = ready(c, d)
+    assert c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).status_code == 200
+    assert c.get('/api/drafts').json()[0]['status'] == 'Saved, not verified yet'
+    g = c.get(f'/api/history/{d["id"]}/graph').json()
+    assert g['verified'] and {x['check']: (x['expected'], x['found']) for x in g['controls']} == {
+        'Pieces (sum of the size quantities)': (2500, 2500), 'Orders saved': (1, 1), 'Lines saved': (2, 2)}
+    assert c.get('/api/drafts').json()[0]['status'] == 'Verified, with exceptions'   # the "not saved" list of this file
+    size = next(t for t in oracle.rows if t == 'ORDSIZE')
+    first = next(iter(oracle.rows[size])); oracle.rows[size][first]['RQTY'] += 1          # someone changed Oracle afterwards
+    g = c.get(f'/api/history/{d["id"]}/graph').json()
+    assert not g['verified'] and any(not x['ok'] for x in g['controls'])
+    assert c.get('/api/drafts').json()[0]['status'] == 'Saved, differences found'
+    assert any(e['action'] == 'verification_failed' for e in c.get('/api/audit').json())
+
+
+def test_the_same_business_order_from_another_workbook_is_flagged_before_approval(env):
+    c, _, _ = env
+    self_approval(c)
+    d = upload(c, flat_qty_orders()); p = ready(c, d, ref='TEST/DUP/1')
+    assert c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).status_code == 200
+    again = ready(c, upload(c, flat_qty_orders(qty_header='Quantity'), 'resent.xlsx'), ref='TEST/DUP/2', buyer='testbuyer ', po_number='PO-1')
+    assert any('were already saved as TEST/DUP/1' in w for w in again['plan']['warnings']), again['plan']['warnings']

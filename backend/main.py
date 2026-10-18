@@ -688,6 +688,12 @@ def preview(id: str, data: Version, user=Depends(require('preview'))):
         d['plan'] = _plan(d)
         d['plan']['graph'] = readback.planned(d['plan'], oracle.current_mapping())
         cover(d); d['plan']['exceptions'] = exceptions(d)
+        for i, o in enumerate(d['orders']):
+            for prev in store.same_business_order(o, exclude_job=id):
+                d['plan']['warnings'].append(
+                    f'Order {i + 1}: buyer {o.get("buyer")}, PO {o.get("po_number")} and style {o.get("style")} were already saved as '
+                    f'{prev["order_ref"]} on {str(prev["committed_at"] or "")[:10]}. If this file is a re-sent copy, do not save it again; '
+                    'if it is an amendment, POPPYS AI saves it as a NEW order (it never changes a saved one).')
         # Preview itself is a revision, preventing an earlier accept from approving a replaced preview.
         old = d['version']; d['version'] += 1; store.save(d, user['username'], old)
         store.audit(user['username'], 'preview', id, errors=len(d['plan']['errors']), warnings=len(d['plan']['warnings']),
@@ -723,6 +729,7 @@ def _record_saved(d, result, user, expected):
     d['result'] = result; d.pop('outcome', None); d['version'] = expected + 1
     try:
         store.save(d, user['username'], expected)
+        store.record_saved(d)
         store.audit(user['username'], 'approved_saved', d['id'], orders=result.get('orders'), rows=len(result.get('rows', [])),
                     plan_hash=result.get('plan_hash') or (d.get('plan') or {}).get('hash'), complete=result.get('complete'))
     except Exception as exc:
@@ -853,10 +860,9 @@ def history(user=Depends(authenticated)):
         try:
             d = store.get(record['job_id'])
             record.update(filename=d['filename'], format=d['format'], orders=[o.get('order_ref') for o in d['orders']],
-                          styles=[o.get('style') for o in d['orders']],
-                          status='Saved with exceptions' if (d.get('result') or {}).get('complete') is False else 'Saved')
+                          styles=[o.get('style') for o in d['orders']], status=store._status(d) if d.get('result') else 'Saved, not verified yet')
         except KeyError:
-            record['status'] = 'Saved'
+            record['status'] = 'Saved, not verified yet'
     return records
 
 
@@ -871,12 +877,40 @@ def history_result(id: str, user=Depends(authenticated)):
 
 @app.get('/api/history/{id}/graph')
 def history_graph(id: str, user=Depends(authenticated)):
+    """Stage B verification: the committed rows are read on a NEW connection of the separate read-only account (the
+    application account only when that is not set up) and compared with the receipt and the approved totals."""
     m = oracle.current_mapping()
     with oracle.connect() as conn:
         result = oracle.read_result(conn.cursor(), id)
-        if not result:
-            raise HTTPException(404, 'Import receipt not found.')
-        return readback.graph(result, m, lambda table, pk, ids: oracle.live_rows(conn, table, pk, ids, m))
+    if not result:
+        raise HTTPException(404, 'Import receipt not found.')
+    try:
+        reader = oracle.connect_readonly(); account = 'read-only account, new connection'
+    except Exception:
+        reader = oracle.connect(); account = 'application account, new connection (the read-only account is not set up)'
+    with reader:
+        g = readback.graph(result, m, lambda table, pk, ids: oracle.live_rows(reader, table, pk, ids, m))
+    g['read_by'] = account; g['read_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
+    _record_verification(id, g, user)
+    return g
+
+
+def _record_verification(id, g, user):
+    """Keep the latest read-back outcome on the draft (the Saved orders status says Verified only from here)."""
+    with draft_lock(id):
+        try:
+            d = store.get(id)
+        except KeyError:
+            return
+        mismatched = sum(1 for n in g['nodes'] for r in n['records'] if not r['matches'])
+        v = dict(verified=g['verified'], at=g['read_at'], by=user['username'], read_by=g['read_by'], mismatched_rows=mismatched,
+                 controls=g.get('controls') or [])
+        if (d.get('verification') or {}).get('verified') == v['verified'] and d.get('verification', {}).get('mismatched_rows') == mismatched:
+            return
+        d['verification'] = v
+        store.save(d, user['username'], d['version'])
+        store.audit(user['username'], 'verified' if v['verified'] else 'verification_failed', id, mismatched_rows=mismatched,
+                    controls=[c for c in v['controls'] if not c['ok']])
 
 
 # --- mapping registry, templates, audit --------------------------------------------------

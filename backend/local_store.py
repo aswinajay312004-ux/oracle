@@ -54,7 +54,16 @@ def init():
         CREATE TABLE IF NOT EXISTS auth_failures(username TEXT NOT NULL,address TEXT NOT NULL,at REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS auth_failures_user ON auth_failures(username,at);
         CREATE INDEX IF NOT EXISTS auth_failures_address ON auth_failures(address,at);
+        CREATE TABLE IF NOT EXISTS import_ledger(job_id TEXT NOT NULL,order_ref TEXT NOT NULL,buyer TEXT,po TEXT,style TEXT,
+            filehash TEXT,ordmasid TEXT,committed_at TEXT,PRIMARY KEY(job_id,order_ref));
+        CREATE INDEX IF NOT EXISTS import_ledger_business ON import_ledger(buyer,po,style);
         ''')
+        # Backfill: orders saved before the ledger existed (their receipts are in the drafts).
+        if not c.execute('SELECT 1 FROM import_ledger LIMIT 1').fetchone():
+            for (payload,) in c.execute('SELECT payload FROM drafts').fetchall():
+                d = json.loads(payload)
+                if d.get('result'):
+                    _ledger_rows(c, d)
         scols = {r['name'] for r in c.execute('PRAGMA table_info(sessions)')}
         # Additive migration: idle timeout (backend/auth.py). Sessions from before it count as just used.
         if 'last_seen' not in scols:
@@ -74,6 +83,38 @@ def init():
             c.execute('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1')
         if 'created_at' not in cols:
             c.execute('ALTER TABLE users ADD COLUMN created_at TEXT')
+
+
+# --- import ledger: one row per saved order, by its business key ----------------------------------------
+def business_key(o):
+    """(buyer, PO, style) in the grouping form: the same business order whatever the file or its spelling."""
+    from .erp.masters import fingerprint
+    return tuple(fingerprint(o.get(k)) for k in ('buyer', 'po_number', 'style'))
+
+
+def _ledger_rows(c, d):
+    ids = {str(x.get('order_ref') or '').upper(): x.get('ordmasid') for x in (d.get('result') or {}).get('orders') or []}
+    for o in d.get('orders') or []:
+        buyer, po, style = business_key(o)
+        c.execute('INSERT OR IGNORE INTO import_ledger VALUES (?,?,?,?,?,?,?,?)',
+                  (d['id'], str(o.get('order_ref') or ''), buyer, po, style, d.get('filehash'),
+                   str(ids.get(str(o.get('order_ref') or '').upper()) or ''), (d.get('result') or {}).get('committed_at')))
+
+
+def record_saved(d):
+    with db() as c:
+        _ledger_rows(c, d)
+
+
+def same_business_order(o, exclude_job=None):
+    """Saved orders with the same buyer, PO and style (another workbook, a re-sent or amended order)."""
+    buyer, po, style = business_key(o)
+    if not (buyer and po and style):
+        return []
+    with db() as c:
+        rows = c.execute('SELECT job_id,order_ref,ordmasid,committed_at FROM import_ledger WHERE buyer=? AND po=? AND style=? AND job_id<>?',
+                         (buyer, po, style, exclude_job or '')).fetchall()
+        return [dict(r) for r in rows]
 
 
 # --- audit -----------------------------------------------------------------
@@ -258,7 +299,12 @@ def _pieces(orders):
 def _status(d):
     p = d.get('plan')
     if d.get('result'):
-        return 'Saved with exceptions' if d['result'].get('complete') is False else 'Saved to Oracle'
+        v = d.get('verification') or {}; exceptions = d['result'].get('complete') is False
+        if v.get('verified'):
+            return 'Verified, with exceptions' if exceptions else 'Verified in Oracle'
+        if v:
+            return 'Saved, differences found'
+        return 'Saved, not verified yet'
     if (d.get('outcome') or {}).get('state') == 'unknown':
         return 'Save outcome unknown'
     if d.get('outcome'):

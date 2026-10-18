@@ -67,10 +67,11 @@ async function history() {
   await busy('Reading saved imports from Oracle…', async () => {
     let list;
     try { list = await api('/api/history'); } catch (e) { $('#history').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
-    $('#history').innerHTML = list.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order</th><th>Approved by</th><th>Saved</th><th></th></tr></thead><tbody>
+    $('#history').innerHTML = list.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order</th><th>Approved by</th><th>Saved</th><th>Status</th><th></th></tr></thead><tbody>
       ${list.map(r => `<tr class="clickable" data-receipt="${esc(r.job_id)}"><td><b>${esc(r.filename || r.job_id)}</b><div class="muted small-text">${esc(r.format || '')}</div></td>
         <td>${esc((r.orders || []).join(', ') || '—')}<div class="muted small-text">${esc((r.styles || []).join(', '))}</div></td><td>${esc(r.approver)}</td>
-        <td class="nowrap">${esc(new Date(r.committed_at).toLocaleString())}</td><td><button class="secondary small" data-receipt="${esc(r.job_id)}">Show where it was saved</button></td></tr>`).join('')}
+        <td class="nowrap">${esc(new Date(r.committed_at).toLocaleString())}</td>
+        <td><span class="pill ${({ 'Verified in Oracle': 'ok', 'Verified, with exceptions': 'warn', 'Saved, differences found': 'err' })[r.status] || 'info'}">${esc(r.status || 'Saved')}</span></td><td><button class="secondary small" data-receipt="${esc(r.job_id)}">Show where it was saved</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="empty">No orders have been saved yet.</p>';
   });
 }

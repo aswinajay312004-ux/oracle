@@ -47,7 +47,7 @@ export async function recent() {
       ${drafts.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><span class="row"><span class="file-badge">XLS</span><span><b>${esc(d.filename)}</b><br><span class="muted small-text">${esc(d.format)}</span></span></span></td>
         <td>${esc((d.styles || []).filter(Boolean).join(', ') || '—')}<br><span class="muted small-text">${esc((d.buyers || []).filter(Boolean).join(', '))}</span></td>
         <td class="nowrap">${esc(d.uploaded_by || '')}<br><span class="muted small-text">${d.created_at ? esc(new Date(d.created_at).toLocaleString()) : ''}</span></td>
-        <td><span class="pill ${({ 'Saved to Oracle': 'ok', 'Saved with exceptions': 'warn', 'Ready to approve': 'info', 'Needs attention': 'err', 'Checked offline': 'warn', 'Save outcome unknown': 'err', Saving: 'warn' })[d.status] || ''}">${esc(d.status)}</span></td><td><button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></td></tr>`).join('')}
+        <td><span class="pill ${({ 'Verified in Oracle': 'ok', 'Verified, with exceptions': 'warn', 'Saved, not verified yet': 'info', 'Saved, differences found': 'err', 'Ready to approve': 'info', 'Needs attention': 'err', 'Checked offline': 'warn', 'Save outcome unknown': 'err', Saving: 'warn' })[d.status] || ''}">${esc(d.status)}</span></td><td><button class="secondary small" data-open-draft="${esc(d.id)}">Open</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="empty">Your uploads will appear here.</p>';
   } catch (e) { $('#recent').innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
 }
@@ -155,7 +155,7 @@ export function renderReview() {
   root.innerHTML = `
     <div class="card doc-bar"><span class="file-badge">XLS</span>
       <div><span class="name">${esc(d.filename)}</span><small>${d.template ? `Saved layout “${esc(d.template.name)}” (v${esc(d.template.version)})` : esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
-      <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? 'Saved to Oracle' : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
+      <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? (d.verification?.verified ? 'Verified in Oracle' : 'Saved to Oracle') : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
       ${undoButtons()}<a class="button ghost small" href="/api/drafts/${esc(id(d.id))}/original" download title="The file exactly as uploaded (SHA-256 ${esc((d.filehash || '').slice(0, 12))}…)">Original file</a><button class="ghost small" data-act="ask-file">Ask about this file</button>${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
     ${d.outcome ? outcomeBanner(d) : ''}
     ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}

@@ -87,8 +87,40 @@ def graph(receipt, mapping, read):
                 mt = mapping['masters'][c['master']]['table']
                 if mt in present and not any(e['source'] == mt and e['target'] == table and e['on'] == col for e in edges):
                     edges.append(dict(source=mt, target=table, label=c['label'], on=col))
-    return dict(job_id=receipt.get('job_id'), committed_at=receipt.get('committed_at'), verified=verified and bool(nodes),
+    controls = control_totals(receipt, nodes, mapping)
+    return dict(job_id=receipt.get('job_id'), committed_at=receipt.get('committed_at'),
+                verified=verified and bool(nodes) and all(c['ok'] for c in controls), controls=controls,
                 nodes=nodes, edges=edges, orders=receipt.get('orders', []))
+
+
+def control_totals(receipt, nodes, mapping):
+    """Totals recomputed from the rows Oracle returned, against the approved plan's totals: pieces (sum of the size
+    quantities) and the number of order headers, lines and size rows. A missing or extra row, or a changed quantity,
+    fails the verification even when every row read back matches its own receipt values."""
+    totals = receipt.get('totals') or {}
+    live = {n['table']: [r['live'] for r in n['records'] if r['kind'] == 'written' and r['found']] for n in nodes}
+    levels = {spec.get('level'): t for t, spec in mapping['tables'].items()}
+    out = []
+    size_table = levels.get('size')
+    qty_col = next((c for c, x in mapping['tables'].get(size_table, {}).get('columns', {}).items()
+                    if x.get('field') == 'calc.pieces' and x.get('status') == 'verified'), None) if size_table else None
+    if size_table and qty_col and totals.get('pieces') is not None:
+        found = sum(_num(r.get(qty_col)) for r in live.get(size_table, []))
+        found = int(found) if found == found.to_integral_value() else float(found)
+        out.append(dict(check='Pieces (sum of the size quantities)', expected=totals['pieces'], found=found, ok=found == totals['pieces']))
+    for level, key in (('order', 'orders'), ('line', 'lines')):
+        t = levels.get(level)
+        if t and totals.get(key) is not None:
+            found = len(live.get(t, []))
+            out.append(dict(check=f'{key.capitalize()} saved', expected=totals[key], found=found, ok=found == totals[key]))
+    return out
+
+
+def _num(v):
+    try:
+        return Decimal(str(v)) if v is not None else Decimal(0)
+    except InvalidOperation:
+        return Decimal(0)
 
 
 def planned(plan, mapping):

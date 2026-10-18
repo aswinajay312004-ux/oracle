@@ -80,3 +80,15 @@ def test_live_readback_graph_matches_committed_rows():
         g = readback.graph(receipt, m, lambda t, pk, ids: db.live_rows(c, t, pk, ids, m))
     assert g['verified'], [n['table'] for n in g['nodes'] if not n['verified']]
     assert {'ORDMAS', 'ORDSTYLE', 'ORDSIZE'} <= {n['table'] for n in g['nodes']}
+
+
+@pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE') != '1', reason='Set POPPYS_TEST_ORACLE=1 for local Oracle tests')
+def test_axpert_gap_report_compares_axpert_rows_with_poppys_rows_read_only():
+    from scripts import axpert_gap_report as gap
+    with db.connect() as conn:
+        r = gap.report(conn, 'GARMENT_DEMO', sample=200)
+    ordmas = next(t for t in r['tables'] if t['table'] == 'ORDMAS')
+    assert ordmas['visible'] and ordmas['axpert_rows'] >= 1 and {c['column'] for c in ordmas['columns']} >= {'DOCID', 'BUYER', 'OQTY'}
+    docid = next(c for c in ordmas['columns'] if c['column'] == 'DOCID')
+    assert docid['axpert_pct'] == 100.0 and docid['status'] in ('both', 'no POPPYS rows')
+    assert '| Column |' in gap.markdown(r)
