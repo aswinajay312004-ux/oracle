@@ -94,7 +94,8 @@ export function formView(fields) {
 }
 
 export function csv(columns, rows) {
-  const q = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  // Text that starts like a formula (= + - @, tab, CR) is prefixed with ' so a spreadsheet shows it instead of running it.
+  const q = v => { let s = v == null ? '' : String(v); if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   const text = [columns.map(c => q(c.label)).join(','), ...rows.map(r => columns.map(c => q(r[c.index])).join(','))].join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/csv' }));
   a.download = 'poppys-answer.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);

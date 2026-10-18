@@ -658,43 +658,79 @@ PART 19. FOLDERS & FILES - EDHU ENGA
 
 
 --------------------------------------------------------------------------------
-PART 20. IPPO NILAMAI - ENNA MUDINJADHU, ENNA BAAKI (2026-10-18)
+PART 20. IPPO NILAMAI - ENNA MUDINJADHU, ENNA BAAKI (2026-10-18, update 2)
 --------------------------------------------------------------------------------
 
-MUDINJADHU + CLOUD LA TEST AACHU (465 automated tests pass):
-  Excel reading (ellaa formats), Review screen, validation, approval, Oracle
-  save + read-back, Saved orders, Ask AI (6 checks, accuracy check), Database
-  explorer, Setup (ellaa parts), roles, audit, undo/redo, login security,
-  master matching, MCP server, backup/restore scripts, offline package.
+STATUS: INNUM "PRODUCTION READY" ILLA. Rendu vishayam baaki:
+  (a) Axpert screens la POPPYS save panna order sariyaa varudhaa nu check.
+  (b) Unga laptop la pudhu code oda verify_local.ps1 run.
+  Report: docs\engineering\PRODUCTION_READINESS_REPORT.md
 
-UNGA LAPTOP LA PASS AACHU:
-  setup.ps1 -Dev, Oracle connection (POPPYS_APP + POPPYS_RO), schema
-  discovery (19 tables, 727 columns).
+TEST RESULTS (2026-10-18):
+  Cloud tests: 516 pass, 0 fail.
+  Real Oracle (Oracle Free 23.26, synthetic replica): 529 pass, 0 fail.
+  Ask AI accuracy (replica): 12 / 12 correct.
+  GitHub CI: ellaa 7 jobs um green (Windows + Oracle job sethu).
 
-UNGA LAPTOP LA INNUM PANNANUM:
-  1. .\verify_local.ps1 (ellaa tests + accuracy, Summary screenshot).
-  2. Browser la Demo A: Excel upload -> approve -> Oracle save -> Saved
-     screen green ticks.
-  3. Browser la Demo B: Ask AI kelvigal, checks paarunga; Setup -> Answer
-     accuracy -> Run the check.
-  4. Ollama install panni Ask AI test.
-  5. (Venumna) Windows service + nightly backup install.
-  Idhu ellam pass aana dhaan "complete" nu solluvom.
+PUDHUSAA VANDHADHU - NEENGA THERINJUKKA VENDIYADHU:
+  1. Four-eyes ippo default ON: upload / edit panna aal ae approve panna
+     mudiyaadhu. Thaniyaa test panna: Setup -> Settings -> "Allow the
+     person who uploaded..." tick pannunga (audit la record aagum), illa
+     oru approver account create pannunga.
+  2. Approve screen la "Read before approving" list varum: convert aagura
+     quantity (packs x pieces), pudhu master records (buyer/colour...),
+     Oracle la save aagaadha fields (Exporter, Season, Department...),
+     file la padikkaadha parts, layout maatrangal. "I have read this list"
+     tick pannaa dhaan Accept button work aagum.
+  3. Review screen la "not in Oracle" nu orange badge = andha field
+     POPPYS record la mattum irukkum, Oracle ku pogaadhu.
+  4. "Not read from the file" banner = Excel la irukkura numbers edhavadhu
+     order la varala. Click panni list paarunga (rendaavadhu table,
+     hidden sheet, summary block...).
+  5. "Show the file" button: Excel sheet order pakkathula varum. Oru field
+     click pannaa adhu endha cell la irundhu vandhuchu nu green box.
+     "Original file" button: upload panna exact file download.
+  6. Vera buyer, adhe Excel format: layout use aagum, aanaa andha buyer oda
+     "packs of 3" madhiri unit apply aagaadhu - kekkum. (120 -> 360 bug
+     fix aagiduchu.)
+  7. Excel la mela oru row / column insert pannaalum, oru size add
+     pannaalum saved layout labels vechu thirumba kandupidikkum; enna
+     maarichu nu approve list la kaattum.
+  8. Mapping screen la Excel cell ah drag panni field mela podalaam
+     (illa Pick / cell address type pannalaam).
+  9. Save aanadhum Oracle la irundhu thani read-only connection la padichu
+     totals check pannum. Saved orders la status:
+       Verified in Oracle / Verified, with exceptions /
+       Saved, not verified yet / Saved, differences found.
+ 10. Save podhu connection pochunna: "Save outcome unknown" nu varum.
+     Oracle start panni draft open panni "Check again" press pannunga.
+     Order rendu thadava save aagaadhu - kai la thirumba type pannaadheenga.
+ 11. Adhe buyer + PO + style munnadiye save aagirundhaa warning varum
+     (re-sent copy aa illa amendment aa nu paarunga).
+ 12. Ask AI: "how many tables in the database" madhiri kelvikku data
+     dictionary la irundhu answer. Puriyaadha kelvikku number kaattaama
+     "Did you mean ...?" nu kekkum.
+ 13. Browser Back button ippo app ulla screens maathum (app vittu
+     poagaadhu). Phone la sideways scroll illa.
 
-INNUM BUILD PANNA VENDIYADHU (mukkiyam order la):
-  1. Units: DZN, SET, PR, CTN madhiri units ah pieces aa convert.
-  2. Save aanadhum automatic aa fresh connection la read-back + totals
-     (colour / size wise) verify, VERIFIED status.
-  3. Ore order vera format / vera OC No la thirumba vandhaa kandupidikkura
-     import ledger; amendment flow.
-  4. Validators: date range, buyer wise PO pattern, BOM wastage limits.
-  5. Approve la reject + reason; four-eyes default.
-  6. Oracle connection pool, timeouts; READ grants.
-  7. Periya database ku performance (paging, counts), 200+ golden questions.
-  8. Logs, health endpoints, audit chain.
-  9. Passwords Windows DPAPI la (plain .env.poppys ku badhila).
-  Full list: docs\IMPLEMENTATION_STATUS.md -> "Production gaps".
+UNGA LAPTOP LA PANNANUM (order la):
+  cd D:\oracle
+  git pull
+  .\setup.ps1 -Dev
+  .\start.ps1      (sign in; four-eyes paththi mela point 1 paarunga)
+  .\verify_local.ps1          -> Summary screenshot anuppunga
+  Demo A: Excel upload -> review -> approve -> Saved orders la
+          "Verified in Oracle" varanum.
+  .\.venv\Scripts\python.exe scripts\axpert_gap_report.py
+          -> data\axpert_gap_report.md anuppunga (counts mattum, data illa)
+  Axpert screen la andha POPPYS order ah open panni enna missing nu sollunga.
 
+INNUM BAAKI (detail: docs\engineering\KNOWN_LIMITATIONS.md):
+  - Axpert compatibility verify (mela sonna gap report + screen check).
+  - Fabric / yarn / trims Oracle la save aagala (mapping verify aaganum).
+  - Exporter, Season, Department... Oracle la save aagala.
+  - DZN / SET / PR / CTN units innum illa (kekkum).
+  - Windows service, offline install, upgrade - Windows la run aagala.
 
 --------------------------------------------------------------------------------
 PART 21. CHINNA DICTIONARY

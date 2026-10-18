@@ -92,3 +92,5 @@ The tests use synthetic files that reproduce the structure of the client workboo
 - Ask AI and the explorer run every query in a read-only transaction with a timeout and a row limit.
 - Credentials live only in the git-ignored `.env.poppys`. The GARMENT_DEMO password is typed at a prompt for discovery and never stored.
 - The app connects as the restricted `POPPYS_APP` account (SELECT plus INSERT on specific tables). It never updates or deletes GARMENT_DEMO rows, and is scoped to GARMENT_DEMO, never the client's live production database.
+
+Engineering documents (architecture, fidelity, Oracle/Axpert, transactions, tests, readiness): [docs/engineering/](docs/engineering/README.md).
