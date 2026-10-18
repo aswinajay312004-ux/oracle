@@ -21,7 +21,7 @@ from . import auth, coverage, evidence, logs, local_store as store, oracle_store
 from .config import COMPANY, DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
-from .erp import planner
+from .erp import planner, order_numbers
 from . import insight_api as insight
 from .insight import benchmark, engine, understand
 from .insight.query import Dialect, QueryError, compile_intent
@@ -802,6 +802,9 @@ def _record_saved(d, result, user, expected):
     """Keep the Oracle receipt in the local draft. If that local write fails, Oracle still holds the order and the
     receipt; the draft is reconciled from Oracle the next time it is opened (never shown as unsaved)."""
     d['result'] = result; d.pop('outcome', None); d['version'] = expected + 1
+    for o, saved in zip(d['orders'], result.get('orders') or []):
+        if not str(o.get('order_ref') or '').strip():      # an OC number given by the save is kept with the draft
+            o['order_ref'] = saved.get('order_ref') or ''
     try:
         store.save(d, user['username'], expected)
         store.record_saved(d)
@@ -1161,9 +1164,20 @@ def get_templates(user=Depends(authenticated)):
 FIELD_KEYS = ('key', 'label', 'kind', 'where', 'aliases', 'default_aliases', 'locked', 'required', 'column')
 
 
+def _oc_series():
+    """The automatic OC number series as the screen shows it (e.g. PK/26-27/S/N), or None when people type it."""
+    try:
+        spec = order_numbers.series()
+    except ValueError:
+        return None
+    return order_numbers.example(spec, datetime.now().date()) if spec else None
+
+
 def _field_view(f, saved=None):
     out = {k: f.get(k) for k in FIELD_KEYS}
     out['aliases'] = list(f['aliases']); out['default_aliases'] = list(f.get('default_aliases') or [])
+    if f['key'] == 'order_ref':
+        out['automatic'] = _oc_series()
     s = (saved or {}).get(f['key']) or {}
     out.update(changed_by=s.get('actor'), changed_at=s.get('at'))
     return out

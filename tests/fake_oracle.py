@@ -8,7 +8,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 from backend import oracle_store, main
-from backend.erp import planner
+from backend.erp import planner, order_numbers
 from backend.erp.catalog import SnapshotCatalog
 
 
@@ -49,6 +49,7 @@ class FakeOracle:
         if checked['hash'] != expected_hash:
             raise ValueError('Database or preview changed. Generate a fresh preview and review it before accepting.')
         refs = {}; inserted = []; reused = []; orders = []
+        assigned = order_numbers.assign(draft['orders'], self.refs, order_numbers.series(), datetime.now().date())
         for op in checked['operations']:
             pk = oracle_store.pk_of(op['table'], mapping)
             if op['action'] == 'reuse':
@@ -56,11 +57,13 @@ class FakeOracle:
                 self.rows.setdefault(op['table'], {})[op['values'][pk]] = dict(op['values'])
                 continue
             self.seq += 1; refs[op['key']] = self.seq
-            vals = {c: refs[v[1:]] if isinstance(v, str) and v.startswith('$') else v for c, v in op['values'].items()}
+            vals = {c: refs[v[1:]] if isinstance(v, str) and v.startswith('$') else order_numbers.fill(v, assigned) for c, v in op['values'].items()}
             self.rows.setdefault(op['table'], {})[self.seq] = dict(vals)
             inserted.append(dict(table=op['table'], key=op['key'], pk=self.seq, business=op['business'], where=op['where'], values=vals))
             if op['table'] == 'ORDMAS':
-                orders.append(dict(order_ref=vals['DOCID'], ordmasid=self.seq)); self.refs.add(vals['DOCID'].upper())
+                auto = order_numbers.marker(int(op['path'].split('.')[1])) in assigned
+                orders.append(dict(order_ref=vals['DOCID'], ordmasid=self.seq, **({'automatic': True} if auto else {})))
+                self.refs.add(vals['DOCID'].upper())
         self.hashes.add(draft['filehash'])
         result = dict(job_id=draft['id'], orders=orders, rows=inserted, reused=reused, totals=checked['totals'],
                       reference_only=checked['reference_only'], committed_at=datetime.now().astimezone().isoformat(),

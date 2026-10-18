@@ -13,5 +13,11 @@
     "adapter": "axpert-direct-insert",
     "owner": "GARMENT_DEMO",
     "write_mapping": "config/oracle_mapping.json"
+  },
+  "order_number": {
+    "about": "OC number (ORDMAS.DOCID) given on save when the reference is left empty: {fy} = financial year of the save day (26-27), {n} = next number of the series in ORDMAS. Remove this block to type every reference by hand.",
+    "format": "PK/{fy}/S/{n}",
+    "year_starts_month": 4,
+    "digits": 0
   }
 }

@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 import json
 import oracledb
 from .config import OWNER, setting
-from .erp import planner, mapping as registry
+from .erp import planner, mapping as registry, order_numbers
 from .erp.catalog import OracleCatalog
 
 digest = planner.digest
@@ -188,8 +188,10 @@ def commit(draft, expected_hash, approver, mapping=None):
         registry_cols = schema(conn, mapping)
         refs = {}; inserted = []; reused = []; outorders = []
         try:
-            for o in draft['orders']:
-                c.execute('INSERT INTO PP_ORDER_KEYS(ORDER_REF,JOBID) VALUES (:ref,:job)', ref=normalize(o['order_ref']), job=draft['id'])
+            assigned = assign_order_numbers(c, draft['orders'], mapping)
+            given = [assigned.get(order_numbers.marker(i)) or str(o['order_ref']).strip() for i, o in enumerate(draft['orders'])]
+            for ref in given:
+                c.execute('INSERT INTO PP_ORDER_KEYS(ORDER_REF,JOBID) VALUES (:ref,:job)', ref=normalize(ref), job=draft['id'])
             for op in checked['operations']:
                 table = op['table']; pk = pk_of(table, mapping)
                 if op['action'] == 'reuse':
@@ -201,6 +203,7 @@ def commit(draft, expected_hash, approver, mapping=None):
                 for col, v in op['values'].items():
                     if isinstance(v, str) and v.startswith('$'):
                         v = refs[v[1:]]
+                    v = order_numbers.fill(v, assigned)
                     if v is not None and registry_cols[table][col]['type'] == 'DATE':
                         v = datetime.strptime(v, '%Y-%m-%d')
                     elif isinstance(v, float):
@@ -215,7 +218,8 @@ def commit(draft, expected_hash, approver, mapping=None):
                 inserted.append(dict(table=table, key=op['key'], pk=ident, business=op.get('business'), where=op.get('where'),
                                      values={col: jsonable(v) for col, v in zip(cols, rows[0])}))
                 if table == 'ORDMAS':
-                    outorders.append(dict(order_ref=draft['orders'][int(op['path'].split('.')[1])]['order_ref'].strip(), ordmasid=ident))
+                    i = int(op['path'].split('.')[1])
+                    outorders.append(dict(order_ref=given[i], ordmasid=ident, **({'automatic': True} if order_numbers.marker(i) in assigned else {})))
             result = dict(job_id=draft['id'], orders=outorders, rows=inserted, reused=reused, totals=checked['totals'],
                           reference_only=checked.get('reference_only', []),
                           committed_at=datetime.now().astimezone().isoformat(), approver=approver, already_committed=False,
@@ -227,6 +231,24 @@ def commit(draft, expected_hash, approver, mapping=None):
             conn.commit(); return result
         except Exception:
             _rollback(conn); raise
+
+
+def assign_order_numbers(cursor, orders, mapping):
+    """{stand-in: OC number} for the orders saved without a reference. Called while PP_WRITE_LOCK is held, so the highest
+    number read here cannot be taken by another POPPYS save before this transaction commits."""
+    if all(str(o.get('order_ref') or '').strip() for o in orders):
+        return {}
+    spec = order_numbers.series()
+    if spec is None:
+        raise ValueError('An order has no OC number and no automatic series is set in config/company.json.')
+    target = planner._written(mapping).get('order.order_ref')
+    if not target or target[2] != 'verified':
+        raise ValueError('The order reference has no verified column in the write mapping.')
+    table, column = target[0], target[1]
+    day = datetime.now().date()
+    # Table and column come from the verified write mapping; the series prefix holds no LIKE wildcards (order_numbers.SAFE).
+    cursor.execute(f'SELECT {column} FROM {OWNER}.{table} WHERE {column} LIKE :p', p=order_numbers.prefix(spec, day) + '%')
+    return order_numbers.assign(orders, [r[0] for r in cursor], spec, day)
 
 
 def history():

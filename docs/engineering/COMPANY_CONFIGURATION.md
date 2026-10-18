@@ -15,6 +15,7 @@ not built: it adds isolation risks before one company works end to end.
 | Data dictionary meanings and links | `config/semantic_catalog.json` + Setup → Data dictionary | admin | audited |
 | Saved layouts | Setup → Layout templates (SQLite) | operator+ (save), admin (activate) | versions + audit |
 | Golden questions (answer accuracy) | `config/golden_questions.json` + `data/golden_questions.json` | admin | git / file |
+| Automatic OC number series (e.g. `PK/{fy}/S/{n}` → PK/26-27/S/1321) | `config/company.json → order_number` | administrator (file) | git |
 | Time limits | `QUERY_TIMEOUT_S`, `WRITE_TIMEOUT_S` in `.env.poppys` | admin | — |
 | Local AI | `OLLAMA_URL`, `OLLAMA_MODEL`, `AI_ALLOWED_HOST` | admin | — |
 

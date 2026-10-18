@@ -24,6 +24,13 @@ Values without a verified column are listed before approval and in the receipt (
   with Axpert.
 - Header ↔ lines by ORDMASID; lines ↔ sizes by ORDMASID + SUBNO (`order_ref:line`); masters by their IDs.
 - Duplicate protection: `PP_ORDER_KEYS` (unique order reference), file hash and the import log.
+- **OC number (DOCID)**: when the reference is left empty, the save gives the next number of the company series
+  (`config/company.json → order_number`, `PK/{fy}/S/{n}`; financial year April–March of the save day): the highest
+  number of that series already in ORDMAS (Axpert's and POPPYS's orders) + 1, read while `PP_WRITE_LOCK` is held, so
+  two POPPYS saves never take the same number. The preview carries a stand-in (`AUTO-OC#1#`), so its hash does not
+  change when another order takes a number first. **Known risk:** Axpert's own order screen does not take
+  `PP_WRITE_LOCK`; an Axpert entry and a POPPYS save in the same second could pick the same number (whether DOCID
+  has a unique constraint on the client's schema is not checked). Whether Axpert keeps its own counter for this series is NOT VERIFIED.
 
 ## 3. What is proven
 

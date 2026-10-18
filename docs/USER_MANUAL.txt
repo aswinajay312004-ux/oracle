@@ -235,7 +235,10 @@ STEP 2 - REVIEW (Axpert madhiri screen)
     pannanum (error).
 
   Usually neenga fill panna vendiyadhu (file la illana):
-    - Order reference (OC No) - unique aa irukkanum.
+    - Order reference (OC No) - kaaliyaa vittaa save pannumbodhu automatic aa
+      adutha number varum (e.g. PK/26-27/S/1320 irundhaa PK/26-27/S/1321).
+      Series config/company.json la "order_number" la irukku. Type panna,
+      adhu unique aa irukkanum.
     - Order confirmation date, ship date (ship date >= order date).
     - Quantities to save: "Sample section", "Buyer order" (demo ku), illa
       "Type them" (neengale type pannradhu).

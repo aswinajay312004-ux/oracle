@@ -47,3 +47,5 @@ Listed so that nobody has to discover them in production. Each has an owner acti
 18. Audit history shows technical hashes and JSON to approvers.
 19. REMARKS written to Oracle contains "quantity basis: order_demo" (internal word) — owner decision to change.
 20. The `Secure` cookie flag needs local TLS.
+21. Automatic OC numbers follow the highest number in ORDMAS; Axpert's own order entry does not wait for POPPYS's write
+    lock, and whether Axpert keeps a separate counter for the series is not verified (ORACLE_AXPERT_INTEGRATION §2).

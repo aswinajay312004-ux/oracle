@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import json
 import re
-from . import masters as masters_index
+from . import masters as masters_index, order_numbers
 from .mapping import referenced_tables, fingerprint
 
 LIMITS = dict(orders=50, lines=100, sizes=100, fabrics=100, yarns=10, accessories=300)
@@ -267,15 +267,27 @@ def plan(catalog, orders, filehash, mapping, required=()):
         return values
 
     seen = set()
+    try:
+        auto = order_numbers.series()
+    except ValueError as exc:
+        auto = None; issues.error(str(exc))
     for index, o in enumerate(orders):
         prefix = f'Order {index + 1}'; base = f'orders.{index}'
         ref = str(o.get('order_ref', '')).strip()
-        if not ref:
+        if not ref and auto:
+            # The OC number is given when the order is saved (oracle_store.commit); until then a stand-in keeps the plan
+            # and its hash independent of a number another order could take first.
+            ref = order_numbers.marker(index)
+            issues.warn(f'{prefix}: the OC number is given automatically when the order is saved — the next number of the '
+                        f'{auto["format"]} series.', base + '.order_ref')
+        elif not ref:
             issues.error(f'{prefix}: enter a unique sample order reference.', base + '.order_ref')
+        elif order_numbers.is_marker(ref):
+            issues.error(f'{prefix}: {ref} is reserved for automatic OC numbers; leave the reference empty instead.', base + '.order_ref')
         elif normalize(ref) in seen:
             issues.error(f'{prefix}: duplicate order reference in this workbook.', base + '.order_ref')
         seen.add(normalize(ref))
-        if ref and catalog.order_ref_exists(normalize(ref)):
+        if ref and not order_numbers.is_marker(ref) and catalog.order_ref_exists(normalize(ref)):
             issues.error(f'{prefix}: order reference {ref} already exists. Existing orders are not overwritten.', base + '.order_ref')
         if o.get('quantity_basis') not in ('sample', 'order_demo'):
             issues.error(f'{prefix}: confirm sample quantities or explicitly use order quantities for this demo.', base + '.quantity_basis')

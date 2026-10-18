@@ -99,3 +99,27 @@ def test_axpert_gap_report_compares_axpert_rows_with_poppys_rows_read_only():
     docid = next(c for c in ordmas['columns'] if c['column'] == 'DOCID')
     assert docid['axpert_pct'] == 100.0 and docid['status'] in ('both', 'no POPPYS rows')
     assert '| Column |' in gap.markdown(r)
+
+
+def test_empty_reference_gets_the_next_oc_number_of_the_series_on_real_oracle():
+    from datetime import date
+    from backend.erp import order_numbers as on
+    spec = on.series()
+    if spec is None:
+        pytest.skip('No automatic OC number series in config/company.json')
+    head = on.prefix(spec, date.today())
+    with db.connect() as c:
+        cur = c.cursor(); cur.execute('select DOCID from GARMENT_DEMO.ORDMAS where DOCID like :p', p=head + '%')
+        expected = on.following([r[0] for r in cur], head, 2, spec['digits'])
+    numbers = []
+    for _ in range(2):
+        d = draft(); d['orders'][0]['order_ref'] = ''
+        with db.connect() as c:
+            p = db.plan(c, d['orders'], d['filehash'])
+        assert not p['errors'], p['errors']
+        receipt = db.commit(d, p['hash'], 'integration-test')
+        numbers.append(receipt['orders'][0]['order_ref'])
+        with db.connect() as c:
+            cur = c.cursor(); cur.execute('select DOCID from GARMENT_DEMO.ORDMAS where ORDMASID=:id', id=receipt['orders'][0]['ordmasid'])
+            assert cur.fetchone()[0] == numbers[-1]
+    assert numbers == expected
