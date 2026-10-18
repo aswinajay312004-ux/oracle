@@ -66,7 +66,12 @@ These are design-level problems. Patching individual screens will not fix them.
 10. **CI is red on this branch** (runtime evidence, run 39124073690), for these reasons:
     - **Gitleaks:** it flags the synthetic test passwords in `tests/test_auth.py`. This is a false positive, but it still blocks the run.
     - **Windows:** two `tests/test_formats.py` cases fail because their generated test ID exceeds the 32,767-character environment-variable limit.
-    - **Oracle Free job:** this job also fails. Its log was cut off, so the cause is NOT VERIFIED.
+    - **Oracle Free job:** in run 49 the process crashed with a segmentation fault (exit 139) while setting `call_timeout`
+      (`backend/insight/service.py:251`) after the timeout test `tests/test_large_db.py:290`
+      (IMPLEMENTED_VS_MISSING_FEATURES rows OR-09, PK-08).
+      - **This is a product risk, not only a CI problem:** the same code path runs when an Ask AI or explorer query times out on
+        real Oracle, and a crash would stop the whole single-process server.
+      - The root cause is NOT VERIFIED, and it is Phase 0 item 1.
 
 ## 3. Target design
 
@@ -164,7 +169,7 @@ Each phase is shippable on its own. Each keeps approval-controlled writes and en
 
 | Phase | Content | Why first | Done when |
 |---|---|---|---|
-| **0. Prove what exists**, no behaviour change | (a) Make CI green: an allowlist entry for the synthetic test password, a shorter Windows test ID, the Oracle job cause. (b) On the laptop: `verify_local.ps1`, Demo A and Demo B, the real Ollama run. (c) **Axpert check:** open an order saved by POPPYS in Axpert's own screens and list every missing or wrong column. | Everything later depends on the real write path working and Axpert accepting the rows. | CI green; laptop results recorded in `IMPLEMENTATION_STATUS.md`; Axpert gap list written. |
+| **0. Prove what exists**, no behaviour change | (a) Root-cause the Oracle `call_timeout` segfault (CI run 49), then make CI green: an allowlist entry for the synthetic test password, a shorter Windows test ID. (b) On the laptop: `verify_local.ps1`, Demo A and Demo B, the real Ollama run. (c) **Axpert check:** open an order saved by POPPYS in Axpert's own screens and list every missing or wrong column. | Everything later depends on the real write path working and Axpert accepting the rows. | CI green; laptop results recorded in `IMPLEMENTATION_STATUS.md`; Axpert gap list written. |
 | **1. Honesty and safety** (small changes) | Saved screen states what was and was not written. Review shows which fields are not saved. Templates do not cross buyers without asking the unit again. Template name collisions prompt. Ask AI scope gate and catalog answers. Writer `call_timeout`. Correct state after a post-commit local failure. Four-eyes on by default and checked against the last editor. Every silent drop becomes a note (second block, more than 200 lines, hidden or unmapped sheets). "Blank means not ordered". | Removes every path where the product shows the user something untrue. | New tests for each case; UX re-check in a browser. |
 | **2. Data correctness** | Unit dictionary (DZN, PR, SET, CTN with the entered unit and factor stored). Control totals plus a fresh-connection read-back and the VERIFIED state. Import ledger (content hash plus business key) and an amendment flow. Masters as a reviewed step, with in-file duplicate grouping. Date ranges. | Quantity fidelity and duplicates matter more than convenience. | Golden-file tests per rule; laptop run on the real Oracle. |
 | **3. Dynamic understanding** | Region finder, canonical order model, label-anchored buyer profiles with partial reuse and diff, corrections becoming aliases, optimal assignment, confidence bands, capped local-AI vote. | This is the core of "any buyer layout", and Phases 1–2 make it safe to change. | A fixture corpus of at least 30 real anonymised layouts with measured field accuracy; no silent drops. |
