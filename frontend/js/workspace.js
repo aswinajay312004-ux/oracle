@@ -162,16 +162,18 @@ export function renderReview() {
     <div class="card doc-bar"><span class="file-badge">XLS</span>
       <div><span class="name">${esc(d.filename)}</span><small>${d.template ? `Saved layout “${esc(d.template.name)}” (v${esc(d.template.version)})` : esc(d.format)} · uploaded by ${esc(d.uploaded_by || '—')} · version ${d.version}</small></div><span class="spacer"></span>
       <span class="pill ${d.result ? 'ok' : state.dirty ? 'warn' : p ? (p.errors.length ? 'err' : 'ok') : ''}">${d.result ? (d.verification?.verified ? 'Verified in Oracle' : 'Saved to Oracle') : state.dirty ? 'Changes not checked yet' : p ? (p.errors.length ? 'Needs attention' : 'Checked · ready') : 'Draft'}</span>
-      ${undoButtons()}<a class="button ghost small" href="/api/drafts/${esc(id(d.id))}/original" download title="The file exactly as uploaded (SHA-256 ${esc((d.filehash || '').slice(0, 12))}…)">Original file</a>${state.health?.ollama?.available ? '<button class="ghost small" data-act="ask-file">Ask about this file</button>' : ''}${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
+      ${undoButtons()}<button class="ghost small" data-act="show-file" aria-pressed="${!!state.sourceView}">${state.sourceView ? 'Hide the file' : 'Show the file'}</button><a class="button ghost small" href="/api/drafts/${esc(id(d.id))}/original" download title="The file exactly as uploaded (SHA-256 ${esc((d.filehash || '').slice(0, 12))}…)">Original file</a>${state.health?.ollama?.available ? '<button class="ghost small" data-act="ask-file">Ask about this file</button>' : ''}${needMap ? '' : '<button class="ghost small" data-act="show-mapping">Read this file differently</button>'}<button class="secondary small" data-act="new-upload">New upload</button></div>
     ${d.outcome ? outcomeBanner(d) : ''}
     ${files.length ? `<div class="banner error"><span class="b-ic">!</span><div><b>Before this can be saved</b><ul>${files.map(i => `<li>${esc(i.message)}</li>`).join('')}</ul></div></div>` : ''}
     ${coverageBanner(d)}
     ${p && !p.live ? '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected, so existing masters and order numbers could not be checked. Start the database and press <b>Check &amp; continue</b> again.</div></div>' : ''}
     <section id="mapping-panel" class="card" ${needMap || state.showMapping ? '' : 'hidden'} style="margin-bottom:14px"></section>
+    ${state.sourceView ? '<section class="card source-view" id="source-view" aria-label="The uploaded file"><div class="sv-head"><b>The uploaded file</b><select id="sv-sheet" aria-label="Sheet"></select><span class="muted small-text" id="sv-hint">Click a field of the order: the cell it was read from is outlined here.</span></div><div class="sheet-grid" id="sv-grid"></div></section>' : ''}
     <div id="orders">${d.orders.map((o, i) => orderScreen(o, i)).join('')}
       ${locked ? '' : '<button class="secondary" data-act="add-order">＋ Add another order manually</button>'}</div>
     <div class="action-bar review-bar" id="review-side"></div>`;
   if (needMap || state.showMapping) renderMapping($('#mapping-panel'), d, applyMapping);
+  if (state.sourceView) drawSource();
   if (locked) $$('#orders input, #orders select, #orders button').forEach(e => { e.disabled = true; });
   renderSide();
 }
@@ -192,6 +194,52 @@ function outcomeBanner(d) {
     : 'A save of this order was started and its result is being checked with Oracle.';
   return `<div class="banner error" role="alert"><span class="b-ic">?</span><div><b>${esc(text)}</b><br>Nothing will be saved twice. Nothing can be changed until Oracle answers.
     <div style="margin-top:8px"><button class="primary small" data-act="reconcile">Check again</button></div></div></div>`;
+}
+
+// ---------------------------------------------------------------- the uploaded file beside the order (spec §10.4)
+// A faithful view of the cell model (values as read; formats and colours are not reproduced — the Original file
+// button gives the real workbook). Focusing a field outlines the cell its value came from.
+function drawSource(sheetName, mark) {
+  const d = state.draft; const box = $('#sv-grid'); if (!box || !d) return;
+  const name = sheetName || state.sourceSheet || d.orders[0]?.sheet || d.sheets.find(x => !x.hidden)?.name || d.sheets[0]?.name;
+  state.sourceSheet = name;
+  const sheet = d.sheets.find(x => x.name === name); if (!sheet) return;
+  $('#sv-sheet').innerHTML = d.sheets.map(x => `<option ${x.name === name ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
+  const byCell = new Map(sheet.cells.map(c => [`${c.row}:${c.col}`, c]));
+  const maxR = Math.min(sheet.rows, 200); const maxC = Math.min(sheet.cols, 40);
+  const L = n => { let t = ''; while (n > 0) { const r = (n - 1) % 26; t = String.fromCharCode(65 + r) + t; n = Math.floor((n - 1) / 26); } return t; };
+  let html = '<table><thead><tr><th class="rh-h"></th>' + Array.from({ length: maxC }, (_, i) => `<th>${L(i + 1)}</th>`).join('') + '</tr></thead><tbody>';
+  for (let r = 1; r <= maxR; r++) {
+    html += `<tr><td class="rh">${r}</td>`;
+    for (let c = 1; c <= maxC; c++) {
+      const cell = byCell.get(`${r}:${c}`); const v = cell?.value;
+      html += `<td data-sv="${L(c)}${r}" class="${cell?.hidden ? 'hidden-cell' : ''}" title="${esc(`${L(c)}${r}${cell?.formula ? ' · ' + cell.formula : ''}`)}">${v == null ? '' : esc(String(v))}</td>`;
+    }
+    html += '</tr>';
+  }
+  box.innerHTML = html + '</tbody></table>' + (sheet.rows > maxR || sheet.cols > maxC ? `<p class="muted small-text">Showing ${maxR} of ${sheet.rows} rows and ${maxC} of ${sheet.cols} columns.</p>` : '');
+  if (mark) markSource(mark);
+}
+
+function sourceOf(path) {
+  const d = state.draft; const m = /^orders\.(\d+)\.(.+)$/.exec(path || ''); if (!m) return null;
+  const o = d.orders[Number(m[1])]; const rest = m[2].split('.');
+  if (rest.length === 1) return o.provenance?.[rest[0]];
+  if (rest[0] === 'lines') {
+    const l = o.lines?.[Number(rest[1])]; if (!l) return null;
+    if (rest[2] === 'color' || rest[2] === 'label') return l.provenance?.[rest[2]];
+    if (rest[2] === 'sizes') { const sz = l.sizes?.[Number(rest[3])]; return rest[4] === 'size' ? sz?.size_source : sz?.source; }
+  }
+  return null;
+}
+
+function markSource(src) {
+  $$('#sv-grid td.focus-cell').forEach(td => td.classList.remove('focus-cell'));
+  if (!src?.cell) { $('#sv-hint').textContent = 'This value was not read from a cell (typed, calculated or a company default).'; return; }
+  if (src.sheet && src.sheet !== state.sourceSheet) return drawSource(src.sheet, src);
+  const td = $(`#sv-grid td[data-sv="${CSS.escape(src.cell)}"]`); if (!td) return;
+  td.classList.add('focus-cell'); td.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  $('#sv-hint').textContent = `Read from ${src.sheet ? src.sheet + '!' : ''}${src.cell}${src.value !== undefined && src.value !== null ? ` (the file says “${String(src.value).slice(0, 60)}”)` : ''}.`;
 }
 
 function counts(oi) {
@@ -581,6 +629,7 @@ export async function onAction(btn) {
     case 'tab': state.tab[oi] = btn.dataset.tab; renderReview(); return true;
     case 'next-issue': nextIssue(); return true;
     case 'ask-file': askFile(); return true;
+    case 'show-file': state.sourceView = !state.sourceView; renderReview(); if (state.sourceView) drawSource(); return true;
     case 'reconcile': await busy('Asking Oracle whether the order was saved…', async () => {
       state.draft = await api(`/api/drafts/${id(d.id)}/reconcile`, { method: 'POST' });
       if (state.draft.result) { state.saved = true; await showSaved(state.draft.result); return notify('Oracle confirms the order is saved.', 'success'); }
@@ -802,6 +851,8 @@ function savedExceptions(result) {
 export function bindWorkspace() {
   $('#stage-approve').addEventListener('change', e => { if (e.target.id === 'ex-seen') exceptionsSeen(e.target.checked); });
   const root = $('#stage-review');
+  root.addEventListener('focusin', e => { if (state.sourceView && e.target.dataset?.path) markSource(sourceOf(e.target.dataset.path)); });
+  root.addEventListener('change', e => { if (e.target.id === 'sv-sheet') drawSource(e.target.value); });
   root.addEventListener('input', onInput);
   root.addEventListener('change', e => { if (e.target.dataset.act === 'only-problems') return onAction(e.target); onChange(e); });
   root.addEventListener('click', async e => {

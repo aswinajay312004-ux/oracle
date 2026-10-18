@@ -828,3 +828,17 @@ details.banner.coverage ul { margin: 8px 0 4px 30px; padding: 0; }
   .action-bar .primary.big { width: 100%; }
   .card.exceptions { padding: 12px; }
 }
+/* mapping: drag a sheet cell onto a field; the focused field's cell is outlined */
+.mf-row.drop-hover { outline: 2px dashed var(--brand); outline-offset: 2px; background: var(--brand-soft); }
+#sheet-grid td[draggable="true"] { cursor: grab; }
+#sheet-grid td.focus-cell { outline: 3px solid var(--brand); outline-offset: -3px; }
+/* review: the uploaded file beside the order */
+.source-view { margin-bottom: 14px; padding: 10px 12px; }
+.source-view .sv-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; }
+.source-view .sheet-grid { max-height: 360px; overflow: auto; }
+.source-view td.focus-cell { outline: 3px solid var(--brand); outline-offset: -3px; background: var(--brand-soft); }
+.source-view td.hidden-cell { color: var(--muted); font-style: italic; }
+@media (min-width: 1280px) { #stage-review:has(.source-view) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  #stage-review:has(.source-view) > :not(.source-view):not(#orders) { grid-column: 1 / -1; }
+  #stage-review:has(.source-view) .source-view { position: sticky; top: 12px; grid-column: 2; grid-row: span 3; margin: 0; }
+  #stage-review:has(.source-view) #orders { grid-column: 1; } }

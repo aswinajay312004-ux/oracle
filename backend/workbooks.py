@@ -1074,7 +1074,7 @@ def restore_from_template(orders, t):
 def parse_sheets(sheets, templates=(), fields=None):
     from . import matcher
     Fv = F.resolve(fields)
-    orders = []; formats = []; used = []; notes = []; refusals = []; origin = []; moved = []
+    orders = []; formats = []; used = []; notes = []; refusals = []; origin = []; moved = []; applied = []
     for sheet in sheets:
         if sheet['hidden']:
             continue
@@ -1089,7 +1089,9 @@ def parse_sheets(sheets, templates=(), fields=None):
                 restore_from_template(found, t)
                 formats.append(f'Template: {t["name"]}'); used.append(t['id'])
                 if t.get('changes'):
-                    moved.append(dict(sheet=sheet['name'], template=t['name'], version=t.get('version', 1), changes=t['changes']))
+                    moved.append(dict(sheet=sheet['name'], template=t['name'], version=t.get('version', 1), changes=t['changes'],
+                                      definition=t['definition']))
+                applied.append(dict(id=t['id'], sheet=sheet['name'], definition=t['definition']))
         if not found:
             o = merch_bom(g)
             if o:
@@ -1151,7 +1153,7 @@ def parse_sheets(sheets, templates=(), fields=None):
     orders = [finish(o, month_first) for _, o in origin]
     same_order_on_two_sheets(origin)
     return dict(sheets=sheets, orders=orders, format=', '.join(dict.fromkeys(formats)) or 'Needs column mapping',
-                templates_used=used, notes=notes, templates_refused=refusals, layout_changes=moved)
+                templates_used=used, notes=notes, templates_refused=refusals, layout_changes=moved, templates_applied=applied)
 
 
 def rival_dates(g, o):

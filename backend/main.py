@@ -440,7 +440,11 @@ def upload(file: UploadFile = File(...), user=Depends(require('upload'))):
     for tid in used:
         store.template_used(tid)
     suggestion = _suggestion(parsed, fields) if not parsed['orders'] or parsed.get('templates_refused') else None
-    template = next((dict(id=t['id'], name=t['name'], version=t['version']) for t in store.templates() if t['id'] in used), None)
+    applied = {x['id']: x for x in parsed.pop('templates_applied', [])}
+    # The layout as it was applied to THIS file (moved by its labels when the file changed): the mapping screen edits it.
+    template = next((dict(id=t['id'], name=t['name'], version=t['version'], sheet=applied.get(t['id'], {}).get('sheet'),
+                          definition=applied.get(t['id'], {}).get('definition') or t['definition'])
+                     for t in store.templates() if t['id'] in used), None)
     draft = dict(id=id, version=1, filename=name, kind=kind, filehash=filehash, size=len(content),
                  created_at=datetime.now().astimezone().isoformat(), uploaded_by=user['username'],
                  **parsed, suggestion=suggestion, template=template, plan=None, result=None)

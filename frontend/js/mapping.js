@@ -21,10 +21,11 @@ let ctx = null;
 
 export function renderMapping(container, draft, apply) {
   if (ctx?.draftId !== draft.id) {
-    const sug = draft.suggestion || null;
-    const sheet = sug?.sheet || draft.sheets.find(s => !s.hidden)?.name || draft.sheets[0]?.name;
-    ctx = { draftId: draft.id, sheet, sug, def: sug ? structuredClone(sug.definition) : emptyDef(), bySheet: {}, bad: [], pick: null,
-      unit: unitFrom(sug, draft), name: '', nameTouched: false, save: true, more: false, templates: null };
+    const sug = draft.suggestion || null; const tpl = !sug && draft.template?.definition ? draft.template : null;
+    const sheet = sug?.sheet || tpl?.sheet || draft.sheets.find(s => !s.hidden)?.name || draft.sheets[0]?.name;
+    // A file read with a saved layout opens that layout (as applied to this file) for editing, not a fresh proposal.
+    ctx = { draftId: draft.id, sheet, sug, def: sug ? structuredClone(sug.definition) : tpl ? structuredClone(tpl.definition) : emptyDef(), bySheet: {}, bad: [], pick: null,
+      unit: unitFrom(sug, draft), name: tpl ? tpl.name : '', nameTouched: !!tpl, save: true, more: false, templates: null, fromTemplate: tpl };
     if (!ctx.def.table) ctx.def.table = { type: 'matrix' };
   }
   Object.assign(ctx, { draft, apply, container, fields: state.fields || [] });
@@ -39,7 +40,7 @@ export function renderMapping(container, draft, apply) {
 function autoPropose() {
   const name = ctx.sheet; const draftId = ctx.draftId;
   const run = () => { if (ctx.draftId !== draftId || ctx.sheet !== name || ctx.sug || ctx.proposed?.[name] || !ctx.container.isConnected) return; if (state.busy) return setTimeout(run, 150); propose(false); };
-  if (!ctx.sug && !aiOn() && !ctx.proposed?.[name]) setTimeout(run, 0);
+  if (!ctx.sug && !ctx.fromTemplate && !aiOn() && !ctx.proposed?.[name]) setTimeout(run, 0);
 }
 
 const aiOn = () => !!state.health?.ollama?.available;
@@ -69,8 +70,9 @@ function shell() {
   const d = ctx.draft; const s = ctx.sug;
   const refused = (d.templates_refused || []).filter(t => t.sheet === ctx.sheet || !ctx.sheet);
   ctx.container.innerHTML = `<div class="card-head map-head"><div class="map-title"><span class="eyebrow">${refused.length ? 'Layout changed · check it once' : d.orders.length ? 'Layout check' : 'New layout · check it once'}</span>
-      <h2 id="map-h">Check where the order is in this file</h2>
-      <p class="muted" id="map-expl">${esc(s ? s.explanation : 'Click Pick next to a field, then click its value in the sheet. Saved as a template, the next file from this buyer is read automatically.')}</p></div>
+      <h2 id="map-h">${ctx.fromTemplate ? `Edit the saved layout “${esc(ctx.fromTemplate.name)}”` : 'Check where the order is in this file'}</h2>
+      <p class="muted" id="map-expl">${esc(s ? s.explanation : ctx.fromTemplate ? 'These are the cells the saved layout read in this file. Change any of them; saving makes a new version and keeps the old one.' : 'Click Pick next to a field, then click its value in the sheet. Saved as a template, the next file from this buyer is read automatically.')}
+        Drag a cell from the sheet onto a field, or use Pick, or type the cell address.</p></div>
     <div class="map-actions">${s ? `<span class="pill ${s.source === 'matcher' ? 'brand' : 'master'}" title="Every proposal was checked: dates must be dates, quantities numbers, sizes sizes">Proposed by ${esc(s.source === 'matcher' ? 'the field matcher' : s.source)}</span>` : ''}
       ${aiOn() ? '<button type="button" class="secondary small" data-m="ai">Suggest with local AI</button>' : s ? '' : '<button type="button" class="secondary small" data-m="propose">Find the fields for me</button>'}
       ${d.orders.length ? '<button type="button" class="ghost small" data-act="hide-mapping">Close</button>' : ''}</div></div>
@@ -111,6 +113,26 @@ function bind() {
     if (e.target.id === 'map-replace') ctx.replace = e.target.checked;
   };
   root.onkeydown = e => { if (e.key === 'Escape' && ctx.pick) { e.stopPropagation(); cancelPick(); } };
+  // Drag a sheet cell onto a field or table row (Pick and typing the address do the same without a mouse).
+  root.ondragstart = e => { const td = e.target.closest('#sheet-grid td[data-r]'); if (!td) return; e.dataTransfer.setData('text/plain', `${td.dataset.r}:${td.dataset.c}`); e.dataTransfer.effectAllowed = 'copy'; };
+  root.ondragover = e => { const row = e.target.closest('[data-target]'); if (!row) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; $$('.drop-hover', root).forEach(x => x !== row && x.classList.remove('drop-hover')); row.classList.add('drop-hover'); };
+  root.ondragleave = e => { const row = e.target.closest('[data-target]'); if (row && !row.contains(e.relatedTarget)) row.classList.remove('drop-hover'); };
+  root.ondrop = e => {
+    const row = e.target.closest('[data-target]'); const data = e.dataTransfer.getData('text/plain'); if (!row || !/^\d+:\d+$/.test(data)) return;
+    e.preventDefault(); row.classList.remove('drop-hover');
+    const [r, c] = data.split(':').map(Number); ctx.pick = row.dataset.target; picked(r, c);
+  };
+  // The cell a field reads lights up in the sheet while that field has the focus.
+  root.addEventListener('focusin', onFocusIn);    // same function each time: added once however often the panel is drawn
+}
+
+function onFocusIn(e) { const k = e.target.dataset?.mf; if (k) showCell((ctx.def.fields || {})[k]); }
+
+function showCell(ref) {
+  $$('#sheet-grid td.focus-cell', ctx.container).forEach(td => td.classList.remove('focus-cell'));
+  const p = parseRef(ref); if (!p) return;
+  const td = $(`#sheet-grid td[data-r="${p.r}"][data-c="${p.c}"]`, ctx.container); if (!td) return;
+  td.classList.add('focus-cell'); td.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 // ---------------------------------------------------------------- state changes
@@ -479,7 +501,7 @@ function drawGrid() {
       if (rej.has(key) && !fk) { cls.push('rej'); tip += ` · not used for ${labelOf(rej.get(key).field)}: ${rej.get(key).reason}`; }
       if (low.has(key) && !fk) { cls.push('cand'); tip += ` · possible ${labelOf(low.get(key))}`; }
       if (wrong.has(key)) { cls.push('wrong'); tip += ` · ${wrong.get(key)}`; }
-      html += `<td data-r="${r}" data-c="${c}" class="${cls.join(' ')}" title="${esc(tip)}">${tag ? `<span class="g-tag">${esc(tag)}</span>` : ''}${esc(v == null ? '' : show(v))}</td>`;
+      html += `<td data-r="${r}" data-c="${c}" class="${cls.join(' ')}" title="${esc(tip)}"${v != null && v !== '' ? ' draggable="true"' : ''}>${tag ? `<span class="g-tag">${esc(tag)}</span>` : ''}${esc(v == null ? '' : show(v))}</td>`;
     }
     html += '</tr>';
   }
