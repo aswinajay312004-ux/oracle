@@ -51,7 +51,14 @@ def init():
         CREATE TABLE IF NOT EXISTS field_settings(key TEXT PRIMARY KEY,required INTEGER,aliases TEXT,actor TEXT,at TEXT);
         CREATE TABLE IF NOT EXISTS benchmark_runs(id INTEGER PRIMARY KEY,at TEXT NOT NULL,actor TEXT,total INTEGER,correct INTEGER,
             accuracy REAL,live INTEGER,payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS auth_failures(username TEXT NOT NULL,address TEXT NOT NULL,at REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS auth_failures_user ON auth_failures(username,at);
+        CREATE INDEX IF NOT EXISTS auth_failures_address ON auth_failures(address,at);
         ''')
+        scols = {r['name'] for r in c.execute('PRAGMA table_info(sessions)')}
+        # Additive migration: idle timeout (backend/auth.py). Sessions from before it count as just used.
+        if 'last_seen' not in scols:
+            c.execute('ALTER TABLE sessions ADD COLUMN last_seen REAL')
         tcols = {r['name'] for r in c.execute('PRAGMA table_info(templates)')}
         # Additive migration: versioned buyer templates (docs/EXCEL_UNDERSTANDING.md §6).
         for col, ddl in (('buyer', "TEXT NOT NULL DEFAULT ''"), ('version', 'INTEGER NOT NULL DEFAULT 1'), ('family', 'TEXT'),

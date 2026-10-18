@@ -213,14 +213,14 @@ async function users(body) {
     </tbody></table></div>
     <div class="card-body"><h3 style="margin-bottom:8px">Add a person</h3>
     <form id="add-user" class="form-row"><label>Username<input name="username" required minlength="2" maxlength="50" pattern="[A-Za-z0-9._@\-]+"></label>
-      <label>Temporary password<input name="password" type="password" required minlength="10" autocomplete="new-password"></label>
+      <label>Temporary password<input name="password" type="password" required minlength="12" autocomplete="new-password"></label>
       <label>Role<select name="role">${roles.map(r => `<option>${r}</option>`).join('')}</select></label><button class="primary">Add</button></form></div></section>`;
   $('#add-user').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); busy('Adding…', async () => { await api('/api/users', { method: 'POST', body: Object.fromEntries(f) }); notify('Person added.', 'success'); await users(body); }); };
   body.onchange = e => { const s = e.target.closest('[data-role]'); if (s) busy('Saving…', async () => { await api(`/api/users/${id(s.dataset.role)}`, { method: 'PATCH', body: { role: s.value } }); notify('Role updated.', 'success'); await users(body); }); };
   body.onclick = e => {
     const a = e.target.closest('[data-active-user]'); const r = e.target.closest('[data-reset]');
     if (a) busy('Saving…', async () => { await api(`/api/users/${id(a.dataset.activeUser)}`, { method: 'PATCH', body: { active: a.dataset.active === 'true' } }); await users(body); });
-    if (r) { const pw = prompt(`New password for ${r.dataset.reset} (10+ characters)`); if (pw) busy('Saving…', async () => { await api(`/api/users/${id(r.dataset.reset)}`, { method: 'PATCH', body: { password: pw } }); notify('Password reset. Their sessions were signed out.', 'success'); }); }
+    if (r) { const pw = prompt(`New password for ${r.dataset.reset} (12+ characters)`); if (pw) busy('Saving…', async () => { await api(`/api/users/${id(r.dataset.reset)}`, { method: 'PATCH', body: { password: pw } }); notify('Password reset. Their sessions were signed out.', 'success'); }); }
   };
 }
 

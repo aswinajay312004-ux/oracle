@@ -35,7 +35,7 @@ def main(argv=None, ask=input):
         c.execute('DELETE FROM users')
     store.audit('console', 'login_reset', 'workspace', removed=[name for name, _ in accounts])
     print(f'Removed {len(accounts)} account(s); everyone is signed out.\n'
-          'Now open http://127.0.0.1:8008 and create the new administrator (new username or Gmail, and a new password of 10+ characters).')
+          'Now open http://127.0.0.1:8008 and create the new administrator (new username or Gmail, and a new password of 12+ characters).')
     return 0
 
 

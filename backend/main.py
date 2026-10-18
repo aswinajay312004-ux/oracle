@@ -2,7 +2,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -16,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
-from . import evidence, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
+from . import auth, evidence, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
 from .config import DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
@@ -26,7 +25,6 @@ from .insight import benchmark, engine, understand
 from .insight.query import Dialect, QueryError, compile_intent
 
 LOCK = threading.RLock()
-ATTEMPTS = {}
 RANK = {'viewer': 0, 'operator': 1, 'approver': 2, 'admin': 3}
 PERMISSIONS = {
     'viewer': ['view'],
@@ -53,10 +51,13 @@ async def protect(request, call_next):
     if int(request.headers.get('content-length', '0') or 0) > 14 * 1024 * 1024:
         return JSONResponse({'detail': 'Request exceeds 14 MB.'}, status_code=413)
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
-        origin = request.headers.get('origin')
-        if origin and origin != str(request.base_url).rstrip('/'):
-            return JSONResponse({'detail': 'Cross-origin changes are not permitted.'}, status_code=403)
+        # Fetch metadata first (another site or another local port is refused), then Origin for browsers without it.
+        site = request.headers.get('sec-fetch-site'); origin = request.headers.get('origin')
+        if site not in (None, 'same-origin', 'none') or (origin and origin != str(request.base_url).rstrip('/')):
+            return JSONResponse({'detail': 'Cross-origin changes are not permitted.', 'code': 'csrf'}, status_code=403,
+                                headers={'Vary': 'Sec-Fetch-Site, Origin'})
     response = await call_next(request)
+    response.headers['Vary'] = 'Sec-Fetch-Site, Origin'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'same-origin'
@@ -88,11 +89,19 @@ async def runtime_error(request, exc): return JSONResponse({'detail': str(exc)},
 
 
 # --- authentication & roles ------------------------------------------------------
+def _token_hash(request):
+    return hashlib.sha256(request.cookies.get('poppys_session', '').encode()).hexdigest()
+
+
 def _user(request):
-    token = request.cookies.get('poppys_session', '')
+    """The signed-in user, or None. A session ends after 8 hours, or after 30 minutes without any request."""
+    now = time.time(); token = _token_hash(request)
     with store.db() as c:
-        row = c.execute('''SELECT u.username,u.role FROM sessions s JOIN users u ON u.username=s.username
-            WHERE s.token_hash=? AND s.expires>? AND u.active=1''', (hashlib.sha256(token.encode()).hexdigest(), time.time())).fetchone()
+        row = c.execute('''SELECT u.username,u.role,s.last_seen FROM sessions s JOIN users u ON u.username=s.username
+            WHERE s.token_hash=? AND s.expires>? AND COALESCE(s.last_seen, ?)>? AND u.active=1''',
+                        (token, now, now, now - auth.IDLE_S)).fetchone()
+        if row and (row['last_seen'] or 0) < now - auth.TOUCH_S:
+            c.execute('UPDATE sessions SET last_seen=? WHERE token_hash=?', (now, token))
     return dict(username=row['username'], role=row['role']) if row else None
 
 
@@ -111,20 +120,27 @@ def require(permission):
     return check
 
 
-def issue(response, username):
-    token = secrets.token_urlsafe(32)
+def issue(request, response, username):
+    """A new session; the one the browser presented (if any) is ended first, so a planted token never signs in."""
+    token = secrets.token_urlsafe(32); now = time.time()
     with store.db() as c:
-        c.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
-        c.execute('INSERT INTO sessions VALUES (?,?,?)', (hashlib.sha256(token.encode()).hexdigest(), username, time.time() + 28800))
-    response.set_cookie('poppys_session', token, httponly=True, samesite='strict', max_age=28800)
+        c.execute('DELETE FROM sessions WHERE expires<? OR token_hash=?', (now, _token_hash(request)))
+        c.execute('INSERT INTO sessions(token_hash,username,expires,last_seen) VALUES (?,?,?,?)',
+                  (hashlib.sha256(token.encode()).hexdigest(), username, now + auth.ABSOLUTE_S, now))
+    response.set_cookie('poppys_session', token, httponly=True, samesite='strict', max_age=auth.ABSOLUTE_S, path='/')
 
 
 class Credentials(BaseModel):
     username: str = Field(min_length=2, max_length=50, pattern=r'^[A-Za-z0-9._@-]+$')
-    password: str = Field(min_length=10, max_length=256)
+    password: str = Field(min_length=1, max_length=256)
 
 
-def password_hash(password, salt): return hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(salt), 300000).hex()
+def new_password(password, username):
+    """Hash of an acceptable new password; 422 with the reason otherwise."""
+    why = auth.problem(password, username)
+    if why:
+        raise HTTPException(422, why)
+    return auth.hash_password(password)
 
 
 def settings():
@@ -141,40 +157,46 @@ def who(request: Request):
 
 
 @app.post('/api/setup')
-def setup(data: Credentials, response: Response):
+def setup(data: Credentials, request: Request, response: Response):
+    hashed = new_password(data.password, data.username)
     with LOCK, store.db() as c:
         if c.execute('SELECT 1 FROM users').fetchone():
             raise HTTPException(409, 'Setup is already complete. Sign in.')
-        salt = secrets.token_hex(16)
         c.execute('INSERT INTO users(username,salt,password_hash,role,active,created_at) VALUES (?,?,?,?,1,?)',
-                  (data.username, salt, password_hash(data.password, salt), 'admin', store.now()))
+                  (data.username, '', hashed, 'admin', store.now()))
     store.audit(data.username, 'setup', 'workspace', role='admin')
-    issue(response, data.username); return dict(authenticated=True, username=data.username, role='admin')
+    issue(request, response, data.username); return dict(authenticated=True, username=data.username, role='admin')
 
 
 @app.post('/api/login')
 def login(data: Credentials, request: Request, response: Response):
-    host = request.client.host if request.client else 'local'
-    with LOCK:
-        ATTEMPTS[host] = [t for t in ATTEMPTS.get(host, []) if time.time() - t < 60]
-        if len(ATTEMPTS[host]) >= 10:
-            raise HTTPException(429, 'Wait a minute before trying again.')
-        ATTEMPTS[host].append(time.time())
+    address = request.client.host if request.client else 'local'
+    wait = auth.wait_seconds(data.username, address)
+    if wait:
+        store.audit(data.username, 'login_throttled', 'workspace', wait_s=wait)
+        raise HTTPException(429, f'Too many wrong passwords. Wait {wait} second{"" if wait == 1 else "s"}, then try again.', headers={'Retry-After': str(wait)})
     with store.db() as c:
         row = c.execute('SELECT * FROM users WHERE username=?', (data.username,)).fetchone()
-    calculated = password_hash(data.password, row['salt'] if row else '00' * 16)
-    if not row or not hmac.compare_digest(calculated, row['password_hash']) or not row['active']:
+    ok, rehash = auth.verify(data.password, row['password_hash'], row['salt']) if row else (auth.verify_unknown(data.password), False)
+    if not ok or not row['active']:
+        auth.failed(data.username, address)
         store.audit(data.username, 'login_failed', 'workspace')
         raise HTTPException(401, 'Username or password is incorrect.')
-    store.audit(data.username, 'login', 'workspace')
-    issue(response, data.username); return dict(authenticated=True, username=data.username, role=row['role'])
+    auth.succeeded(data.username)
+    if rehash:   # an account from an earlier version, or an older setting: stored again at today's strength
+        with store.db() as c:
+            c.execute("UPDATE users SET salt='',password_hash=? WHERE username=?", (auth.hash_password(data.password), data.username))
+    store.audit(data.username, 'login', 'workspace', rehashed=rehash or None)
+    issue(request, response, data.username); return dict(authenticated=True, username=data.username, role=row['role'])
 
 
 @app.post('/api/logout')
 def logout(request: Request, response: Response):
     with store.db() as c:
-        c.execute('DELETE FROM sessions WHERE token_hash=?', (hashlib.sha256(request.cookies.get('poppys_session', '').encode()).hexdigest(),))
-    response.delete_cookie('poppys_session'); return {'ok': True}
+        c.execute('DELETE FROM sessions WHERE token_hash=?', (_token_hash(request),))
+    response.delete_cookie('poppys_session', path='/', httponly=True, samesite='strict')
+    response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage"'
+    return {'ok': True}
 
 
 class NewUser(Credentials):
@@ -184,7 +206,7 @@ class NewUser(Credentials):
 class UserChange(BaseModel):
     role: str | None = Field(default=None, pattern='^(admin|approver|operator|viewer)$')
     active: bool | None = None
-    password: str | None = Field(default=None, min_length=10, max_length=256)
+    password: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 @app.get('/api/users')
@@ -199,9 +221,8 @@ def add_user(data: NewUser, user=Depends(require('users'))):
     with LOCK, store.db() as c:
         if c.execute('SELECT 1 FROM users WHERE lower(username)=lower(?)', (data.username,)).fetchone():
             raise HTTPException(409, 'That username already exists.')
-        salt = secrets.token_hex(16)
         c.execute('INSERT INTO users(username,salt,password_hash,role,active,created_at) VALUES (?,?,?,?,1,?)',
-                  (data.username, salt, password_hash(data.password, salt), data.role, store.now()))
+                  (data.username, '', new_password(data.password, data.username), data.role, store.now()))
     store.audit(user['username'], 'user_created', data.username, role=data.role)
     return {'ok': True}
 
@@ -216,15 +237,15 @@ def change_user(username: str, data: UserChange, user=Depends(require('users')))
         demoting = row['role'] == 'admin' and ((data.role and data.role != 'admin') or data.active is False)
         if demoting and admins <= 1:
             raise HTTPException(409, 'At least one active administrator is required.')
-        if data.role:
+        if data.role and data.role != row['role']:
             c.execute('UPDATE users SET role=? WHERE username=?', (data.role, username))
+            c.execute('DELETE FROM sessions WHERE username=?', (username,))   # the new role applies from the next sign-in
         if data.active is not None:
             c.execute('UPDATE users SET active=? WHERE username=?', (1 if data.active else 0, username))
             if not data.active:
                 c.execute('DELETE FROM sessions WHERE username=?', (username,))
         if data.password:
-            salt = secrets.token_hex(16)
-            c.execute('UPDATE users SET salt=?,password_hash=? WHERE username=?', (salt, password_hash(data.password, salt), username))
+            c.execute("UPDATE users SET salt='',password_hash=? WHERE username=?", (new_password(data.password, username), username))
             c.execute('DELETE FROM sessions WHERE username=?', (username,))
     store.audit(user['username'], 'user_changed', username, role=data.role, active=data.active, password_reset=bool(data.password))
     return {'ok': True}

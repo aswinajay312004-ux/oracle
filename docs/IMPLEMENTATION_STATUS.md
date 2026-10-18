@@ -16,6 +16,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | Date | Result | Notes |
 |---|---|---|
 | 2026-10-17 (session 2 start) | 343 passed, 33 failed, 18 skipped | 26 of the 33 were a cloud setup gap (`python-calamine` not installed); after a full `pip install -r requirements-dev.txt`, 7 real failures remained |
+| 2026-10-18 (session 2, batch 13) | **456 passed, 0 failed, 18 skipped**; ruff clean | Sign-in security from the research decisions (S2). Checked in Chromium on the demo server at the product's own hashing cost: weak first password refused on screen, setup, cookie HttpOnly + SameSite=Strict + Path=/, logout, sign-in, 6th wrong password → 429 |
 | 2026-10-18 (session 2, batch 12) | **435 passed, 0 failed, 18 skipped**; ruff clean | Before the first laptop test run, found and fixed: (1) the local Oracle timeout test used `all_objects`, which the batch 7 safety review refuses, so it would fail; it now uses a slow recursive query inside GARMENT_DEMO; (2) the MCP server crashed on Windows on any "→" because pipes default to cp1252; it now reads and writes UTF-8. All 413 Oracle statements the explorer, Ask AI, value index, live lookups and golden SQL generate were run through the safety review with an Oracle-dialect stand-in: none refused. `verify_local.ps1` runs the whole local check in one command (dry-run on PowerShell 7 in the cloud) |
 | 2026-10-18 (session 2, batch 11) | **434 passed, 0 failed, 18 skipped**; ruff clean | Sign-in reset script; Windows guide points at the current branch |
 | 2026-10-17 (session 2, batch 10) | **432 passed, 0 failed, 18 skipped**; ruff clean | Two readings compared (rules vs. local AI), M-Schema cards for the model, "orders NEXT ZARA" fixed (was AND of two buyers → 0 rows) |
@@ -56,6 +57,7 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
 | B14 | Weak questions read twice (rules + local AI): same compiled SQL or same result → confidence up; different result → AI reading shown with the rules reading as a "Did you mean" button. The model sees M-Schema catalog cards (types, keys, example values, link lines) | Implemented, Cloud-tested with a stand-in model; **needs a run with the real Ollama model** | `engine.ask`, `understand.schema_cards`, `tests/test_agreement.py` |
 | B15 | Two values for the same column mean either (`IN`), also in saved examples | Fixed | `understand._either`, `engine.generalize/specialize` |
 | S1 | Sign-in reset on the laptop: `scripts/reset_login.py` lists the accounts, removes all after typed `DELETE`, signs everyone out, audits `login_reset`; the first-run screen then creates the new administrator. No other data touched | Implemented, Cloud-tested | `scripts/reset_login.py`, `tests/test_reset_login.py` |
+| S2 | Sign-in security (decisions "passwords and throttling", "sessions and cookies", "CSRF"): scrypt N=2^17 r=8 p=1 (OWASP) with the settings in the stored hash; earlier PBKDF2 accounts sign in once and are re-hashed; new passwords 12+ characters, not in the common list (SecLists NCSC, MIT, `config/common_passwords.txt`), not product words, not the username; wrong passwords counted in SQLite per name (existing or not) and per address: 5 free, then 2^(n-5) s up to 15 min, 30 per address per 15 min; idle timeout 30 min, absolute 8 h; sign-in ends the presented session; role/password/deactivation sign the user out; logout sends Clear-Site-Data; changes refused when Sec-Fetch-Site is not same-origin/none or Origin differs. **Deviations, on purpose:** scrypt instead of Argon2id (stdlib, no compiled package offline; OWASP's listed alternative); no hard lock after 50 failures (the capped delay already limits guessing, and a lock lets anyone lock out the only administrator); `Secure` cookie flag and `X-Requested-With` wait for local TLS (plain-HTTP loopback) | Implemented, Cloud-tested, browser-tested | `backend/auth.py`, `tests/test_auth.py`, `tests/conftest.py` |
 | B10 | Oracle sessions named MODULE='POPPYS AI', ACTION='read-only questions' / 'writer account' (visible in V$SESSION) | Implemented | `backend/oracle_store.py` `_tag()`; needs Local Oracle check |
 | C1 | Explorer: search, rows, keyset paging, linked records | Implemented, Cloud-tested | `/api/explorer/*`, `frontend/js/explorer.js` |
 | C2 | Relationship graph / flowchart (no CDN, SVG) | Implemented | `frontend/js/graph.js`, `flow.js` |
@@ -78,6 +80,33 @@ Status words: **Implemented** (code exists) · **Cloud-tested** (automated tests
    - ~~Adopt/adapt/reject table~~ (batch 9, `docs/OPEN_SOURCE_RESEARCH.md` → "Expert data team").
    - ~~M-Schema cards; candidate agreement (XiYan-SQL)~~ (batch 10).
    - Optional next: Valentine-style one-to-one column-matching suggestions for unfamiliar Excel layouts.
+
+## Production gaps found by the decision audit (2026-10-18)
+
+Every row of `docs/RESEARCH_DECISIONS.md` was checked against the code. Ranked by what matters most to a large company
+(correct Oracle data and answers first). Each is a decided design that is not built yet:
+
+1. **Masters are created inside order posting** (`config/oracle_mapping.json` `"create": true` for buyer, style, colour, size,
+   unit, merchandiser; matching is exact after upper-casing). A typo ("NEXT LTD." vs "NEXT LTD") makes a new BUYMAS/COLORMAS row.
+   Decision: never create masters implicitly; near-duplicate check and a separate, permission-gated step.
+2. **Units:** only PCS/PACK. No DZN/PR/SET/CTN conversion; a packs × pieces mismatch is only a warning.
+3. **After commit:** no control-total vector (Σ per colour and per size, hashed), no automatic read-back on a fresh connection,
+   no VERIFIED / POST_FAILED states.
+4. **Import ledger:** no content-hash + business-key ledger. The same order re-sent in another format under a new reference
+   is not caught. No amendment flow.
+5. **Validators:** missing the 18-month date range, per-buyer PO/style patterns, explicit acknowledgement of warnings, and
+   BOM basis and wastage bands.
+6. **Approval:** self-approval is on by default (`allow_self_approval=True`); there is no reject-with-reason flow.
+7. **Oracle accounts and driver:** READ instead of SELECT grants, a profile and an audit policy; a connection pool; a writer
+   `call_timeout`; preflight.
+8. **Scale:** OFFSET paging on tables without a numeric key, exact COUNT(*) by default, and 12 golden questions (target 200+).
+9. **Uploads:** formula-injection flagging and the CSV export TAB prefix; ZIP `..` and compression-ratio checks.
+10. **Operations:** JSON logs with request IDs, `/healthz` and `/readyz`, SQLite `synchronous=FULL` and versioned
+    migrations, and a hash-chained audit.
+11. **Secrets:** DPAPI-protected secrets instead of plain `.env.poppys`.
+12. **Matching:** Hungarian assignment, RapidFuzz, confidence bands, and capping the local model's vote.
+13. **Files:** extra Save-As types, `.xlt`, and opening password-protected files.
+14. **CI, packaging and UX polish:** SBOM, signing, SHA-pinned actions, ARIA details.
 
 ## Local verification
 
