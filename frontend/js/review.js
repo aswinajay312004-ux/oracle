@@ -22,7 +22,7 @@ export function planGroups(d) {
   const ex = d.plan.exceptions || {}; const who = i => many(d.orders.length) ? `Order ${i + 1} · ` : '';
   // The automatic OC No. is shown on the order itself ("Assigned when saved"), so its note is not repeated here.
   const notes = (d.plan.warnings || []).filter(w => !/OC No\. is given automatically/.test(w))
-    .map(w => d.orders.length === 1 ? w.replace(/^Order \d+: /, '') : w).map(w => w.charAt(0).toUpperCase() + w.slice(1));
+    .map(w => d.orders.length === 1 ? w.replace(/^Order \d+(: |, )/, '') : w).map(w => w.charAt(0).toUpperCase() + w.slice(1));
   return groups({ who, warnings: notes,
     newMasters: ex.new_masters || [], notSaved: ex.not_saved || [], conversions: ex.conversions || [], exclusions: ex.exclusions || [],
     moved: ex.layout_changes || [], referenceOnly: [] });
@@ -60,4 +60,36 @@ export function reviewList(list, { title = 'Review', ack = null } = {}) {
     </table>
     ${ack ? `<label class="check rl-ack"><input type="checkbox" id="ex-seen" ${ack.checked ? 'checked' : ''}> I’ve reviewed these items</label>` : ''}
   </section>`;
+}
+
+// The popup's notes in a few short lines a non-technical person reads at a glance. The full sentence of each point is
+// kept in its tooltip. Notes about fabric, yarn and trims are left out while those rows are not saved at all.
+function plainNote(text, pieces) {
+  let m;
+  if (/order quantities will be imported as a DEMO SAMPLE order/i.test(text)) return { icon: '✓', text: `Pieces: taken from the buyer order${pieces ? ` (${pieces} pcs)` : ''}` };
+  if ((m = text.match(/“(.+?)” is the existing (?:\w+ )*?(\w+) “(.+?)”/i))) return { icon: '↔', text: `“${m[1]}” = existing ${m[2].toLowerCase()} “${m[3]}”` };
+  return { icon: '!', text: text.length > 110 ? text.slice(0, 107) + '…' : text };
+}
+
+export function notesHtml(list, { pieces = '' } = {}) {
+  const by = Object.fromEntries(list.map(g => [g.title, g.rows]));
+  const notSaved = by['Not saved to Oracle'] || [];
+  const bomOff = notSaved.some(r => /fabric|trim|accessor|yarn/i.test(r.label));
+  const check = [...(by['To check'] || []), ...(by['Converted'] || []), ...(by['Layout changed'] || [])]
+    .filter(r => !(bomOff && /accessor|fabric|yarn|trim/i.test(r.label)));
+  const unread = by['Not read from the file'] || [];
+  const words = [...new Set(unread.flatMap(r => ((r.value.match(/under (.+?) at row/) || [])[1] || '').split(', ')
+    .map(w => w.trim()).filter(w => w && w !== '…' && !/qty|quantity|req|yy|rejection/i.test(w))))];
+  const lines = check.map(r => { const n = plainNote(r.value ? `${r.label}: ${r.value}` : r.label, pieces); return { ...n, tip: r.label }; });
+  if (notSaved.length) {
+    lines.push({ icon: '✕', text: `Not saved in Oracle: ${notSaved.map(r => r.label.replace(/ (rows|split rows)$/i, '').replace(/^Trims \/ accessory$/i, 'Trims')).join(', ')}`,
+                 tip: notSaved.map(r => `${r.label}: ${r.value} — ${r.tip || r.chip}`).join('\n') });
+  }
+  if (unread.length) {
+    lines.push({ icon: '⋯', text: `Extra columns in the Excel not used${words.length ? `: ${words.slice(0, 5).join(', ')}` : ''}`,
+                 tip: unread.map(r => `${r.label}: ${r.value}`).join('\n') });
+  }
+  if (!lines.length) return '';
+  return `<section class="pv pv-notes"><h3>Please note</h3><ul class="pv-simple">${lines.map(l =>
+    `<li title="${esc(l.tip || l.text)}"><span class="pv-ic" aria-hidden="true">${l.icon}</span>${esc(l.text)}</li>`).join('')}</ul></section>`;
 }

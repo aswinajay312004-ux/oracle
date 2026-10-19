@@ -5,8 +5,8 @@ import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, 
 import { api, id, orderFields } from './api.js';
 import { renderMapping } from './mapping.js';
 import { flowCard, mountFlow } from './flowview.js';
-import { sheetHtml, openFullView, tablesHtml } from './ordersheet.js';
-import { reviewList, planGroups, receiptGroups } from './review.js';
+import { sheetHtml, openFullView, previewHtml } from './ordersheet.js';
+import { reviewList, planGroups, receiptGroups, notesHtml as approvalNotes } from './review.js';
 
 const HEADER = [
   // key, label, required, datalist, input type
@@ -769,37 +769,21 @@ export async function ask(question) {
 // saved, then Accept (save) or Edit (back to the entry, which stays underneath).
 export function showApprove() {
   const d = state.draft; const plan = d.plan;
-  const inserts = plan.operations.filter(o => o.action === 'insert');
-  const tables = new Set(inserts.map(o => o.table));
-  const sheets = plan.graph?.sheets || [];
-  const lines = sheets.reduce((n, s) => n + s.lines.length, 0) || d.orders.reduce((n, o) => n + (o.lines || []).length, 0);
-  const newNames = (plan.exceptions?.new_masters || []).length;
   const canApprove = plan.live && !plan.errors.length && can('approve');
+  // Everything the approver must see is shown in full in this popup (no folded parts), so opening it is reading it.
+  if (plan.exceptions?.digest) state.exceptionsSeen = plan.exceptions.digest;
   const root = $('#stage-approve');
   if ($('#stage-review').hidden || !$('#orders')) renderReview();
   root.innerHTML = `<div class="popup" role="dialog" aria-modal="true" aria-labelledby="ap-title">
-    <div class="popup-head"><div><span class="eyebrow">Ready to save · ${esc(d.filename)}</span><h2 id="ap-title" tabindex="-1">Check and accept</h2></div>
-      <div class="popup-actions"><button class="secondary" data-act2="back-review">Edit</button></div></div>
+    <div class="popup-head"><div><span class="eyebrow">${esc(d.filename)}</span><h2 id="ap-title" tabindex="-1">Save this order to Oracle?</h2></div>
+      <span class="pill">${esc(fmt(plan.totals.pieces, 0))} pcs</span></div>
     ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is offline — saving is paused. Start the database and check again.</div></div>'}
-    <div class="kpis">${[['Orders', d.orders.length], ['Colour lines', lines], ['Pieces to save', fmt(plan.totals.pieces, 0)], ['New names added to Oracle', newNames]].map(([x, y]) => `<div class="card kpi"><small>${x}</small><strong>${y}</strong></div>`).join('')}</div>
-    ${sheets.length ? `<section class="card saved-sheet"><div class="card-head"><h2>Order to be saved</h2></div>
-      <div class="saved-sheet-body">${sheets.map((s, i) => sheetHtml(s, { planned: true, series: ocSeries(), next: state.nextOc?.[i] })).join('')}</div></section>` : ''}
-    <section class="card saved-sheet"><div class="card-head"><h2>Where each value goes in Oracle</h2><span class="muted small-text">${plural(inserts.length, 'new record')} in ${plural(tables.size, 'table')}</span></div>
-      <div class="saved-sheet-body ot-list">${tablesHtml(plan.graph, state.nextOc || {})}</div></section>
-    ${reviewList(planGroups(d), { title: 'Before you approve', ack: plan.exceptions?.digest ? { checked: state.exceptionsSeen === plan.exceptions.digest } : null })}
-    <details class="card tech-details" data-tech><summary>Technical details <span class="muted">· how the tables are linked</span></summary>
-      ${flowCard('Where this order will be saved', 'Click a table to see its rows.')}</details>
-    <div class="action-bar"><p>${canApprove ? (needsAck(plan) ? 'Tick “I’ve reviewed these items” to approve.' : 'Saved in one step — if anything fails, nothing is saved.') :
+    ${previewHtml(plan.graph, state.nextOc || {})}
+    ${approvalNotes(planGroups(d), { pieces: fmt(plan.totals.pieces, 0) })}
+    <div class="action-bar"><p>${canApprove ? 'Saved in one step — if anything fails, nothing is saved.' :
       !plan.live ? 'Oracle is offline — saving is paused.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Only an approver can save this order.'}</p>
-      <button class="secondary" data-act2="back-review">Edit</button>
-      <button class="primary big" data-act2="approve" ${canApprove && !needsAck(plan) ? '' : 'disabled'}>Accept and save to Oracle →</button></div></div>`;
-  // The diagram needs its real size, so it is drawn the first time the technical details are opened.
-  const tech = root.querySelector('[data-tech]');
-  tech.addEventListener('toggle', () => {
-    if (!tech.open || tech.dataset.drawn) return;
-    tech.dataset.drawn = '1';
-    mountFlow(tech, plan.graph || { nodes: [], edges: [] }, { planned: true, columns: plan.columns, onReferenceOnly: t => backToReview(t === 'ORDACC' ? 'trims' : 'fabric') });
-  });
+      <button class="secondary big" data-act2="back-review">Edit</button>
+      <button class="primary big" data-act2="approve" ${canApprove ? '' : 'disabled'}>Accept and save to Oracle →</button></div></div>`;
   stage('approve');
   root.scrollTop = 0; $('#ap-title').focus();
 }

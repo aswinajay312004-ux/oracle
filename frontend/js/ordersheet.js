@@ -68,36 +68,57 @@ export function openFullView(sheets, { title = 'Order saved in Oracle', readAt =
   return d;
 }
 
-// Where each value goes: one small grid per Oracle table of the plan (planned graph), in business words. Record IDs
-// and the links between new records are left out (they are generated on save); masters show their names.
-const KIND_ORDER = { header: 0, detail: 1, master: 2 };
-export function tablesHtml(graph, nexts = {}) {
-  const nodes = (graph?.nodes || []).filter(n => (n.records || []).length && !n.reference_only)
-    .sort((a, b) => (KIND_ORDER[a.kind] ?? 3) - (KIND_ORDER[b.kind] ?? 3));
-  if (!nodes.length) return '';
-  return nodes.map(n => {
-    const written = n.records.filter(r => r.kind === 'written');
-    const rows = written.length ? written : n.records;
-    const linkCol = c => /link|belongs to/i.test((n.labels || {})[c] || '');     // generated on save, nothing to check
-    const shown = c => c !== n.key && !linkCol(c) && rows.some(r => { const v = r.live?.[c]; return v != null && v !== '' && !(typeof v === 'string' && v.startsWith('$')) || r.decoded?.[c] != null; });
-    const cols = [...new Set(rows.flatMap(r => r.written_columns?.length ? r.written_columns : Object.keys(r.live || {})))].filter(shown);
-    const cell = (r, c, i = 0) => {
-      const v = r.decoded?.[c] ?? r.live?.[c];
-      if (typeof v === 'string' && v.includes('(OC No. given on save)') && n.kind === 'header' && nexts[i]) return `${nexts[i]} (confirmed when saved)`;
-      return typeof v === 'string' && v.startsWith('$') ? 'new' : niceValue(v);
-    };
-    const label = c => (n.labels || {})[c] || c;
-    const what = n.kind === 'master' ? (written.length ? `${written.length} new` : `${n.records.length} existing, linked`)
-      : `${rows.length} row${rows.length === 1 ? '' : 's'}`;
-    const list = rows.slice(0, 60);
-    const head = `<summary><b>${esc(n.business || n.table)}</b> <span class="muted">· ${esc(n.table)} · ${esc(what)}</span></summary>`;
-    if (rows.length === 1) {      // one record (the order header, one new master): label and value, like the order screen
-      return `<details class="ot" ${n.kind === 'header' ? 'open' : ''}>${head}<dl class="os-details ot-one">${cols.map(c =>
-        `<div title="${esc(n.table + '.' + c)}"><dt>${esc(label(c))}</dt><dd>${esc(cell(rows[0], c, 0))}</dd></div>`).join('')}</dl></details>`;
-    }
-    return `<details class="ot">${head}
-      <div class="tbl-wrap"><table><thead><tr>${cols.map(c => `<th scope="col" title="${esc(n.table + '.' + c)}">${esc(label(c))}</th>`).join('')}</tr></thead>
-      <tbody>${list.map((r, i) => `<tr>${cols.map(c => `<td>${esc(cell(r, c, i))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
-      ${rows.length > list.length ? `<p class="muted small-text">and ${rows.length - list.length} more rows</p>` : ''}</details>`;
-  }).join('');
+// The popup before saving: each Oracle table that receives values, open and in business words. Record IDs and the links
+// between new records are left out (they are generated on save); masters show their names.
+function grid(n, nexts, same = new Set()) {
+  const rows = n.records.filter(r => r.kind === 'written');
+  const linkCol = c => /link|belongs to/i.test((n.labels || {})[c] || '');
+  const shown = c => c !== n.key && !linkCol(c) && rows.some(r => { const v = r.live?.[c]; return (v != null && v !== '' && !(typeof v === 'string' && v.startsWith('$'))) || r.decoded?.[c] != null; });
+  const label = c => (n.labels || {})[c] || c;
+  const cell = (r, c, i) => {
+    const v = r.decoded?.[c] ?? r.live?.[c];
+    if (typeof v === 'string' && v.includes('(OC No. given on save)') && n.kind === 'header') return nexts[i] || 'Given when saved';
+    return niceValue(v);
+  };
+  // a line column that only repeats a value of the order (its PO, style, unit…) is not shown again
+  const cols = [...new Set(rows.flatMap(r => r.written_columns || []))].filter(shown)
+    .filter(c => !(same.size && rows.every((r, i) => same.has(cell(r, c, i)))));
+  if (rows.length === 1) {
+    return `<dl class="os-details">${cols.map(c => `<div title="${esc(n.table + '.' + c)}"><dt>${esc(label(c))}</dt><dd>${esc(cell(rows[0], c, 0))}</dd></div>`).join('')}</dl>`;
+  }
+  return `<div class="tbl-wrap"><table><thead><tr>${cols.map(c => `<th scope="col" title="${esc(n.table + '.' + c)}">${esc(label(c))}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r, i) => `<tr>${cols.map(c => `<td>${esc(cell(r, c, i))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function sizeMatrix(sheet) {
+  return `<div class="tbl-wrap os-table"><table><thead><tr><th scope="col">Colour</th>${sheet.sizes.map(s => `<th scope="col" class="num">${esc(s)}</th>`).join('')}<th scope="col" class="num">Total</th></tr></thead>
+    <tbody>${sheet.lines.map(l => `<tr><th scope="row">${esc(niceValue(l.colour))}</th>${sheet.sizes.map(s => `<td class="num">${l.sizes[s] == null ? '–' : esc(fmt(l.sizes[s]))}</td>`).join('')}<td class="num"><b>${esc(fmt(l.total))}</b></td></tr>`).join('')}</tbody>
+    <tfoot><tr><th scope="row">Total</th>${sheet.sizes.map(s => `<td class="num">${esc(fmt(sheet.size_totals[s] ?? 0))}</td>`).join('')}<td class="num"><b>${esc(fmt(sheet.total))}</b></td></tr></tfoot></table></div>`;
+}
+
+const section = (title, table, count, body) => `<section class="pv"><h3>${esc(title)} <span class="pv-to">→ Oracle ${esc(table)}${count ? ` · ${esc(count)}` : ''}</span></h3>${body}</section>`;
+
+export function previewHtml(graph, nexts = {}) {
+  const nodes = (graph?.nodes || []).filter(n => !n.reference_only && (n.records || []).some(r => r.kind === 'written'));
+  const header = nodes.find(n => n.kind === 'header');
+  const sizes = nodes.find(n => n.table === 'ORDSIZE');
+  const details = nodes.filter(n => n.kind === 'detail' && n !== sizes);
+  const masters = nodes.filter(n => n.kind === 'master');
+  const sheets = graph?.sheets || [];
+  const rows = n => n.records.filter(r => r.kind === 'written').length;
+  const out = [];
+  if (header) out.push(section('Order', header.table, '', grid(header, nexts)));
+  const orderValues = new Set(header ? header.records.filter(r => r.kind === 'written').flatMap(r =>
+    Object.keys(r.live || {}).map(c => niceValue(r.decoded?.[c] ?? r.live?.[c]))) : []);
+  details.forEach(n => out.push(section(n.business.replace(/^Order Entry — /, '').replace(/^./, c => c.toUpperCase()), n.table, `${rows(n)} rows`, grid(n, nexts, orderValues))));
+  if (sizes) out.push(section('Size quantities', sizes.table, `${rows(sizes)} rows`, sheets.map(sizeMatrix).join('') || grid(sizes, nexts)));
+  const names = masters.flatMap(n => n.records.filter(r => r.kind === 'written').map(r => {
+    const name = Object.entries(r.live || {}).find(([c, v]) => c !== n.key && typeof v === 'string' && !v.startsWith('$'));
+    return { what: (n.business || n.table).replace(/ master$/i, ''), name: name ? name[1] : '', table: n.table };
+  }));
+  if (names.length) {
+    out.push(section('New names added', 'masters', `${names.length}`, `<div class="tbl-wrap"><table><thead><tr><th scope="col">What</th><th scope="col">Name</th><th scope="col">Oracle table</th></tr></thead>
+      <tbody>${names.map(x => `<tr><td>${esc(x.what)}</td><td><b>${esc(x.name)}</b></td><td class="muted">${esc(x.table)}</td></tr>`).join('')}</tbody></table></div>`));
+  }
+  return out.join('');
 }
