@@ -394,3 +394,18 @@ def test_new_master_records_are_listed_for_the_approver(env):
     made = {(x['business'], x['label']) for x in p['plan']['exceptions']['new_masters']}
     assert ('Style number', 'FL-500') in made and ('Colour / combo', 'RED') in made
     assert not any(x['label'] == 'TESTBUYER' for x in p['plan']['exceptions']['new_masters']), 'an existing buyer is reused, not listed'
+
+
+def test_unread_numbers_name_the_excel_block_they_are_in():
+    """A trims block's calculation columns are reported under the block's title ("SEWING THREAD"), also for a following
+    block that repeats its heading without a title of its own."""
+    from backend import coverage
+    rows = {(1, 2): 'SEWING THREAD', (1, 3): 'OCN 82', (2, 2): 'Garment', (2, 3): 'METER', (3, 2): 'G1', (3, 3): 5000,
+            (4, 2): 'G2', (4, 3): 5000, (7, 2): 'Garment', (7, 3): 'METER', (8, 2): 'G3', (8, 3): 4000}
+    cells = [dict(row=r, col=c, value=v, cell=f'{"ABCD"[c - 1]}{r}') for (r, c), v in rows.items()]
+    by_rc = dict(rows)
+    titles = {}
+    first = coverage._describe({'name': 'S'}, dict(first=3, last=4, cols=[3], cells=[x for x in cells if x['row'] in (3, 4) and x['col'] == 3]), by_rc, titles)
+    second = coverage._describe({'name': 'S'}, dict(first=8, last=8, cols=[3], cells=[x for x in cells if x['row'] == 8 and x['col'] == 3]), by_rc, titles)
+    assert first['section'] == second['section'] == 'SEWING THREAD'
+    assert 'not read in “SEWING THREAD” (under METER at row 2)' in first['text']

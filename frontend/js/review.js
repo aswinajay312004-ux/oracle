@@ -11,6 +11,28 @@ function split(text) {
 }
 
 const many = n => n > 1;
+const UNUSED = 'Excel numbers not used';
+
+// "Sheet “CT27085” rows 41–50, columns L–O: 40 numbers not read in “15-L PRONGS” (under stud, Required Qty, … at row 40)."
+// → one row per Excel block ("15-L Prongs": stud, socket, Required Qty — 120 numbers, rows 41–78); the sentences stay
+// in the tooltip.
+const UNREAD = /^Sheet “(.+?)”(?: \(hidden in Excel\))? rows? (\d+)(?:–(\d+))?, columns? [A-Z–]+: (\d+) numbers? not read(?: in “(.+?)”)?(?: \(under (.+?) at row \d+\))?(; these cells are hidden in Excel)?\.?$/;
+const title = t => t.toLowerCase().replace(/(^|[\s\-/(])([a-z])/g, (m, a, b) => a + b.toUpperCase());
+function unusedRows(exclusions) {
+  const blocks = new Map(); const rows = [];
+  for (const x of exclusions) {
+    const m = String(x).match(UNREAD);
+    if (!m) { const [a, b] = split(x); rows.push({ label: a, value: b, chip: 'Not used', tone: 'skipped', tip: x }); continue; }
+    const [, sheet, first, last, n, section, under, hidden] = m;
+    const key = section ? `${sheet}|${section.toUpperCase()}` : `${sheet}|${first}`;
+    const b = blocks.get(key) || { label: section ? title(section) : `Rows ${first}${last ? `–${last}` : ''}`, words: [], count: 0, from: +first, to: +(last || first), hidden: true, tips: [] };
+    if (!blocks.has(key)) { blocks.set(key, b); rows.push(b); }
+    b.words.push(...String(under || '').split(', ').map(w => w.trim()).filter(w => w && w !== '…'));
+    b.count += +n; b.from = Math.min(b.from, +first); b.to = Math.max(b.to, +(last || first)); b.hidden &&= !!hidden; b.tips.push(x);
+  }
+  return rows.map(r => r.tips ? { label: r.label, words: [...new Set(r.words)], chip: r.hidden ? 'Hidden rows' : 'Not used', tone: 'skipped', tip: r.tips.join('\n'),
+    value: `${[...new Set(r.words)].slice(0, 4).join(', ') || 'numbers'} — ${plural(r.count, 'number')}, row${r.from === r.to ? ` ${r.from}` : `s ${r.from}–${r.to}`}` } : r);
+}
 function quoted(x) {
   if (!x.values?.length) return plural(x.count, 'row');
   const more = x.count > x.values.length ? ` +${x.count - x.values.length}` : '';
@@ -44,7 +66,7 @@ function groups({ who, warnings, newMasters, notSaved, conversions, exclusions, 
   const ns = [...notSaved.map(x => ({ label: who(x.order) + x.label, value: quoted(x), chip: x.kept === 'unverified' ? 'Not set up yet' : 'No Oracle field', tone: 'skipped', tip: x.reason[0].toUpperCase() + x.reason.slice(1) })),
     ...referenceOnly.map(r => ({ label: r.business, value: plural(r.rows, 'row'), chip: 'Not set up yet', tone: 'skipped', tip: r.reason }))];
   if (ns.length) out.push({ title: 'Not saved to Oracle', note: 'kept with this import in POPPYS', rows: ns });
-  if (exclusions.length) out.push({ title: 'Not read from the file', rows: exclusions.map(x => { const [a, b] = split(x); return { label: a, value: b, chip: 'Skipped', tone: 'skipped' }; }) });
+  if (exclusions.length) out.push({ title: UNUSED, note: 'not part of the order — open the Excel at these rows if one is needed', rows: unusedRows(exclusions) });
   return out;
 }
 
@@ -77,16 +99,15 @@ export function notesHtml(list, { pieces = '' } = {}) {
   const bomOff = notSaved.some(r => /fabric|trim|accessor|yarn/i.test(r.label));
   const check = [...(by['To check'] || []), ...(by['Converted'] || []), ...(by['Layout changed'] || [])]
     .filter(r => !(bomOff && /accessor|fabric|yarn|trim/i.test(r.label)));
-  const unread = by['Not read from the file'] || [];
-  const words = [...new Set(unread.flatMap(r => ((r.value.match(/under (.+?) at row/) || [])[1] || '').split(', ')
-    .map(w => w.trim()).filter(w => w && w !== '…' && !/qty|quantity|req|yy|rejection/i.test(w))))];
+  const unread = by[UNUSED] || [];
+  const words = [...new Set(unread.map(r => r.label).filter(l => !/^Rows? \d/.test(l)))];
   const lines = check.map(r => { const n = plainNote(r.value ? `${r.label}: ${r.value}` : r.label, pieces); return { ...n, tip: r.label }; });
   if (notSaved.length) {
     lines.push({ icon: '✕', text: `Not saved in Oracle: ${notSaved.map(r => r.label.replace(/ (rows|split rows)$/i, '').replace(/^Trims \/ accessory$/i, 'Trims')).join(', ')}`,
                  tip: notSaved.map(r => `${r.label}: ${r.value} — ${r.tip || r.chip}`).join('\n') });
   }
   if (unread.length) {
-    lines.push({ icon: '⋯', text: `Extra columns in the Excel not used${words.length ? `: ${words.slice(0, 5).join(', ')}` : ''}`,
+    lines.push({ icon: '⋯', text: `Excel numbers not used${words.length ? `: ${words.slice(0, 5).join(', ')}` : ''}`,
                  tip: unread.map(r => `${r.label}: ${r.value}`).join('\n') });
   }
   if (!lines.length) return '';

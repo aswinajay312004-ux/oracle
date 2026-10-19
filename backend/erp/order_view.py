@@ -130,3 +130,92 @@ def compare(oracle_sheet, excel_sheet):
     return dict(same=same, pieces=pieces, details=dict(count=len(details), different=details_diff),
                 cells=dict(count=cells, different=cells_diff), missing_lines=missing, extra_lines=extra,
                 lines=dict(excel=len(excel_sheet['lines']), oracle=len(oracle_sheet['lines'])))
+
+
+def _span(cells):
+    cells = [c for c in cells if c]
+    if not cells:
+        return None
+    return cells[0] if len(cells) == 1 or cells[0] == cells[-1] else f'{cells[0]}–{cells[-1]}'
+
+
+def _rows_of(value):
+    """'rows 31–36': the Excel rows the cells inside a list of read items (fabric, trims, lines) come from."""
+    rows = set()
+
+    def walk(v):
+        if isinstance(v, dict):
+            if isinstance(v.get('cell'), str) and (m := re.fullmatch(r'[A-Z]{1,3}(\d+)', v['cell'])):
+                rows.add(int(m.group(1)))
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(value)
+    return None if not rows else f'row {min(rows)}' if len(rows) == 1 else f'rows {min(rows)}–{max(rows)}'
+
+
+def excel_map(mapping, order, sheet, receipt, check, automatic=False):
+    """Where each value of the Excel file is now, for a person to tick off against the file: from_file (Excel cell, the
+    value there, the value Oracle holds now), filled (values POPPYS put in that are not in the file, with why) and kept
+    (values read from the file that Oracle does not hold, with why). Built from the draft's cell provenance.
+    state: 'same' (Oracle holds the Excel value), 'changed' (changed before saving: edited on the review screen, or
+    matched to an existing name) or 'different' (Oracle no longer holds what was saved)."""
+    def state(excel, now, saved_ok):
+        if not saved_ok:
+            return 'different'
+        return 'same' if readback._same(_value(_key(now)), _value(_key(excel))) or _key(now) == _key(excel) else 'changed'
+
+    head, line, size = tables(mapping)
+    prov = order.get('provenance') or {}
+    differs = {d['label'] for d in (check or {}).get('details', {}).get('different', [])}
+    oracle = {f['label']: f['value'] for f in sheet['header']}
+    from_file, filled = [], []
+    for c, x in mapping['tables'][head]['columns'].items():
+        label = x.get('label') or c
+        if x.get('key') or label not in oracle:
+            continue
+        field = x.get('field') or ''
+        if field == 'calc.pieces':
+            continue                                    # the pieces are the size table, listed below
+        p = prov.get(field.split('.', 1)[1]) if field.startswith('order.') else None
+        if p and p.get('cell'):
+            from_file.append(dict(label=label, cell=p['cell'], excel=p.get('value'), oracle=oracle[label],
+                                  state=state(p.get('value'), oracle[label], label not in differs)))
+        else:
+            why = (p or {}).get('derivation') or (('Next number of the OC series' if automatic else 'Typed in POPPYS')
+                                                  if field == 'order.order_ref' else 'Company default')
+            filled.append(dict(label=label, value=oracle[label], why=why))
+    ship = prov.get('ship_date') or {}
+    ships = {l['ship_date'] for l in sheet['lines'] if l.get('ship_date')}
+    if ship.get('cell') and ships:
+        now = next(iter(ships)) if len(ships) == 1 else ', '.join(sorted(ships))
+        from_file.append(dict(label='Ship date', cell=ship['cell'], excel=ship.get('value'), oracle=now, state=state(ship.get('value'), now, True)))
+    lines = [l for l in (order.get('order_lines') if order.get('quantity_basis') == 'order_demo' else order.get('lines')) or order.get('lines') or []
+             if any(s.get('quantity') for s in l.get('sizes') or [])]
+    colours = [(l.get('provenance') or {}).get('color', {}).get('cell') for l in lines]
+    if any(colours):
+        from_file.append(dict(label='Colours', cell=_span(colours), excel=f'{len(lines)} colours', oracle=f'{len(sheet["lines"])} colours',
+                              state='same' if not (check or {}).get('missing_lines') and not (check or {}).get('extra_lines') else 'different'))
+    qty = [s.get('source', {}).get('cell') for l in lines for s in l.get('sizes') or [] if s.get('quantity')]
+    if any(qty) and check:
+        cells = check['cells']
+        from_file.append(dict(label='Size quantities', cell=_span(qty), excel=f'{cells["count"]} quantities · {check["pieces"]["excel"]} pcs',
+                              oracle=f'{cells["count"] - len(cells["different"])} same · {check["pieces"]["oracle"]} pcs',
+                              state='same' if not cells['different'] and check['pieces']['excel'] == check['pieces']['oracle'] else 'different'))
+    kept = []
+    for x in (receipt or {}).get('not_saved') or []:
+        values = [str(v) for v in x.get('values') or []]
+        what = ', '.join(values[:3]) + (f' +{len(values) - 3}' if len(values) > 3 else '') if values else f'{x.get("count", 0)} rows'
+        p = prov.get(x.get('field')) or {}
+        path = (x.get('path') or '').split('.')[-1]
+        items = order.get(path)
+        if path == 'lines':                             # the line's own cells, not the size names in the heading row
+            items = [(l.get('provenance') or {}).get('color') for l in items or []]
+        cell = p.get('cell') or (_rows_of(items) if path in ('fabrics', 'accessories', 'lines') else None)
+        if not cell and p.get('derivation'):            # not in the file: say where the value came from
+            what = f'{what} ({p["derivation"][0].lower()}{p["derivation"][1:]})'
+        kept.append(dict(label=x['label'], cell=cell, excel=what,
+                         why='Oracle has no field for this' if x.get('kept') == 'poppys' else 'Oracle field not confirmed yet'))
+    return dict(from_file=from_file, filled=filled, kept=kept)

@@ -4,7 +4,7 @@
 import { $, $$, esc, show, fmt, plural, busy, drawer, closeDrawer, notify, formView, state } from './util.js';
 import { api, id } from './api.js';
 import { renderGraph } from './graph.js';
-import { loadOrders, findOrder } from './dborders.js';
+import { loadOrders, findOrder, openOrder } from './dborders.js';
 
 let tables = []; let tablesReady = null; let current = null; let tab = 'records';
 let mode = 'orders';   // 'orders' | 'tables'
@@ -330,10 +330,10 @@ function bindRecord(body, rel) {
   });
 }
 
-// "Open in Database" on the Saved screen: that order on the Orders view.
+// "Check against the Excel" / "Open in Database" on the Saved screen (an order record ID): that order on the Orders view.
 export async function exploreOrder(ref) {
   setMode('orders');
-  return findOrder(ref);
+  return /^\d+$/.test(String(ref)) ? openOrder(ref) : findOrder(ref);
 }
 
 export function bindExplorer() {

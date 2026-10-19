@@ -795,6 +795,21 @@ DATABASE SCREEN - SAVE AANA ORDER AH CHECK PANNA (2026-10-19):
       ORDMAS / ORDSTYLE / ORDSIZE rows, record IDs).
   "All tables" tab = munnadi irundha table explorer (ella tables um).
 
+  "YOUR EXCEL -> ORACLE" TABLE (order page la, illa Saved screen la
+  "Check against the Excel" button):
+    Ovvoru value um: Excel cell (C2, E5...) - Excel la enna - Oracle la ippo enna.
+    Excel file ah pakkathula open panni line by line tick pannalaam.
+    - Saved in Oracle: green tick = same. Blue <-> = save munnadi maathunadhu
+      (review la edit, illa Oracle la irukkura pazhaya per oda match).
+      Red = save aana apram Oracle la yaaro maathittaanga.
+    - Filled in by POPPYS: Excel la illadhadhu (OC No, inniku date,
+      company default).
+    - Not in Oracle yet: Season, line label, Fabric (rows 31-36), Trims
+      (rows 41-348)... POPPYS la irukku, Oracle la innum illa (Axpert la endha
+      column nu confirm aagala).
+  Saved screen "Excel numbers not used" = Excel la trims calculation columns
+  (15-L Prongs stud/socket, Sewing thread METER...). Order quantities illa.
+
 INNUM BAAKI (detail: docs\engineering\KNOWN_LIMITATIONS.md):
   - Axpert compatibility verify (mela sonna gap report + screen check).
   - Fabric / yarn / trims Oracle la save aagala (mapping verify aaganum).

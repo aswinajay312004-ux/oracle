@@ -13,7 +13,7 @@ export function niceValue(v) {
 }
 
 // Labels written for the order screen; anything else keeps the write mapping's own label.
-const LABELS = { 'Order reference (OC number)': 'OC No', 'Buyer PO / contract number': 'PO / Contract No', 'Order confirmation date': 'Order confirmed on',
+export const LABELS = { 'Order reference (OC number)': 'OC No', 'Buyer PO / contract number': 'PO / Contract No', 'Order confirmation date': 'Order confirmed on',
   'Total order quantity (pieces)': 'Total pieces', 'Garment description': 'Description', 'Style number': 'Style #' };
 
 function details(sheet) {

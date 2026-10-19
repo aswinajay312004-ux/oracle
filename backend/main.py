@@ -2027,6 +2027,16 @@ def orders_in_oracle(q: str | None = Query(default=None, max_length=60), after: 
     return dict(orders=items, next_after=rows[-1][key] if len(rows) == ORDER_PAGE else None)
 
 
+def _saved_draft_order(job_id, receipt, ordmasid):
+    """The order of the import (as read from the Excel file, with its cell provenance) that became this Oracle order."""
+    try:
+        d = store.get(job_id)
+    except KeyError:
+        return None
+    i = next((i for i, o in enumerate((receipt or {}).get('orders') or []) if o.get('ordmasid') == ordmasid), None)
+    return d['orders'][i] if i is not None and i < len(d.get('orders') or []) else None
+
+
 @app.get('/api/orders/{ordmasid}')
 def order_in_oracle(ordmasid: int, user=Depends(authenticated)):
     """One order as Oracle has it now (header by business name, colour × size table). For an order POPPYS saved, every
@@ -2060,6 +2070,10 @@ def order_in_oracle(ordmasid: int, user=Depends(authenticated)):
             [from_excel] = readback.order_sheets(order_view.nodes(m, *excel, labels), m)
             out['saved']['check'] = order_view.compare(sheet, from_excel)
             sheet['verified'] = out['saved']['check']['same']
+        draft = _saved_draft_order(saved['job_id'], receipt, ordmasid)
+        if draft:
+            automatic = any(o.get('automatic') for o in receipt.get('orders') or [] if o.get('ordmasid') == ordmasid)
+            out['saved']['excel'] = order_view.excel_map(m, draft, sheet, receipt, out['saved']['check'], automatic)
     return out
 
 

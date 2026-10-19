@@ -32,12 +32,18 @@ def test_saved_order_is_compared_with_the_excel_value_by_value(world):  # noqa: 
     assert check['same'] and check['pieces'] == {'excel': SECOND_PIECES, 'oracle': SECOND_PIECES}
     assert check['cells']['count'] == 12 and not check['cells']['different'] and check['details']['count'] > 5
     assert d['saved']['filename'] == 'zen-po.xlsx'
+    excel = d['saved']['excel']                                    # each Excel value with its cell, for ticking off
+    rows = {r['label']: r for r in excel['from_file']}
+    assert rows['Buyer']['excel'] == rows['Buyer']['oracle'] == 'ZEN KIDS' and rows['Buyer']['cell']
+    assert all(r['state'] == 'same' for r in excel['from_file']), excel['from_file']
+    assert {r['label']: r['why'] for r in excel['filled']}['Order reference (OC number)'] == 'Typed in POPPYS'
     # someone changes one size quantity in Oracle afterwards: the screen shows the cell and what the Excel said
     conn = demo_db_connection(c)
     size = conn.execute('SELECT ORDSIZEID, RQTY FROM ORDSIZE WHERE ORDMASID = ? ORDER BY ORDSIZEID LIMIT 1', (ordmasid,)).fetchone()
     conn.execute('UPDATE ORDSIZE SET RQTY = ? WHERE ORDSIZEID = ?', (size[1] + 7, size[0])); conn.commit()
     d = c.get(f'/api/orders/{ordmasid}').json()
     assert d['sheet']['verified'] is False and not d['saved']['check']['same']
+    assert {r['label']: r['state'] for r in d['saved']['excel']['from_file']}['Size quantities'] == 'different'
     [diff] = d['saved']['check']['cells']['different']
     assert diff['excel'] == size[1] and diff['oracle'] == size[1] + 7
     assert any(l.get('excel') for l in d['sheet']['lines'])
@@ -74,3 +80,12 @@ def test_real_oracle_saved_order_is_found_by_name_and_matches_the_excel(real):  
     assert d['saved']['check']['cells']['count'] == 12 and d['sheet']['total'] == SECOND_PIECES
     labels = {f['label']: f['value'] for f in d['sheet']['header']}
     assert labels['Buyer'] == 'ZEN KIDS' and labels['Order confirmation date'] == '2026-10-17'
+
+
+def test_a_value_changed_before_saving_is_not_shown_as_the_excel_value():
+    from backend.erp import mapping, order_view
+    order = dict(provenance={'buyer': dict(cell='C2', value='Carters'), 'style': dict(cell='C4', value='ct27085 ')}, lines=[])
+    sheet = dict(header=[dict(label='Buyer', value="CARTER'S"), dict(label='Style number', value='CT27085')], lines=[])
+    check = dict(details=dict(different=[]), cells=dict(count=0, different=[]), pieces=dict(excel=0, oracle=0), missing_lines=[], extra_lines=[])
+    rows = {r['label']: r['state'] for r in order_view.excel_map(mapping.effective(), order, sheet, {}, check)['from_file']}
+    assert rows == {'Buyer': 'changed', 'Style number': 'same'}      # case and spaces are not a change

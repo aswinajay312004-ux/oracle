@@ -2,7 +2,7 @@
 // order sheet read from Oracle now and, for an order POPPYS saved, each value compared with the Excel file it came from.
 import { $, $$, esc, fmt, plural, notify, state, busy } from './util.js';
 import { api, id } from './api.js';
-import { sheetHtml, niceValue, openFullView } from './ordersheet.js';
+import { sheetHtml, niceValue, openFullView, LABELS } from './ordersheet.js';
 import { showRecord } from './explorer.js';
 
 const view = { q: '', list: [], next: null, loaded: false, error: null, order: null, seq: 0 };   // seq: the newest read wins
@@ -107,6 +107,23 @@ function checkHtml(d) {
   </section>`;
 }
 
+// Every value of the Excel file and where it is now: cell → value → Oracle, then what POPPYS filled in (not in the
+// file) and what is in the file but not in Oracle yet, so a person can tick the file off line by line.
+function mapHtml(x) {
+  if (!x) return '';
+  const name = l => LABELS[l] || l;
+  const cell = c => c ? `<span class="db-cell">${esc(c)}</span>` : '<span class="muted">—</span>';
+  const group = (title, note, rows) => rows.length ? `<tbody><tr class="rl-group"><th colspan="4" scope="colgroup">${esc(title)}${note ? ` <span class="muted">· ${esc(note)}</span>` : ''}</th></tr>${rows.join('')}</tbody>` : '';
+  return `<section class="card db-map" aria-labelledby="db-map-title">
+    <div class="card-head"><div><h2 id="db-map-title">Your Excel → Oracle</h2><p class="muted small-text">Each value with the Excel cell it was read from. Open the Excel file beside this to tick them off.</p></div></div>
+    <div class="tbl-wrap"><table class="db-maptable"><thead><tr><th scope="col">What</th><th scope="col">Excel cell</th><th scope="col">In the Excel</th><th scope="col">In Oracle now</th></tr></thead>
+    ${group('Saved in Oracle', '', x.from_file.map(r => `<tr><th scope="row">${r.state === 'changed' ? '<span class="db-ic info" aria-hidden="true">↔</span>' : tick(r.state === 'same')} ${esc(name(r.label))}</th><td data-label="Excel cell">${cell(r.cell)}</td><td data-label="In the Excel">${esc(niceValue(r.excel))}</td>
+      <td class="${r.state === 'different' ? 'db-bad' : ''}" data-label="In Oracle now"><b>${esc(niceValue(r.oracle))}</b>${r.state === 'changed' ? '<small class="db-note">changed before saving (edited, or matched to an existing name)</small>' : r.state === 'different' ? '<small class="db-note">changed in Oracle after saving</small>' : ''}</td></tr>`))}
+    ${group('Filled in by POPPYS', 'not in the Excel', x.filled.map(r => `<tr><th scope="row"><span class="db-ic" aria-hidden="true">+</span> ${esc(name(r.label))}</th><td data-label="Excel cell">${cell(null)}</td><td class="muted" data-label="In the Excel">${esc(r.why)}</td><td data-label="In Oracle now"><b>${esc(niceValue(r.value))}</b></td></tr>`))}
+    ${group('Not in Oracle yet', 'kept in POPPYS with this order', x.kept.map(r => `<tr class="db-kept"><th scope="row"><span class="db-ic" aria-hidden="true">–</span> ${esc(name(r.label.replace(/ (rows|split rows)$/i, '')))}</th><td data-label="Excel cell">${cell(r.cell)}</td><td data-label="In the Excel">${esc(r.excel)}</td><td class="muted" data-label="In Oracle now">${esc(r.why)}</td></tr>`))}
+    </table></div></section>`;
+}
+
 function badge(d) {
   if (!d.saved?.check) return '<span class="pill">Read from Oracle</span>';
   return d.saved.check.same ? '<span class="pill ok">✓ Same as the Excel</span>' : '<span class="pill err">⚠ Different from the Excel</span>';
@@ -120,6 +137,7 @@ function drawOrder() {
     <div class="db-order-bar"><button class="ghost small" data-dbx="back">← All orders</button><span class="spacer"></span>
       <button class="secondary small" data-dbx="full">Full screen · Print</button><button class="ghost small" data-dbx="tech" title="The Oracle tables, columns and record IDs behind this order">Oracle tables &amp; IDs</button></div>
     ${checkHtml(d)}
+    ${mapHtml(d.saved?.excel)}
     <div class="card db-sheet">${sheetHtml(sheet, { badge: badge(d) })}<p class="muted small-text db-read">Read from Oracle ${esc(when(d.read_at))}</p></div>
   </div>`;
   box.querySelectorAll('[data-dbx]').forEach(b => b.addEventListener('click', () => ({

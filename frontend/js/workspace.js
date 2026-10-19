@@ -847,7 +847,7 @@ export async function showSaved(result, target = $('#stage-saved'), standalone =
   target.innerHTML = `<section class="card saved-hero"><span class="tick" data-saved-tick>…</span><div><span class="eyebrow" data-saved-state>Saved · checking it in Oracle…</span>
       <h1>${refs.length ? `Order ${esc(refs.join(', '))} ${result.already_committed ? 'is' : 'is saved'} in Oracle.` : 'The order is saved in Oracle.'}</h1>
       <p class="muted">Approved by ${esc(result.approver || '—')} · ${esc(new Date(result.committed_at).toLocaleString())}${partial ? ' · some details from the file were not saved (listed below)' : ''}</p></div>
-      <div class="saved-actions"><button class="primary" data-fullview disabled>View the order in Oracle</button>${standalone ? '' : '<button class="secondary" data-act2="another">Start another order</button>'}</div></section>
+      <div class="saved-actions">${(result.orders || []).length === 1 ? `<button class="primary" data-explore-order="${esc(result.orders[0].ordmasid)}" title="Each value of the Excel file next to what Oracle holds now">Check against the Excel</button>` : ''}<button class="${(result.orders || []).length === 1 ? 'secondary' : 'primary'}" data-fullview disabled>View the order in Oracle</button>${standalone ? '' : '<button class="secondary" data-act2="another">Start another order</button>'}</div></section>
     <section class="card saved-sheet" data-sheets><p class="muted" style="padding:18px">Loading the order from Oracle…</p></section>
     ${result.local_record ? `<div class="banner warning" style="margin-top:12px"><span class="b-ic">!</span><div>${esc(result.local_record)}</div></div>` : ''}
     ${savedExceptions(result)}

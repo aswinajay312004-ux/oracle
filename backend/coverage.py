@@ -55,6 +55,18 @@ def _heading(by_rc, rows, cols, first_row):
     return None, []
 
 
+def _section(by_rc, head_row):
+    """The title of the Excel block a heading row belongs to ("15-L PRONGS", "SEWING THREAD"): the first text of the
+    nearest of the three rows above it that holds one or two text cells and no numbers."""
+    if not head_row:
+        return ''
+    for r in range(head_row - 1, max(0, head_row - 4), -1):
+        cells = [v for (row, _), v in sorted(by_rc.items()) if row == r and v not in (None, '') and str(v).strip()]
+        if cells:
+            return str(cells[0]).strip() if len(cells) <= 2 and all(isinstance(v, str) for v in cells) else ''
+    return ''
+
+
 def _row_label(by_rc, row, before_col):
     """The first text cell of a row left of before_col ("Grand Total", a colour name), or ''."""
     for c in range(1, before_col):
@@ -133,7 +145,7 @@ def _repeat_of(band, by_rc, accounted):
     return None
 
 
-def _describe(sheet, band, by_rc):
+def _describe(sheet, band, by_rc, titles=None):
     cols = band['cols']; first, last = band['first'], band['last']
     head_row, words = _heading(by_rc, None, cols, first)
     labels = {_row_label(by_rc, c['row'], min(cols)) for c in band['cells']}
@@ -142,14 +154,21 @@ def _describe(sheet, band, by_rc):
     where = f'row {first}' if first == last else f'rows {first}–{last}'
     span = _letters(cols[0]) if len(cols) == 1 else f'{_letters(cols[0])}–{_letters(cols[-1])}'
     n = len(band['cells'])
+    # a block without its own title that repeats the heading of a titled block above continues it (thread per garment)
+    titles = {} if titles is None else titles
+    section = _section(by_rc, head_row) or titles.get(tuple(words), '')
+    if section and words:
+        titles[tuple(words)] = section
     text = f'Sheet “{sheet["name"]}” {where}, column{"" if len(cols) == 1 else "s"} {span}: {n} number{"" if n == 1 else "s"} not read'
+    if section:
+        text += f' in “{section}”'
     if words:
         shown = ', '.join(words[:8]) + (', …' if len(words) > 8 else '')
         text += f' (under {shown} at row {head_row})'
     if hidden:
         text += '; these cells are hidden in Excel'
     sample = [dict(cell=c['cell'], value=c['value']) for c in sorted(band['cells'], key=lambda c: (c['row'], c['col']))[:6]]
-    return dict(rows=[first, last], columns=[_letters(c) for c in cols], count=n, heading=words[:12], heading_row=head_row,
+    return dict(rows=[first, last], columns=[_letters(c) for c in cols], count=n, heading=words[:12], heading_row=head_row, section=section,
                 kind='totals' if totals else 'hidden' if hidden else 'data', text=text + '.', sample=sample)
 
 
@@ -172,9 +191,9 @@ def manifest(sheets, orders, notes=()):
         known = {(c['row'], c['col']) for c in numbers if c['cell'].upper() in mine}
         totals_found = _checked_totals(unread, by_rc, known) if read else set()
         accounted = known | totals_found
-        bands = []
+        bands = []; titles = {}
         for b in _bands([c for c in unread if (c['row'], c['col']) not in totals_found], by_rc):
-            item = _describe(sheet, b, by_rc)
+            item = _describe(sheet, b, by_rc, titles)
             source = _repeat_of(b, by_rc, accounted) if read else None
             if read and all(c['value'] == 0 for c in b['cells']):
                 item.update(kind='zeros', text=item['text'].replace(' not read', ', all 0'))
