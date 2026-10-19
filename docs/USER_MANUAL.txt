@@ -98,6 +98,24 @@ Default ah adhu ON aa irukku.
 PART 4. DAILY START / STOP
 --------------------------------------------------------------------------------
 
+DOCKER LA (EASY - ORE COMMAND, docs/DOCKER.md):
+  Docker Desktop open pannunga, apram PowerShell la:
+       cd D:\oracle
+       Set-ExecutionPolicy -Scope Process Bypass -Force
+       .\docker-start.ps1
+  Idhu oracle26ai ah start pannum, POPPYS AI container ah start pannum,
+  ready aanadhum browser la http://127.0.0.1:8008 thaane open aagum.
+  Mudhal thadava image build aagum (internet venum, sila nimisham).
+  Mudhal thadava D:\oracle\data la irukkura users/drafts um Docker ku
+  copy aagum (ore oru thadava).
+  STOP:          .\docker-stop.ps1          (Oracle odittu irukkum)
+                 .\docker-stop.ps1 -Oracle  (rendum stop)
+  PUDHU VERSION: git pull, apram .\docker-start.ps1 -Rebuild
+  Logs:          docker compose logs -f app
+  Docker use panna start.ps1 run pannaadheenga (rendum port 8008).
+
+ILLAINAA PAZHAYA MAADHIRI start.ps1 LA:
+
 START (ovvoru naalum):
   1. Docker Desktop open pannunga. "Engine running" varra varaikum wait.
      oracle26ai container thaane start aagum. Check panna:

@@ -1,0 +1,19 @@
+# Only the application goes into the image: no local data, no passwords, no history, no test files.
+.git
+.github
+.venv
+.env
+.env.*
+data
+dist
+docs
+notes
+tests
+tools
+deploy
+**/__pycache__
+**/.pytest_cache
+*.log
+*.xls
+*.xlsx
+*.xlsm

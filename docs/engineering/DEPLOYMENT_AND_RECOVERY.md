@@ -13,6 +13,7 @@ Step-by-step guide for people: `docs/WINDOWS_SETUP.md` and `docs/USER_MANUAL.txt
 | Connection check | `scripts/check_oracle.py` | Locally verified |
 | Schema discovery | `scripts/discover_schema.py` | Locally verified |
 | Start | `.\start.ps1` → http://127.0.0.1:8008 | Locally verified (earlier) |
+| Start in Docker | `.\docker-start.ps1` (starts `oracle26ai`, builds/starts `poppys-ai`, data in volume `poppys-data`; docs/DOCKER.md) | Tested (cloud, real Oracle replica, PowerShell 7); not yet on the laptop |
 | Full local check | `.\verify_local.ps1` (Oracle check, all tests with real Oracle, Ask AI benchmark) | Environment-blocked (owner run pending) |
 | Windows service | `deploy/windows/install-service.ps1` (WinSW) | Implemented; Environment-blocked |
 

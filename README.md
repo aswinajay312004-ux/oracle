@@ -44,6 +44,9 @@ See **[docs/WINDOWS_SETUP.md](docs/WINDOWS_SETUP.md)**. In short:
 .\start.ps1                                              # http://127.0.0.1:8008
 ```
 
+Or in Docker, one command (Oracle container + POPPYS AI container, browser opens): `.\docker-start.ps1` —
+see **[docs/DOCKER.md](docs/DOCKER.md)**.
+
 ## Layout
 
 ```

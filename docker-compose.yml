@@ -1,0 +1,30 @@
+# POPPYS AI in Docker (docs/DOCKER.md). Start with .\docker-start.ps1 (Windows) or `docker compose up -d --build`.
+#
+# Oracle stays in its own container (oracle26ai), reached through the laptop's published port 1521; this file never
+# creates, replaces or removes it. Ollama (optional) is reached the same way on 11434.
+name: poppys
+
+services:
+  app:
+    build: .
+    image: poppys-ai:local
+    container_name: poppys-ai
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8008:8008"          # this computer only, as before
+    environment:
+      TZ: Asia/Kolkata
+      # .env.poppys keeps the accounts and passwords; only the addresses change inside a container.
+      POPPYS_ORACLE_DSN: ${POPPYS_ORACLE_DSN:-host.docker.internal:1521/FREEPDB1}
+      POPPYS_OLLAMA_URL: ${POPPYS_OLLAMA_URL:-http://host.docker.internal:11434}
+      POPPYS_AI_ALLOWED_HOST: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Docker Desktop defines it; this line makes Linux hosts work too
+    volumes:
+      - poppys-data:/app/data                 # users, drafts, uploaded originals, logs (kept across restarts/upgrades)
+      - ./.env.poppys:/app/.env.poppys:ro     # never copied into the image
+      - ./config:/app/config:ro               # company profile and write mapping: edit, then restart
+
+volumes:
+  poppys-data:
+    name: poppys-data
