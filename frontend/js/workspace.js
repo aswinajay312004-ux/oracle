@@ -769,7 +769,8 @@ export async function ask(question) {
 // saved, then Accept (save) or Edit (back to the entry, which stays underneath).
 export function showApprove() {
   const d = state.draft; const plan = d.plan;
-  const canApprove = plan.live && !plan.errors.length && can('approve');
+  const other = !!d.approval?.needs_other_approver;          // four-eyes: said here, before anyone clicks
+  const canApprove = plan.live && !plan.errors.length && can('approve') && !other;
   // Everything the approver must see is shown in full in this popup (no folded parts), so opening it is reading it.
   if (plan.exceptions?.digest) state.exceptionsSeen = plan.exceptions.digest;
   const root = $('#stage-approve');
@@ -780,8 +781,10 @@ export function showApprove() {
     ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is offline — saving is paused. Start the database and check again.</div></div>'}
     ${previewHtml(plan.graph, state.nextOc || {})}
     ${approvalNotes(planGroups(d), { pieces: fmt(plan.totals.pieces, 0) })}
+    ${other ? `<div class="banner info"><span class="b-ic">i</span><div><b>Another person must accept this order.</b> You uploaded or changed it, so a second approver checks it before it goes to Oracle.
+      ${can('settings') ? 'Working alone? Turn on “Allow the person who uploaded a file to approve it” in Setup → Settings.' : 'Ask an approver to open it from the Overview.'}</div></div>` : ''}
     <div class="action-bar"><p>${canApprove ? 'Saved in one step — if anything fails, nothing is saved.' :
-      !plan.live ? 'Oracle is offline — saving is paused.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Only an approver can save this order.'}</p>
+      !plan.live ? 'Oracle is offline — saving is paused.' : plan.errors.length ? 'Fix the outlined fields first.' : other ? 'Waiting for a second approver.' : 'Only an approver can save this order.'}</p>
       <button class="secondary big" data-act2="back-review">Edit</button>
       <button class="primary big" data-act2="approve" ${canApprove ? '' : 'disabled'}>Accept and save to Oracle →</button></div></div>`;
   stage('approve');

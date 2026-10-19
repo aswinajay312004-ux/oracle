@@ -794,7 +794,17 @@ def preview(id: str, data: Version, user=Depends(require('preview'))):
         old = d['version']; d['version'] += 1; store.save(d, user['username'], old)
         store.audit(user['username'], 'preview', id, errors=len(d['plan']['errors']), warnings=len(d['plan']['warnings']),
                     live=d['plan']['live'], plan_hash=d['plan']['hash'])
-        return d
+        # Said before the click, not after: whether this person may accept the order they prepared (four-eyes rule).
+        return dict(d, approval=dict(needs_other_approver=_prepared_by(d, user)))
+
+
+def _prepared_by(d, user):
+    """True when the four-eyes rule stops this person approving: they uploaded, edited or mapped the order and
+    self-approval is off in Setup → Settings."""
+    if settings()['allow_self_approval']:
+        return False
+    prepared = {d.get('uploaded_by')} | {e['actor'] for e in store.audit_events(300, d['id']) if e['action'] in ('edit', 'mapping_applied')}
+    return user['username'] in prepared
 
 
 LOST = ('DPY-4011', 'DPY-4024', 'DPY-1001', 'ORA-03113', 'ORA-03114', 'ORA-03135', 'ORA-03156', 'ORA-01013', 'ORA-12170',
@@ -868,11 +878,9 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
             raise HTTPException(409, 'This preview was made without Oracle. Connect Oracle and prepare the preview again before approving.')
         if d['plan']['errors']:
             raise HTTPException(409, 'Resolve all questions before approving.')
-        if not settings()['allow_self_approval']:
-            prepared = {d.get('uploaded_by')} | {e['actor'] for e in store.audit_events(300, id) if e['action'] in ('edit', 'mapping_applied')}
-            if user['username'] in prepared:
-                raise HTTPException(403, 'You uploaded or changed this order, so another approver must approve it (four-eyes rule). '
-                                         'An administrator can allow self-approval in Setup → Settings; that change is recorded in the audit log.')
+        if _prepared_by(d, user):
+            raise HTTPException(403, 'You uploaded or changed this order, so another approver must approve it (four-eyes rule). '
+                                     'An administrator can allow self-approval in Setup → Settings; that change is recorded in the audit log.')
         ex = d['plan'].get('exceptions') or exceptions(d)
         if ex['digest'] and data.exceptions_seen != ex['digest']:
             return JSONResponse(status_code=409, content={

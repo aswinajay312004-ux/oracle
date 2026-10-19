@@ -65,3 +65,15 @@ def test_saved_order_sheet_comes_from_the_read_back_with_names_not_ids(env):
     oracle.rows['ORDSIZE'][size]['RQTY'] = 60
     [changed] = c.get(f'/api/history/{draft_id}/graph').json()['sheets']
     assert not changed['verified'] and changed['total'] == 90
+
+
+def test_preview_says_before_the_click_when_a_second_approver_is_needed(env):
+    c, _ = env
+    _, p = preview(c)
+    assert p['approval'] == {'needs_other_approver': False}           # self-approval is on in this fixture
+    assert c.put('/api/settings', json={'allow_self_approval': False}).status_code == 200
+    draft_id, p = preview(c, sample=(4, 4, 5, 6))
+    assert p['approval'] == {'needs_other_approver': True}
+    r = c.post(f'/api/drafts/{draft_id}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash'],
+                                                    'exceptions_seen': (p['plan'].get('exceptions') or {}).get('digest')})
+    assert r.status_code == 403 and 'four-eyes' in r.json()['detail']
