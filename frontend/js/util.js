@@ -37,8 +37,9 @@ export function source(src) {
   if (src.derivation && !src.cell) return `<span class="chip calc" title="${esc(src.derivation)}">${esc(src.derivation.length > 28 ? src.derivation.slice(0, 26) + '…' : src.derivation)}</span>`;
   if (src.origin) return `<span class="chip calc">${esc(src.origin)}</span>`;
   if (!src.cell) return '';
-  const where = `${src.sheet ? src.sheet + '!' : ''}${src.cell}`;
-  return `<span class="chip cell" title="${esc((src.formula ? 'Formula ' + src.formula + ' · ' : '') + 'read from ' + where)}">${esc(where.length > 22 ? '…' + where.slice(-20) : where)}</span>`;
+  // People see the Excel cell ("Excel C2"); the sheet name and any formula are in the tooltip.
+  const where = `${src.sheet ? `sheet “${src.sheet}”, ` : ''}cell ${src.cell}`;
+  return `<span class="chip cell" title="${esc((src.formula ? 'Formula ' + src.formula + ' · ' : '') + 'From the Excel file: ' + where)}">Excel ${esc(src.cell)}</span>`;
 }
 
 export function confirmDialog(title, html, ok = 'Confirm') {

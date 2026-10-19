@@ -5,6 +5,8 @@ import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, 
 import { api, id, orderFields } from './api.js';
 import { renderMapping } from './mapping.js';
 import { flowCard, mountFlow } from './flowview.js';
+import { sheetHtml, openFullView } from './ordersheet.js';
+import { reviewList, planGroups, receiptGroups } from './review.js';
 
 const HEADER = [
   // key, label, required, datalist, input type
@@ -85,7 +87,7 @@ export async function openDraft(draftId) {
 
 function showReading() {
   const d = state.draft; const o = d.orders[0]; const items = [];
-  items.push(['ok', `Opened: ${d.source_format || 'Excel workbook'}`, `${plural(d.sheets.length, 'sheet')} · ${fmt(d.sheets.reduce((n, s) => n + s.cells.length, 0), 0)} filled cells read, each value keeps its source cell`]);
+  items.push(['ok', `Opened: ${d.source_format || 'Excel workbook'}`, `${plural(d.sheets.length, 'sheet')} · ${fmt(d.sheets.reduce((n, s) => n + s.cells.length, 0), 0)} cells`]);
   (d.templates_refused || []).forEach(t => items.push(['warn', `Saved layout “${t.name}” (version ${t.version}) was not used`, `${(t.reasons || []).join('; ')} — so nothing from the saved layout was carried over.`]));
   if (!d.orders.length) {
     items.push(['warn', 'This layout is new to POPPYS AI', d.suggestion ? 'A layout was proposed from the labels and values in the file. Check it once — it is saved as a template so next time it is automatic.' : 'Show us once where the order details are; it is saved as a template for next time.']);
@@ -96,17 +98,17 @@ function showReading() {
     const pcs = l => l.reduce((n, x) => n + x.sizes.reduce((m, s) => m + num(s.quantity), 0), 0);
     items.push([o.lines.length ? 'ok' : 'warn', `Size breakdown: ${plural(o.lines.length, 'colour line')}, ${plural(new Set(o.lines.flatMap(l => l.sizes.map(s => s.size))).size, 'size')}`,
       `Buyer order ${fmt(pcs(o.order_lines || []), 0)} pcs${(o.sample_lines || []).length ? ` · sample section ${fmt(pcs(o.sample_lines), 0)} pcs` : ''}${o.packs ? ` · ${fmt(o.packs.packs, 0)} packs × ${fmt(o.packs.pieces / o.packs.packs, 0)} = ${fmt(o.packs.pieces, 0)} pcs` : ''}`]);
-    items.push([o.fabrics?.length ? 'ok' : 'miss', `Fabric & yarn: ${plural(o.fabrics?.length || 0, 'fabric row')}`, o.fabrics?.length ? `${fmt(o.fabrics.reduce((n, f) => n + num(f.total), 0))} kg in the workbook · yarn split suggested from fabric content` : 'No fabric table in this file']);
-    items.push([o.accessories?.length ? 'ok' : 'miss', `Trims & accessories: ${plural(o.accessories?.length || 0, 'row')}`, o.accessories?.length ? `${new Set(o.accessories.map(a => a.block)).size} trim tables: ${[...new Set(o.accessories.map(a => a.category))].slice(0, 6).join(', ')}…` : 'No accessory tables in this file']);
+    items.push([o.fabrics?.length ? 'ok' : 'miss', `Fabric & yarn: ${plural(o.fabrics?.length || 0, 'fabric row')}`, o.fabrics?.length ? `${fmt(o.fabrics.reduce((n, f) => n + num(f.total), 0))} kg` : 'None in this file']);
+    items.push([o.accessories?.length ? 'ok' : 'miss', `Trims & accessories: ${plural(o.accessories?.length || 0, 'row')}`, o.accessories?.length ? [...new Set(o.accessories.map(a => a.category))].slice(0, 4).join(', ') + (new Set(o.accessories.map(a => a.category)).size > 4 ? '…' : '') : 'None in this file']);
     const unknown = d.orders.filter(x => 'qty_unit' in x && !x.qty_unit);
-    if (unknown.length) items.push(['warn', 'Pieces or packs? The file does not say', `${unknown[0].provenance?.qty_unit?.question || 'Are these quantities pieces or packs?'} You choose it on the next screen.`]);
+    if (unknown.length) items.push(['warn', 'Pieces or packs? The file does not say', unknown[0].provenance?.qty_unit?.question || 'Are these quantities pieces or packs?']);
     const need = [...new Set(d.orders.flatMap(x => requiredKeys().filter(k => !x[k]).map(k => LABEL[k])))];
     items.push([need.length ? 'warn' : 'ok', need.length ? `${plural(need.length, 'field')} not in the file: ${need.join(', ')}` : 'All required order details present',
-      need.length ? 'They are outlined in red on the next screen — type them there.' : 'Review the quantities and approve.']);
+      need.length ? 'Fill them in on the next screen' : '']);
   }
   const cov = d.coverage;
-  if (cov && d.orders.length) items.push([cov.exclusions.length ? 'warn' : 'ok', `${fmt(cov.totals.numbers_read, 0)} of ${fmt(cov.totals.numbers, 0)} numbers in the file are in the order`,
-    cov.exclusions.length ? `Not read: ${cov.exclusions.slice(0, 2).join(' ')}${cov.exclusions.length > 2 ? ` (and ${cov.exclusions.length - 2} more, listed on the next screen)` : ''}` : 'Every number in the file is accounted for.']);
+  if (cov && d.orders.length) items.push([cov.exclusions.length ? 'warn' : 'ok', cov.exclusions.length ? `${fmt(cov.totals.numbers - cov.totals.numbers_read, 0)} numbers in the file not used` : 'Every number in the file is used',
+    cov.exclusions.length ? `${plural(cov.exclusions.length, 'place')} — listed on the next screen` : '']);
   $('#read-title').textContent = d.orders.length ? 'Here is what we found' : 'We need one quick hint';
   $('#read-steps').innerHTML = items.map(([k, t, s], i) => `<li class="${k === 'ok' ? '' : k}" style="animation-delay:${i * 80}ms"><span class="ic">${k === 'ok' ? '✓' : k === 'warn' ? '!' : '–'}</span><div><strong>${esc(t)}</strong><small>${esc(s)}</small></div></li>`).join('');
   $('#read-actions').hidden = false; $('#go-review').focus();
@@ -184,10 +186,10 @@ export function renderReview() {
 function coverageBanner(d) {
   const c = d.coverage; if (!c || !c.exclusions.length) return '';
   const t = c.totals;
-  return `<details class="banner warning coverage"><summary><span class="b-ic">!</span><b>Not read from the file: ${plural(c.exclusions.length, 'part')}</b>
-    <span class="muted small-text"> · ${fmt(t.numbers_read, 0)} of ${fmt(t.numbers, 0)} numbers in the file are in the order${d.orders.length === 1 ? '' : 's'}</span></summary>
+  return `<details class="banner warning coverage"><summary><span class="b-ic">!</span><b>${fmt(t.numbers - t.numbers_read, 0)} numbers in the file are not used</b>
+    <span class="muted small-text"> · ${plural(c.exclusions.length, 'place')} · show</span></summary>
     <ul class="small-text">${c.exclusions.map(e => `<li>${esc(e)}</li>`).join('')}</ul>
-    <p class="muted small-text">These cells are kept in the original file but will not be saved. If they belong to the order, use <b>Read this file differently</b> or type them in.</p></details>`;
+    <p class="muted small-text">They will not be saved. If they belong to the order, use <b>Read this file differently</b> or type them in.</p></details>`;
 }
 
 function outcomeBanner(d) {
@@ -274,7 +276,7 @@ function dateChip(s) {
   const where = `${s.sheet ? s.sheet + '!' : ''}${s.cell}`; const d = String(s.derivation);
   const ambiguous = /day\/month/.test(d);
   const how = ambiguous ? 'day/month?' : /month\/day/.test(d) ? 'month/day' : /Excel date/i.test(d) ? 'Excel date' : 'converted';
-  return `<span class="chip cell date-note ${ambiguous ? 'ambiguous' : ''}" title="${esc(`${d}${ambiguous ? ' — check it' : ''} · read from ${where}`)}">${esc(where.length > 12 ? '…' + where.slice(-10) : where)} · ${how}</span>`;
+  return `<span class="chip cell date-note ${ambiguous ? 'ambiguous' : ''}" title="${esc(`${d}${ambiguous ? ' — check it' : ''} · read from ${where}`)}">Excel ${esc(s.cell)} · ${how}</span>`;
 }
 
 // Where the quantity unit came from: the file's heading, the saved layout, or the person.
@@ -300,7 +302,7 @@ function field(o, oi, [k, text, req, list, type]) {
 function notSavedChip(k) {
   const dest = (state.draft.destinations || {})[k]; if (!dest) return '';
   const tip = dest.kept === 'unverified' ? `Not saved to Oracle yet: its place (${dest.column}) is not confirmed. Kept in the POPPYS import record.` : 'Oracle has no place for this field. It is kept in the POPPYS import record only.';
-  return `<span class="chip not-saved" title="${esc(tip)}">not in Oracle</span>`;
+  return `<span class="chip not-saved" title="${esc(tip)}">not saved</span>`;
 }
 
 function orderTab(o, oi) {
@@ -308,7 +310,7 @@ function orderTab(o, oi) {
   const sum = ls => (ls || []).reduce((n, l) => n + lineQty(l), 0);
   const bIssue = at(`orders.${oi}.quantity_basis`);
   const packs = under(`orders.${oi}.packs`);
-  return `<div class="block"><div class="block-head"><h3>Order header</h3><span class="sub">Same fields as the Axpert screen · filled from the file · the cell each value came from is shown on the right</span></div>
+  return `<div class="block"><div class="block-head"><h3>Order header</h3></div>
       <div class="form-grid">${HEADER.map(h => field(o, oi, h)).join('')}</div></div>
     <div class="block"><div class="block-head"><h3>Style &amp; size quantities</h3><span class="sub">${esc(o.po_number || '')}</span></div>
       <div class="qty-bar"><div class="qty-row"><span class="lbl" id="basis-lbl-${oi}">Quantities to save <span style="color:var(--err)">*</span></span>
@@ -382,7 +384,7 @@ function matrix(o, oi) {
         ${msgRow(rowIss, span, rowCls)}`;
     }).join('') || `<tr><td colspan="${span}" class="empty">No lines yet. Add a colour line.</td></tr>`}
     </tbody><tfoot><tr><td></td><td>${o.qty_unit === 'PACK' ? 'Total packs' : 'Total pieces'}</td><td class="muted">${ppu > 1 ? `${o.qty_unit === 'PACK' ? `packs × ${ppu} pieces` : `× ${ppu} per unit`} = <b>${fmt(grand * ppu, 0)}</b> pcs` : ''}</td>${sizes.map(s => `<td class="num">${fmt(colTotal(s), 0)}</td>`).join('')}<td></td><td class="num">${fmt(grand, 0)}</td><td></td><td></td></tr></tfoot></table></div>
-    <div class="tbl-actions"><button class="secondary small" data-act="add-line" data-oi="${oi}">＋ Add colour line</button><span class="muted small-text" style="align-self:center">Tip: type a new size name in “＋ size” to add a column.</span></div>`;
+    <div class="tbl-actions"><button class="secondary small" data-act="add-line" data-oi="${oi}">＋ Add colour line</button><span class="muted small-text" style="align-self:center">Add a size with “＋ size”</span></div>`;
 }
 
 function lineOptions(o, sel, all = false) {
@@ -733,47 +735,42 @@ export function showApprove() {
   const d = state.draft; const plan = d.plan;
   const inserts = plan.operations.filter(o => o.action === 'insert'); const reuse = plan.operations.filter(o => o.action === 'reuse');
   const tables = new Set(inserts.map(o => o.table));
+  const sheets = plan.graph?.sheets || [];
+  const lines = sheets.reduce((n, s) => n + s.lines.length, 0) || d.orders.reduce((n, o) => n + (o.lines || []).length, 0);
+  const newNames = (plan.exceptions?.new_masters || []).length;
   const canApprove = plan.live && !plan.errors.length && can('approve');
   const root = $('#stage-approve');
   root.innerHTML = `
     <div class="row" style="margin-bottom:12px"><button class="ghost" data-act2="back-review">← Back to the order entry</button><span class="spacer"></span>
       <span class="muted small-text">${esc(d.filename)} · ${esc(d.orders.map(o => `${o.order_ref} · ${o.style}`).join(', '))}</span></div>
     ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected. This view used the saved database structure, so existing masters were not checked. Start the database and check again to approve.</div></div>'}
-    <div class="kpis">${[['New records', inserts.length], ['Oracle tables', tables.size], ['Existing masters reused', reuse.length], ['Pieces', fmt(plan.totals.pieces, 0)], ['Fabric (kg)', fmt(plan.totals.fabric_kg)]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
-    ${plan.warnings.length ? `<div class="banner warning"><span class="b-ic">!</span><div><b>Please read before approving</b><ul>${plan.warnings.map(w => `<li>${esc(d.orders.length === 1 ? strip(w) : w)}</li>`).join('')}</ul></div></div>` : ''}
-    ${exceptionsCard(d)}
-    ${flowCard('Where this order will be saved', 'Nothing is in Oracle yet. Click a table to see the exact rows and values that will be written.')}
-    <div class="action-bar"><p>${canApprove ? `Accepting writes these ${plural(inserts.length, 'record')} in <b>one Oracle transaction</b> and records who approved it. If Oracle refuses any row, nothing is saved. After saving, every row is read back from Oracle to verify it.` :
-      !plan.live ? 'Saving is disabled until Oracle is connected.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Your role cannot approve. An approver or administrator must accept this entry.'}</p>
+    <div class="kpis">${[['Orders', d.orders.length], ['Colour lines', lines], ['Pieces to save', fmt(plan.totals.pieces, 0)], ['New names added to Oracle', newNames]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
+    ${sheets.length ? `<section class="card saved-sheet"><div class="card-head"><h2>Order to be saved</h2></div>
+      <div class="saved-sheet-body">${sheets.map(s => sheetHtml(s, { planned: true, series: ocSeries() })).join('')}</div></section>` : ''}
+    ${reviewList(planGroups(d), { title: 'Before you approve', ack: plan.exceptions?.digest ? { checked: state.exceptionsSeen === plan.exceptions.digest } : null })}
+    <details class="card tech-details" data-tech><summary>Technical details <span class="muted">· ${plural(inserts.length, 'new record')} in ${plural(tables.size, 'Oracle table')}</span></summary>
+      ${flowCard('Where this order will be saved', 'Click a table to see its rows.')}</details>
+    <div class="action-bar"><p>${canApprove ? (needsAck(plan) ? 'Tick “I’ve reviewed these items” to approve.' : 'Saved in one step — if anything fails, nothing is saved.') :
+      !plan.live ? 'Oracle is offline — saving is paused.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Only an approver can save this order.'}</p>
       <button class="primary big" data-act2="approve" ${canApprove && !needsAck(plan) ? '' : 'disabled'}>Accept and save to Oracle →</button></div>`;
-  mountFlow(root, plan.graph || { nodes: [], edges: [] }, { planned: true, columns: plan.columns, onReferenceOnly: t => backToReview(t === 'ORDACC' ? 'trims' : 'fabric') });
+  // The diagram needs its real size, so it is drawn the first time the technical details are opened.
+  const tech = root.querySelector('[data-tech]');
+  tech.addEventListener('toggle', () => {
+    if (!tech.open || tech.dataset.drawn) return;
+    tech.dataset.drawn = '1';
+    mountFlow(tech, plan.graph || { nodes: [], edges: [] }, { planned: true, columns: plan.columns, onReferenceOnly: t => backToReview(t === 'ORDACC' ? 'trims' : 'fabric') });
+  });
   stage('approve');
 }
 
 const needsAck = plan => !!plan.exceptions?.digest && state.exceptionsSeen !== plan.exceptions.digest;
 
-// Everything that will not be in Oracle exactly as the file says, in business words, before the approval.
-function exceptionsCard(d) {
-  const ex = d.plan.exceptions; if (!ex?.digest) return '';
-  const many = d.orders.length > 1; const who = i => many ? `Order ${i + 1} · ` : '';
-  const ns = ex.not_saved.map(x => `<li><b>${esc(who(x.order) + x.label)}</b>${x.values.length ? ` “${esc(x.values.join('”, “'))}”${x.count > x.values.length ? ` and ${x.count - x.values.length} more` : ''}` : ` (${plural(x.count, 'row')})`}: ${esc(x.reason)}</li>`).join('');
-  const conv = ex.conversions.map(x => `<li><b>${esc(who(x.order))}Quantity unit</b>: ${esc(x.text)}</li>`).join('');
-  const excl = ex.exclusions.map(x => `<li>${esc(x)}</li>`).join('');
-  const moved = (ex.layout_changes || []).map(x => `<li>${esc(x)}</li>`).join('');
-  const masters = (ex.new_masters || []).map(x => `<li><b>${esc(x.business)}</b> “${esc(x.label)}” <span class="muted small-text">(${esc(x.table)})</span></li>`).join('');
-  return `<section class="card exceptions" aria-labelledby="ex-title"><h2 id="ex-title">Read before approving: what is created, changed or left out</h2>
-    ${conv ? `<h3>Converted</h3><ul>${conv}</ul>` : ''}
-    ${masters ? `<h3>New master records that will be created (they were not found in Oracle)</h3><ul>${masters}</ul>` : ''}
-    ${ns ? `<h3>Not saved to Oracle (kept in the POPPYS import record)</h3><ul>${ns}</ul>` : ''}
-    ${excl ? `<h3>Not read from the file</h3><ul>${excl}</ul>` : ''}
-    ${moved ? `<h3>The file’s layout changed since it was saved — check these values</h3><ul>${moved}</ul>` : ''}
-    <label class="check"><input type="checkbox" id="ex-seen" ${state.exceptionsSeen === ex.digest ? 'checked' : ''}> I have read this list</label></section>`;
-}
-
 export function exceptionsSeen(checked) {
   const ex = state.draft?.plan?.exceptions; state.exceptionsSeen = checked && ex ? ex.digest : null;
   const b = $('#stage-approve [data-act2="approve"]'); const plan = state.draft.plan;
   if (b) b.disabled = !(plan.live && !plan.errors.length && can('approve')) || needsAck(plan);
+  const note = $('#stage-approve .action-bar p');
+  if (note && b && plan.live && !plan.errors.length && can('approve')) note.textContent = needsAck(plan) ? 'Tick “I’ve reviewed these items” to approve.' : 'Saved in one step — if anything fails, nothing is saved.';
 }
 
 // Browser Back / Forward inside New order: '#workspace' is the review (or upload), '#workspace/approve' the check.
@@ -816,38 +813,46 @@ export async function approve() {
 // ---------------------------------------------------------------- saved
 export async function showSaved(result, target = $('#stage-saved'), standalone = false) {
   const partial = result.complete === false || (result.reference_only || []).length;
-  target.innerHTML = `<section class="card saved-hero"><span class="tick" data-saved-tick>…</span><div><span class="eyebrow" data-saved-state>Saved · reading it back from Oracle…</span>
-      <h1>${result.already_committed ? 'This order is in Oracle.' : 'The order is saved in Oracle.'}${partial ? ' Some details were not saved — see below.' : ''}</h1>
-      <p class="muted">Approved by ${esc(result.approver || '—')} · ${esc(new Date(result.committed_at).toLocaleString())} · ${plural((result.rows || []).length, 'new record')}${(result.reused || []).length ? `, ${plural(result.reused.length, 'existing master')} linked` : ''}</p>
-      <div class="ids">${(result.orders || []).map(o => `<span><b>${esc(o.order_ref)}</b> · ORDMASID <code>${esc(o.ordmasid)}</code></span>`).join('')}</div></div>
-      <div style="display:grid;gap:8px">${(result.orders || []).map(o => `<button class="secondary" data-explore-order="${esc(o.ordmasid)}">Open in Database</button>`).join('')}${standalone ? '' : '<button class="primary" data-act2="another">Start another order</button>'}</div></section>
-    ${flowCard('Where your data was saved', 'Reading the rows back from Oracle…', '<span class="pill" data-flow-pill>checking</span>')}
+  const refs = (result.orders || []).map(o => o.order_ref).filter(Boolean);
+  // What a person needs first: which order, that it is in Oracle, and the order itself as Oracle has it (read back
+  // just now). Table names, IDs and links are kept under "Technical details" for whoever needs them.
+  target.innerHTML = `<section class="card saved-hero"><span class="tick" data-saved-tick>…</span><div><span class="eyebrow" data-saved-state>Saved · checking it in Oracle…</span>
+      <h1>${refs.length ? `Order ${esc(refs.join(', '))} ${result.already_committed ? 'is' : 'is saved'} in Oracle.` : 'The order is saved in Oracle.'}</h1>
+      <p class="muted">Approved by ${esc(result.approver || '—')} · ${esc(new Date(result.committed_at).toLocaleString())}${partial ? ' · some details from the file were not saved (listed below)' : ''}</p></div>
+      <div class="saved-actions"><button class="primary" data-fullview disabled>View the order in Oracle</button>${standalone ? '' : '<button class="secondary" data-act2="another">Start another order</button>'}</div></section>
+    <section class="card saved-sheet" data-sheets><p class="muted" style="padding:18px">Loading the order from Oracle…</p></section>
     ${result.local_record ? `<div class="banner warning" style="margin-top:12px"><span class="b-ic">!</span><div>${esc(result.local_record)}</div></div>` : ''}
-    ${savedExceptions(result)}`;
+    ${savedExceptions(result)}
+    <details class="card tech-details" data-tech><summary>Technical details</summary>
+      <div class="tech-ids">${(result.orders || []).map(o => `<span><b>${esc(o.order_ref)}</b> · ORDMASID <code>${esc(o.ordmasid)}</code> <button class="link" data-explore-order="${esc(o.ordmasid)}">Open in Database</button></span>`).join('')}</div>
+      ${flowCard('Where your data was saved', 'Reading the rows back from Oracle…', '<span class="pill" data-flow-pill>checking</span>')}</details>`;
   if (!standalone) stage('saved');
   const setState = (text, ok) => { const e = target.querySelector('[data-saved-state]'); if (e) e.textContent = text; const t = target.querySelector('[data-saved-tick]'); if (t) { t.textContent = ok ? '✓' : '!'; t.classList.toggle('warn', !ok); } };
   try {
     const graph = await api(`/api/history/${id(result.job_id)}/graph`);
-    target.querySelector('[data-flow-sub]').textContent = `${plural(graph.nodes.length, 'table')} · the values below come from a fresh SELECT, not from the save receipt`;
+    const sheets = graph.sheets || [];
+    target.querySelector('[data-sheets]').innerHTML = `<div class="card-head"><h2>Order in Oracle</h2></div>
+      <div class="saved-sheet-body">${sheets.length ? sheets.map(s => sheetHtml(s)).join('') : '<p class="empty">Oracle returned no order rows for this save.</p>'}</div>`;
+    const full = target.querySelector('[data-fullview]'); full.disabled = false;
+    full.addEventListener('click', () => openFullView(sheets, { title: refs.length ? `Order ${refs.join(', ')}` : 'Order saved in Oracle', readAt: graph.read_at }));
+    target.querySelector('[data-flow-sub]').textContent = `${plural(graph.nodes.length, 'Oracle table')} · read back after saving`;
     const pill = target.querySelector('[data-flow-pill]');
     pill.textContent = graph.verified ? '✓ Verified in Oracle' : '⚠ Differences found'; pill.className = `pill ${graph.verified ? 'ok' : 'err'}`;
-    setState(graph.verified ? (partial ? 'Saved and verified · with exceptions' : 'Saved and verified') : 'Saved · Oracle shows differences', graph.verified);
-    mountFlow(target, graph, { planned: false });
+    setState(graph.verified ? (partial ? 'Saved and checked in Oracle · with exceptions' : 'Saved and checked in Oracle') : 'Saved · Oracle shows differences', graph.verified);
+    // The diagram needs its real size, so it is drawn the first time the technical details are opened.
+    const tech = target.querySelector('[data-tech]');
+    tech.addEventListener('toggle', () => { if (tech.open && !tech.dataset.drawn) { tech.dataset.drawn = '1'; mountFlow(tech, graph, { planned: false }); } });
   } catch (e) {
+    target.querySelector('[data-sheets]').innerHTML = `<p class="banner warning" style="margin:14px"><span class="b-ic">!</span><span>Could not read the order back from Oracle: ${esc(e.message)}. It is saved; open this order again from Saved orders when Oracle is reachable.</span></p>`;
     target.querySelector('[data-flow-sub]').textContent = `Could not read back from Oracle: ${e.message}`;
     const pill = target.querySelector('[data-flow-pill]'); pill.textContent = 'not verified'; pill.className = 'pill warn';
-    setState('Saved · not verified yet (Oracle could not be read back)', false);
+    setState('Saved · not checked yet (Oracle could not be read back)', false);
   }
 }
 
 function savedExceptions(result) {
-  const ns = result.not_saved || []; const ex = result.exclusions || []; const conv = result.conversions || [];
-  const ref = (result.reference_only || []).filter(r => !ns.some(x => x.column === r.table));
-  if (!ns.length && !ex.length && !conv.length && !ref.length) return '<div class="banner info" style="margin-top:12px"><span class="b-ic">i</span><div>Everything read from the file is in Oracle.</div></div>';
-  return `<section class="card exceptions" style="margin-top:12px"><h2>Not saved exactly as in the file</h2>
-    ${conv.length ? `<h3>Converted</h3><ul>${conv.map(x => `<li>${esc(x.text)}</li>`).join('')}</ul>` : ''}
-    ${ns.length || ref.length ? `<h3>Not saved to Oracle (kept in the POPPYS import record)</h3><ul>${ns.map(x => `<li><b>${esc(x.label)}</b>${x.values.length ? ` “${esc(x.values.join('”, “'))}”` : ` (${plural(x.count, 'row')})`}: ${esc(x.reason)}</li>`).join('')}${ref.map(r => `<li><b>${esc(r.business)}</b> (${plural(r.rows, 'row')}): ${esc(r.reason)}</li>`).join('')}</ul>` : ''}
-    ${ex.length ? `<h3>Not read from the file</h3><ul>${ex.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</section>`;
+  return reviewList(receiptGroups(result), { title: 'Not saved exactly as in the file' })
+    || '<div class="banner success" style="margin-top:12px"><span class="b-ic">✓</span><div>Everything read from the file is in Oracle.</div></div>';
 }
 
 export function bindWorkspace() {

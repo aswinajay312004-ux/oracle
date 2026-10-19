@@ -269,10 +269,20 @@ STEP 3 - CHECK & APPROVE
     illa. Paadhi save aagi nikkaadhu.
 
 STEP 4 - SAVED
-  Oracle la irundhu fresh aa thirumba padichu, adhe flowchart kaattum.
-  Ovvoru row um ezhudhunadhum padichadhum same nu green tick. Table click
-  panna Oracle ippo return panna exact rows. "Open in Database" la andha
-  order ah Database screen la paakalaam. "Start another order" - adutha file.
+  "Order PK/26-27/S/... is saved in Oracle" nu varum. Keezha "Order in
+  Oracle": OC No, buyer, style, PO, dates, apram colour x size table
+  (ovvoru colour ku ovvoru size la evvalavu pieces, total). Idhu save aana
+  apram Oracle la irundhu thirumba padichadhu; approve pannadhum Oracle la
+  irukuradhum same na "Verified in Oracle" green badge.
+  "View the order in Oracle" - full screen la paakalaam, Print um pannalaam.
+  "Not saved exactly as in the file" - Oracle ku pogaadha values oru table
+  aa (chip mela mouse vecha kaaranam theriyum).
+  "Technical details" - tables, record IDs, flowchart, "Open in Database"
+  (IT / admin ku). "Start another order" - adutha file.
+
+  CHECK & APPROVE screen la um adhe colour x size table "Order to be saved"
+  nu varum; OC No "Assigned when saved". "Before you approve" table padichu
+  "I've reviewed these items" tick panni approve pannunga.
 
 MASTERS (buyer, style, colour, size, unit, merchandiser) - EPPADI MATCH AAGUM:
   - Same name Oracle la irundha adhe record use aagum.
@@ -319,10 +329,10 @@ PART 7A - PUDHU BUYER FORMAT (LAYOUT TEMPLATE)
 PART 8. SAVED ORDERS SCREEN
 --------------------------------------------------------------------------------
 
-Oracle ku save aana ellaa imports um: date, approved by, orders.
-"Show where it was saved" click panna Oracle la irundhu ippove padichu
-flowchart + rows kaattum. Yaaravadhu "save aagudha?" nu kettaa idhu dhaan
-proof.
+Oracle ku save aana ellaa orders um: file, OC No, approved by, date, status.
+"View order" click panna Oracle la irundhu ippove padichu order ah table aa
+kaattum (full screen + print). Yaaravadhu "save aagudha?" nu kettaa idhu
+dhaan proof.
 
 
 --------------------------------------------------------------------------------

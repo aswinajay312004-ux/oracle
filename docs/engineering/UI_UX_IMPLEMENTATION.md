@@ -12,12 +12,19 @@ no external fonts or scripts.
 | Reading summary | Format, layout used (or re-anchored), details found, size breakdown, BOM, unit question, "N of M numbers in the file are in the order" | Implemented, browser-tested |
 | Review | Axpert-style header and size table; problems outlined on their field; source chip per value; "not in Oracle" badge on fields Oracle will not receive; banner "Not read from the file"; **Show the file** (the sheet beside the order; focusing a field outlines its cell); **Original file**; undo/redo | Implemented, browser-tested |
 | Mapping studio | Fields left, sheet right; drag a cell onto a field, Pick + click, or type the address; focused field's cell outlined; edit the saved layout as applied; name collisions handled | Implemented, browser-tested |
-| Check & approve | KPIs; warnings; **Read before approving** (converted, new masters, not saved, not read, layout changes) with a required tick box; the table flowchart of planned rows; confirmation in business words | Implemented, browser-tested |
-| Saved | "Saved · reading it back…", then **Saved and verified** (or differences / not verified); what was not saved; the flowchart from a fresh Oracle read | Implemented, browser-tested |
-| Saved orders | Receipts from Oracle with Verified / with exceptions / not verified / differences | Implemented |
+| Check & approve | Business KPIs (orders, colour lines, pieces, new names); **Order to be saved** — header and colour × size table from the plan, OC No "Assigned when saved"; **Before you approve** — one table, one row per value with a status chip (Check / New / Not set up yet / No Oracle field / Skipped), reason on the chip, required tick; flowchart under **Technical details** | Implemented, browser-tested (desktop, 390 px) |
+| Saved | Hero with the OC No; **Order in Oracle** — header and colour × size table from the fresh read-back (`readback.order_sheets`), "Verified in Oracle" badge; **View the order in Oracle** opens it full screen with Print; not-saved table; flowchart, IDs and Database link under **Technical details** | Implemented, browser-tested |
+| Saved orders | Receipts from Oracle with Verified / with exceptions / not verified / differences; **View order** | Implemented |
 | Ask AI | Catalog answers from the data dictionary; "Not sure I understood — did you mean …?" instead of a low-confidence number; checks strip; chart + table | Implemented, browser-tested (earlier sessions) |
 | Database | Business-named tables, paging, linked records, relationship graph | Implemented |
 | Setup | Write mapping, data dictionary, order fields, layout templates, users (password dialog, confirmed role changes), audit, settings, answer accuracy | Implemented |
+
+### Copy rules (2026-10-19)
+
+Following Shopify Polaris content guidance ("too much content makes a tool feel cheap") and ERPNext-style status
+indicators (one label and colour per state): screens carry short labels and status chips; explanations, Oracle table
+and column names, connection fixes (Docker, container name) and SQL wording live in tooltips or under **Technical
+details**, never in the main reading path.
 
 ## 2. Navigation and accessibility
 

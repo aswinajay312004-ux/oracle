@@ -26,12 +26,13 @@ async function status() {
     const db = h.database; const o = $('#oracle-status'); const a = $('#ai-status');
     o.className = `status ${db.connected ? 'ok' : 'off'}`;
     o.querySelector('span').textContent = db.connected ? 'Oracle connected' : 'Oracle offline';
-    o.querySelector('small').textContent = db.connected ? `${db.owner} · ${db.tables} tables` : 'start Docker + oracle26ai';
-    o.title = db.connected ? `Connected to ${db.dsn || ''}` : db.error || '';
-    const eb = $('#explorer-eyebrow'); if (eb) eb.textContent = db.connected ? 'Read-only · live Oracle' : 'Read-only · Oracle offline (saved structure)';
+    o.querySelector('small').textContent = db.connected ? 'saving enabled' : 'saving paused';
+    // The fix for an administrator stays in the tooltip, not on everyone's screen.
+    o.title = db.connected ? `Connected to ${db.owner} (${db.dsn || ''})` : `${db.error || 'Oracle is not reachable.'} Start the Oracle database (Docker Desktop → oracle26ai) and refresh.`;
+    const eb = $('#explorer-eyebrow'); if (eb) eb.textContent = db.connected ? 'Read-only' : 'Read-only · Oracle offline';
     a.className = `status ${h.ollama.available ? 'ok' : 'idle'}`;
-    a.querySelector('span').textContent = h.ollama.available ? 'Local AI ready' : 'Local AI off';
-    a.querySelector('small').textContent = h.ollama.available ? h.ollama.model : 'optional · rules still work';
+    a.querySelector('span').textContent = h.ollama.available ? 'AI assistant on' : 'AI assistant off';
+    a.querySelector('small').textContent = h.ollama.available ? h.ollama.model : 'optional';
   } catch (_) { $('#oracle-status').className = 'status off'; }
 }
 
@@ -83,7 +84,7 @@ async function history() {
       ${list.map(r => `<tr class="clickable" data-receipt="${esc(r.job_id)}"><td><b>${esc(r.filename || r.job_id)}</b><div class="muted small-text">${esc(r.format || '')}</div></td>
         <td>${esc((r.orders || []).join(', ') || '—')}<div class="muted small-text">${esc((r.styles || []).join(', '))}</div></td><td>${esc(r.approver)}</td>
         <td class="nowrap">${esc(new Date(r.committed_at).toLocaleString())}</td>
-        <td><span class="pill ${({ 'Verified in Oracle': 'ok', 'Verified, with exceptions': 'warn', 'Saved, differences found': 'err' })[r.status] || 'info'}">${esc(r.status || 'Saved')}</span></td><td><button class="secondary small" data-receipt="${esc(r.job_id)}">Show where it was saved</button></td></tr>`).join('')}
+        <td><span class="pill ${({ 'Verified in Oracle': 'ok', 'Verified, with exceptions': 'warn', 'Saved, differences found': 'err' })[r.status] || 'info'}">${esc(r.status || 'Saved')}</span></td><td><button class="secondary small" data-receipt="${esc(r.job_id)}">View order</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="empty">No orders have been saved yet.</p>';
   });
 }

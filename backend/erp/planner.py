@@ -278,8 +278,8 @@ def plan(catalog, orders, filehash, mapping, required=()):
             # The OC number is given when the order is saved (oracle_store.commit); until then a stand-in keeps the plan
             # and its hash independent of a number another order could take first.
             ref = order_numbers.marker(index)
-            issues.warn(f'{prefix}: the OC number is given automatically when the order is saved — the next number of the '
-                        f'{auto["format"]} series.', base + '.order_ref')
+            issues.warn(f'{prefix}: the OC No. is given automatically when the order is saved — the next number in the '
+                        f'{order_numbers.example(auto, datetime.now().date())} series.', base + '.order_ref')
         elif not ref:
             issues.error(f'{prefix}: enter a unique sample order reference.', base + '.order_ref')
         elif order_numbers.is_marker(ref):
@@ -452,10 +452,9 @@ def destination(orders, mapping):
         if target and target[2] == 'verified':
             return
         if target:
-            reason = (f'not saved to Oracle: its place ({target[0]}.{target[1]}) is not confirmed yet. An administrator can '
-                      'confirm it in Setup → Write mapping.')
+            reason = 'not saved to Oracle yet — an administrator still has to confirm where it goes (Setup → Write mapping).'
         else:
-            reason = 'not saved to Oracle: the Oracle order has no place for it. It stays in the POPPYS import record.'
+            reason = 'not saved to Oracle — the Oracle order has no field for it. POPPYS keeps it with this import.'
         shown = list(dict.fromkeys(str(v) for v in values))
         out.append(dict(order=index, path=path, field=field, label=label, values=shown[:5], count=len(values), reason=reason,
                         kept='unverified' if target else 'poppys', column=f'{target[0]}.{target[1]}' if target else None))
@@ -476,14 +475,14 @@ def destination(orders, mapping):
             spec = mapping['tables'].get(table)
             if rows and (not spec or spec['status'] != 'verified'):
                 out.append(dict(order=index, path=f'{base}.{section}', field=section, label=label, values=[], count=len(rows),
-                                reason=('not saved to Oracle: the mapping of these rows is not verified yet, so they are checked '
-                                        'and shown only.') if spec else 'not saved to Oracle: no Oracle table is mapped for them.',
+                                reason=('not saved to Oracle yet — checked and shown here only, until an administrator confirms '
+                                        'where they go.') if spec else 'not saved to Oracle — Oracle has no table for them.',
                                 kept='unverified' if spec else 'poppys', column=table if spec else None))
         yarns = [y for f in o.get('fabrics') or [] for y in f.get('yarns') or []]
         spec = mapping['tables'].get(YARNS[0])
         if yarns and (not spec or spec['status'] != 'verified'):
             out.append(dict(order=index, path=f'{base}.fabrics', field='yarns', label=YARNS[1], values=[], count=len(yarns),
-                            reason='not saved to Oracle: the mapping of these rows is not verified yet, so they are checked and shown only.',
+                            reason='not saved to Oracle yet — checked and shown here only, until an administrator confirms where they go.',
                             kept='unverified' if spec else 'poppys', column=YARNS[0] if spec else None))
     return out
 

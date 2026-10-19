@@ -87,6 +87,10 @@ def test_live_readback_graph_matches_committed_rows():
         g = readback.graph(receipt, m, lambda t, pk, ids: db.live_rows(c, t, pk, ids, m))
     assert g['verified'], [n['table'] for n in g['nodes'] if not n['verified']]
     assert {'ORDMAS', 'ORDSTYLE', 'ORDSIZE'} <= {n['table'] for n in g['nodes']}
+    [sheet] = g['sheets']                                   # the order as people read it, from the same fresh read
+    assert sheet['verified'] and sheet['total'] == 10 and sheet['sizes'] == ['M', 'L']
+    assert sheet['lines'][0]['colour'] == 'TEST BLUE' and sheet['lines'][0]['sizes'] == {'M': 4, 'L': 6}
+    assert {f['label']: f['value'] for f in sheet['header']}['Buyer'] == 'DEMO BUYER TEXTILES'
 
 
 @pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE') != '1', reason='Set POPPYS_TEST_ORACLE=1 for local Oracle tests')

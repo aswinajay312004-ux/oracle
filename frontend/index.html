@@ -38,12 +38,12 @@
       <main id="main" class="page">
         <!-- OVERVIEW -->
         <section id="view-dashboard" class="view">
-          <div class="page-head"><div><span class="eyebrow">Today</span><h1>Overview</h1><p class="lead">Orders waiting for you, what was saved to Oracle, and whether everything is connected.</p></div>
+          <div class="page-head"><div><span class="eyebrow">Today</span><h1>Overview</h1><p class="lead">Orders waiting for you and recent saves.</p></div>
             <button class="primary" data-goto="workspace" data-permission="upload">＋ Upload an Excel order</button></div>
           <div class="kpis" id="dash-kpis"></div>
           <div class="dash-grid">
             <section class="card"><div class="card-head"><h2>Work queue</h2><span class="muted small-text">Orders not yet saved to Oracle</span></div><div id="dash-queue"></div></section>
-            <section class="card"><div class="card-head"><h2>Connections</h2></div><div id="dash-status" class="dash-status"></div></section>
+            <section class="card"><div class="card-head"><h2>System status</h2></div><div id="dash-status" class="dash-status"></div></section>
           </div>
           <section class="card" style="margin-top:14px"><div class="card-head"><h2>Recently saved to Oracle</h2><button class="ghost small" data-goto="history">All saved orders →</button></div><div id="dash-saved"></div></section>
         </section>
@@ -103,7 +103,7 @@
 
         <!-- SAVED ORDERS -->
         <section id="view-history" class="view" hidden>
-          <div class="page-head"><div><span class="eyebrow">Traceable</span><h1>Saved orders</h1><p class="lead">Every approved import, who approved it, and exactly where its records are in Oracle.</p></div></div>
+          <div class="page-head"><div><span class="eyebrow">Orders</span><h1>Saved orders</h1><p class="lead">Orders approved and saved to Oracle.</p></div></div>
           <section class="card" id="history"></section>
           <section id="history-detail" style="margin-top:16px" hidden></section>
         </section>
@@ -111,7 +111,7 @@
         <!-- ASK AI -->
         <section id="view-chat" class="view" hidden>
           <div class="page-head"><div><span class="eyebrow">Natural-language questions</span><h1>Ask AI about your data</h1>
-            <p class="lead">Ask in plain words. Every answer shows the tables it came from, how they are linked and the exact query — nothing is guessed silently.</p></div>
+            <p class="lead">Ask in plain words. Every answer shows where it came from.</p></div>
             <span id="chat-source" class="pill"></span></div>
           <div class="chat">
             <div>
@@ -131,7 +131,7 @@
 
         <!-- DATABASE EXPLORER -->
         <section id="view-explorer" class="view" hidden>
-          <div class="page-head"><div><span class="eyebrow" id="explorer-eyebrow">Read-only</span><h1>Database</h1><p class="lead">Browse GARMENT_DEMO by business name, follow links between records, and see how tables connect.</p></div>
+          <div class="page-head"><div><span class="eyebrow" id="explorer-eyebrow">Read-only</span><h1>Database</h1><p class="lead">Browse Oracle data by business name and follow linked records.</p></div>
             <form id="order-lookup" class="row"><input id="order-id" maxlength="100" placeholder="Find an order: reference or record ID" style="width:300px" aria-label="Find an order"><button class="secondary">Find</button></form></div>
           <div class="explorer">
             <aside class="card table-list"><div class="search"><input id="table-filter" placeholder="Search tables (e.g. buyer, size, ORDSIZE)" aria-label="Search tables"></div><div class="items" id="tables"></div></aside>
@@ -141,7 +141,7 @@
 
         <!-- SETUP -->
         <section id="view-admin" class="view" hidden>
-          <div class="page-head"><div><span class="eyebrow">Setup</span><h1>Mapping, data dictionary &amp; people</h1><p class="lead">Decide what POPPYS AI may write, what each table means, which order fields and layouts it recognises and who can approve.</p></div></div>
+          <div class="page-head"><div><span class="eyebrow">Setup</span><h1>Mapping, data dictionary &amp; people</h1><p class="lead">What POPPYS AI writes, field names, saved layouts and users.</p></div></div>
           <nav class="subnav" aria-label="Setup sections">
             <button class="active" data-admin="mapping">Write mapping</button>
             <button data-admin="dictionary">Data dictionary</button>

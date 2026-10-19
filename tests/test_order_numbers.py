@@ -53,7 +53,7 @@ def test_plan_carries_a_stand_in_so_the_preview_hash_does_not_depend_on_the_numb
     assert not any('reference' in e for e in a['errors']), a['errors']
     head = next(op for op in a['operations'] if op['table'] == 'ORDMAS')
     assert head['values']['DOCID'] == 'AUTO-OC#1#'
-    assert any('OC number is given automatically' in w for w in a['warnings'])
+    assert any('OC No. is given automatically' in w for w in a['warnings'])
     b = planner.plan(snapshot(existing_refs={'PK/26-27/S/1320'}), [deepcopy(o)], 'f' * 64, mapping.effective())
     assert a['hash'] == b['hash']
     typed = dict(deepcopy(o), order_ref='AUTO-OC#1#')
