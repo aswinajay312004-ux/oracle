@@ -1,11 +1,11 @@
 // New-order workspace: Upload → Review (Axpert-style entry) → Check & approve → Saved.
 // Problems are shown on the field or table cell they belong to (red outline + one short reason),
 // never as a separate list at the bottom of the page.
-import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, confirmDialog, drawer } from './util.js';
+import { $, $$, esc, clone, num, fmt, plural, state, can, notify, busy, source, confirmDialog, drawer, setRail } from './util.js';
 import { api, id, orderFields } from './api.js';
 import { renderMapping } from './mapping.js';
 import { flowCard, mountFlow } from './flowview.js';
-import { sheetHtml, openFullView } from './ordersheet.js';
+import { sheetHtml, openFullView, tablesHtml } from './ordersheet.js';
 import { reviewList, planGroups, receiptGroups } from './review.js';
 
 const HEADER = [
@@ -25,6 +25,21 @@ let nav = 0;
 function isRequired(k) { const f = (state.fields || []).find(x => x.key === k); return f ? !!f.required && !f.automatic : DEFAULT_REQUIRED.includes(k); }
 // The OC number series when POPPYS gives the number on save (config/company.json), e.g. "PK/26-27/S/N".
 function ocSeries() { return (state.fields || []).find(x => x.key === 'order_ref')?.automatic || ''; }
+// The next OC numbers from Oracle for the orders left without one: shown in the field, confirmed when the order is saved
+// (another save in between can take a number, so the Saved screen shows the final one).
+let ocFor = '';
+async function loadNextOc(force = false) {
+  const d = state.draft; if (!d || !ocSeries()) return;
+  const blanks = d.orders.map((o, i) => (String(o.order_ref || '').trim() ? null : i)).filter(i => i !== null);
+  const key = `${d.id}:${blanks.join(',')}`;
+  if (!blanks.length || (!force && ocFor === key)) return;
+  ocFor = key;
+  try {
+    const r = await api(`/api/oc/next?count=${blanks.length}`);
+    state.nextOc = {}; (r.numbers || []).forEach((n, k) => { state.nextOc[blanks[k]] = n; });
+  } catch (_) { state.nextOc = {}; }
+  $$('[data-auto-oc]').forEach(el => { const n = state.nextOc[Number(el.dataset.autoOc)]; if (n) el.value = n; });
+}
 function requiredKeys() { return HEADER.map(h => h[0]).filter(k => k !== '__orderno' && isRequired(k)); }
 async function loadFields() { try { state.fields = await orderFields(true); } catch (_) { /* the screen falls back to the Axpert defaults */ } }
 
@@ -39,10 +54,11 @@ function stage(name) {
     else if (name !== 'approve' && location.hash === '#workspace/approve') window.history.replaceState(null, '', '#workspace');
   } catch (_) { /* file previews */ }
   if ($(`#stage-${name}`).hidden) $$('#toasts .toast.warning, #toasts .toast.success').forEach(t => t.remove());   // notes of the previous step
-  ['upload', 'read', 'review', 'approve', 'saved'].forEach(s => { $(`#stage-${s}`).hidden = s !== name; });
+  ['upload', 'read', 'review', 'approve', 'saved'].forEach(s => { $(`#stage-${s}`).hidden = s !== name && !(name === 'approve' && s === 'review'); });
+  document.body.classList.toggle('popup-open', name === 'approve');
   step({ upload: 1, read: 1, review: 2, approve: 3, saved: 4 }[name]);
   $('#ws-title').textContent = { upload: 'New sample order', read: 'Reading the file', review: 'Review the order entry', approve: 'Check before saving', saved: 'Saved in Oracle' }[name];
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (name !== 'approve') window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 export function resetWorkspace() {
@@ -74,6 +90,12 @@ export async function upload(file) {
     state.dirty = false; state.saved = false; state.tab = {}; state.planIssues = []; state.showMapping = false; resetUndo();
     showReading();
   });
+  // A file whose layout is known goes straight on: everything is filled and checked against Oracle, then the popup
+  // shows what will be saved (or the entry opens with the few things to fix outlined). A new layout waits for a hint.
+  const d = state.draft;
+  if (d && d.orders.length && !/Needs column mapping/.test(d.format) && can('preview')) {
+    renderReview(); await prepare();
+  }
 }
 
 export async function openDraft(draftId) {
@@ -107,8 +129,10 @@ function showReading() {
       need.length ? 'Fill them in on the next screen' : '']);
   }
   const cov = d.coverage;
-  if (cov && d.orders.length) items.push([cov.exclusions.length ? 'warn' : 'ok', cov.exclusions.length ? `${fmt(cov.totals.numbers - cov.totals.numbers_read, 0)} numbers in the file not used` : 'Every number in the file is used',
-    cov.exclusions.length ? `${plural(cov.exclusions.length, 'place')} — listed on the next screen` : '']);
+  const checkedN = cov?.totals?.numbers_checked || 0;
+  if (cov && d.orders.length) items.push([cov.exclusions.length ? 'warn' : 'ok', cov.exclusions.length ? `${fmt(cov.totals.numbers_not_read, 0)} numbers in the file not used` : 'Every number in the file is used or checked',
+    [cov.exclusions.length ? `${plural(cov.exclusions.length, 'place')} — listed on the next screen` : '',
+     checkedN ? `${fmt(checkedN, 0)} totals and repeated tables checked` : ''].filter(Boolean).join(' · ')]);
   $('#read-title').textContent = d.orders.length ? 'Here is what we found' : 'We need one quick hint';
   $('#read-steps').innerHTML = items.map(([k, t, s], i) => `<li class="${k === 'ok' ? '' : k}" style="animation-delay:${i * 80}ms"><span class="ic">${k === 'ok' ? '✓' : k === 'warn' ? '!' : '–'}</span><div><strong>${esc(t)}</strong><small>${esc(s)}</small></div></li>`).join('');
   $('#read-actions').hidden = false; $('#go-review').focus();
@@ -180,16 +204,18 @@ export function renderReview() {
   if (state.sourceView) drawSource();
   if (locked) $$('#orders input, #orders select, #orders button').forEach(e => { e.disabled = true; });
   renderSide();
+  loadNextOc();
 }
 
 // What of the file is not in any order (backend/coverage.py): shown, never dropped silently.
 function coverageBanner(d) {
   const c = d.coverage; if (!c || !c.exclusions.length) return '';
-  const t = c.totals;
-  return `<details class="banner warning coverage"><summary><span class="b-ic">!</span><b>${fmt(t.numbers - t.numbers_read, 0)} numbers in the file are not used</b>
+  const t = c.totals; const checked = c.checked || [];
+  return `<details class="banner warning coverage"><summary><span class="b-ic">!</span><b>${fmt(t.numbers_not_read, 0)} numbers in the file are not used</b>
     <span class="muted small-text"> · ${plural(c.exclusions.length, 'place')} · show</span></summary>
     <ul class="small-text">${c.exclusions.map(e => `<li>${esc(e)}</li>`).join('')}</ul>
-    <p class="muted small-text">They will not be saved. If they belong to the order, use <b>Read this file differently</b> or type them in.</p></details>`;
+    <p class="muted small-text">They will not be saved. If they belong to the order, use <b>Read this file differently</b> or type them in.</p>
+    ${checked.length ? `<p class="small-text"><b>Checked, nothing lost</b> (${fmt(t.numbers_checked || 0, 0)} numbers):</p><ul class="small-text muted">${checked.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}</details>`;
 }
 
 function outcomeBanner(d) {
@@ -266,6 +292,7 @@ function orderScreen(o, oi) {
 
 function srcOf(o, k) {
   const s = o.provenance?.[k];
+  if (s?.reason === 'default') return `<span class="chip calc" title="${esc(s.derivation || '')}">${k === 'order_date' ? 'today' : 'default'}</span>`;
   if (s?.cell && s.derivation && ['ship_date', 'order_date'].includes(k)) return dateChip(s);
   if (s) return source(s);
   return o[k] ? '<span class="chip calc">entered</span>' : '';
@@ -288,12 +315,18 @@ function unitSrc(o) {
   if (p.reason === 'template') return `<span class="chip calc" title="${esc(p.derivation || p.evidence || 'Restored from the saved layout')}">saved layout</span>`;
   if (p.reason === 'person') return `<span class="chip calc" title="${esc(p.derivation || '')}">chosen with the layout</span>`;
   const where = p.cell ? `${p.sheet ? p.sheet + '!' : ''}${p.cell}` : '';
-  return `<span class="chip cell" title="${esc(`${p.evidence || ''}${where ? ' · read from ' + where : ''}`)}">${esc(where ? where + ' · ' : '')}“${esc(said.length > 18 ? said.slice(0, 17) + '…' : said)}”</span>`;
+  return `<span class="chip cell" title="${esc(`${p.evidence || ''}${where ? ' · read from ' + where : ''}${said ? ` (“${said}”)` : ''}`)}">${p.cell ? `Excel ${esc(p.cell)}` : 'from the file'}</span>`;
 }
 
 function field(o, oi, [k, text, req, list, type]) {
   if (k === '__orderno') return `<div class="f"><label class="f-label">${text}<span class="src"><span class="chip calc">automatic</span></span></label><input readonly value="Generated by Oracle on save"></div>`;
   const path = `orders.${oi}.${k}`; const v = o[k] ?? ''; const issue = at(path); void req;
+  if (k === 'order_ref' && ocSeries() && !String(v).trim() && !state.manualRef?.[oi]) {
+    const next = state.nextOc?.[oi];
+    return `<div class="f auto-oc ${cls(issue)}" data-field="${esc(path)}"><label class="f-label"><span>${esc(text)}</span><span class="src"><span class="chip calc" title="Next number of the ${esc(ocSeries())} series — confirmed when the order is saved">automatic</span></span></label>
+      <input readonly data-auto-oc="${oi}" value="${esc(next || ocSeries())}" aria-label="OC No, given automatically when saved">
+      <button type="button" class="link small-text" data-act="manual-ref" data-oi="${oi}">Type a number instead</button>${msgHtml(issue)}</div>`;
+  }
   return `<div class="f ${cls(issue)}" data-field="${esc(path)}"><label class="f-label" for="f-${esc(path)}"><span>${esc(text)}</span>${isRequired(k) ? '<span class="req" title="Required">*</span>' : ''}${notSavedChip(k)}<span class="src">${issue ? '' : srcOf(o, k)}</span></label>
     <input id="f-${esc(path)}" data-path="${esc(path)}" ${type ? `type="${type}"` : ''} value="${esc(v)}" ${list ? `list="list-${list}"` : ''} ${k === 'order_ref' ? `placeholder="${ocSeries() ? `Automatic: next ${esc(ocSeries())} on save` : 'e.g. PK/26-27/S/1320'}" maxlength="30"` : ''} ${issue ? 'aria-invalid="true"' : ''}>${msgHtml(issue)}</div>`;
 }
@@ -633,7 +666,8 @@ export async function onAction(btn) {
     case 'tab': state.tab[oi] = btn.dataset.tab; renderReview(); return true;
     case 'next-issue': nextIssue(); return true;
     case 'ask-file': askFile(); return true;
-    case 'show-file': state.sourceView = !state.sourceView; renderReview(); if (state.sourceView) drawSource(); return true;
+    case 'show-file': state.sourceView = !state.sourceView; setRail(state.sourceView ? true : null); renderReview(); if (state.sourceView) drawSource(); return true;
+    case 'manual-ref': (state.manualRef ||= {})[oi] = true; renderReview(); document.getElementById(`f-orders.${oi}.order_ref`)?.focus(); return true;
     case 'reconcile': await busy('Asking Oracle whether the order was saved…', async () => {
       state.draft = await api(`/api/drafts/${id(d.id)}/reconcile`, { method: 'POST' });
       if (state.draft.result) { state.saved = true; await showSaved(state.draft.result); return notify('Oracle confirms the order is saved.', 'success'); }
@@ -716,7 +750,7 @@ export async function prepare() {
     state.draft.orders.forEach((o, i) => { if (manual[i]) o._manual = true; });
     const p = state.draft.plan; state.planIssues = p.issues || [];
     if (p.errors.length) {
-      renderReview(); nav = 0;
+      renderReview(); stage('review'); nav = 0;
       notify(`${plural(p.errors.length, 'thing')} to fix — each one is outlined in red where it belongs.`, 'warning');
       nextIssue();
     } else showApprove();
@@ -731,28 +765,34 @@ export async function ask(question) {
 }
 
 // ---------------------------------------------------------------- approve
+// The check before saving is a popup over the order entry: what was read, where each value goes in Oracle, what is not
+// saved, then Accept (save) or Edit (back to the entry, which stays underneath).
 export function showApprove() {
   const d = state.draft; const plan = d.plan;
-  const inserts = plan.operations.filter(o => o.action === 'insert'); const reuse = plan.operations.filter(o => o.action === 'reuse');
+  const inserts = plan.operations.filter(o => o.action === 'insert');
   const tables = new Set(inserts.map(o => o.table));
   const sheets = plan.graph?.sheets || [];
   const lines = sheets.reduce((n, s) => n + s.lines.length, 0) || d.orders.reduce((n, o) => n + (o.lines || []).length, 0);
   const newNames = (plan.exceptions?.new_masters || []).length;
   const canApprove = plan.live && !plan.errors.length && can('approve');
   const root = $('#stage-approve');
-  root.innerHTML = `
-    <div class="row" style="margin-bottom:12px"><button class="ghost" data-act2="back-review">← Back to the order entry</button><span class="spacer"></span>
-      <span class="muted small-text">${esc(d.filename)} · ${esc(d.orders.map(o => `${o.order_ref} · ${o.style}`).join(', '))}</span></div>
-    ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is not connected. This view used the saved database structure, so existing masters were not checked. Start the database and check again to approve.</div></div>'}
-    <div class="kpis">${[['Orders', d.orders.length], ['Colour lines', lines], ['Pieces to save', fmt(plan.totals.pieces, 0)], ['New names added to Oracle', newNames]].map(([a, b]) => `<div class="card kpi"><small>${a}</small><strong>${b}</strong></div>`).join('')}</div>
+  if ($('#stage-review').hidden || !$('#orders')) renderReview();
+  root.innerHTML = `<div class="popup" role="dialog" aria-modal="true" aria-labelledby="ap-title">
+    <div class="popup-head"><div><span class="eyebrow">Ready to save · ${esc(d.filename)}</span><h2 id="ap-title" tabindex="-1">Check and accept</h2></div>
+      <div class="popup-actions"><button class="secondary" data-act2="back-review">Edit</button></div></div>
+    ${plan.live ? '' : '<div class="banner warning"><span class="b-ic">!</span><div>Oracle is offline — saving is paused. Start the database and check again.</div></div>'}
+    <div class="kpis">${[['Orders', d.orders.length], ['Colour lines', lines], ['Pieces to save', fmt(plan.totals.pieces, 0)], ['New names added to Oracle', newNames]].map(([x, y]) => `<div class="card kpi"><small>${x}</small><strong>${y}</strong></div>`).join('')}</div>
     ${sheets.length ? `<section class="card saved-sheet"><div class="card-head"><h2>Order to be saved</h2></div>
-      <div class="saved-sheet-body">${sheets.map(s => sheetHtml(s, { planned: true, series: ocSeries() })).join('')}</div></section>` : ''}
+      <div class="saved-sheet-body">${sheets.map((s, i) => sheetHtml(s, { planned: true, series: ocSeries(), next: state.nextOc?.[i] })).join('')}</div></section>` : ''}
+    <section class="card saved-sheet"><div class="card-head"><h2>Where each value goes in Oracle</h2><span class="muted small-text">${plural(inserts.length, 'new record')} in ${plural(tables.size, 'table')}</span></div>
+      <div class="saved-sheet-body ot-list">${tablesHtml(plan.graph, state.nextOc || {})}</div></section>
     ${reviewList(planGroups(d), { title: 'Before you approve', ack: plan.exceptions?.digest ? { checked: state.exceptionsSeen === plan.exceptions.digest } : null })}
-    <details class="card tech-details" data-tech><summary>Technical details <span class="muted">· ${plural(inserts.length, 'new record')} in ${plural(tables.size, 'Oracle table')}</span></summary>
+    <details class="card tech-details" data-tech><summary>Technical details <span class="muted">· how the tables are linked</span></summary>
       ${flowCard('Where this order will be saved', 'Click a table to see its rows.')}</details>
     <div class="action-bar"><p>${canApprove ? (needsAck(plan) ? 'Tick “I’ve reviewed these items” to approve.' : 'Saved in one step — if anything fails, nothing is saved.') :
       !plan.live ? 'Oracle is offline — saving is paused.' : plan.errors.length ? 'Fix the outlined fields first.' : 'Only an approver can save this order.'}</p>
-      <button class="primary big" data-act2="approve" ${canApprove && !needsAck(plan) ? '' : 'disabled'}>Accept and save to Oracle →</button></div>`;
+      <button class="secondary" data-act2="back-review">Edit</button>
+      <button class="primary big" data-act2="approve" ${canApprove && !needsAck(plan) ? '' : 'disabled'}>Accept and save to Oracle →</button></div></div>`;
   // The diagram needs its real size, so it is drawn the first time the technical details are opened.
   const tech = root.querySelector('[data-tech]');
   tech.addEventListener('toggle', () => {
@@ -761,6 +801,7 @@ export function showApprove() {
     mountFlow(tech, plan.graph || { nodes: [], edges: [] }, { planned: true, columns: plan.columns, onReferenceOnly: t => backToReview(t === 'ORDACC' ? 'trims' : 'fabric') });
   });
   stage('approve');
+  root.scrollTop = 0; $('#ap-title').focus();
 }
 
 const needsAck = plan => !!plan.exceptions?.digest && state.exceptionsSeen !== plan.exceptions.digest;
@@ -868,6 +909,9 @@ export function bindWorkspace() {
     if (e.target.closest('input, select, textarea')) return;
     const b = e.target.closest('[data-act]'); if (!b) return;
     await onAction(b);
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('#stage-approve').hidden && !document.querySelector('dialog[open]')) { e.preventDefault(); backToReview(); }
   });
   document.addEventListener('keydown', e => {
     if (!(e.ctrlKey || e.metaKey) || $('#stage-review').hidden || e.target.closest('input, textarea, select, [contenteditable]')) return;

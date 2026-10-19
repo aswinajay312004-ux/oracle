@@ -372,8 +372,22 @@ def put_settings(data: Settings, user=Depends(require('settings'))):
 
 # --- uploads & drafts ---------------------------------------------------------------
 def _new_order_defaults(orders):
+    """Company defaults, then (config/company.json defaults.auto_fill, on by default) the answers the reviewer would
+    otherwise type for every file: today as the order confirmation date when the file has none, and the file's own
+    quantities when it has no sample quantities. Each one is marked on its field, listed before approval and can be
+    changed."""
     s = settings()
+    auto = (COMPANY.get('defaults') or {}).get('auto_fill', True)
     for o in orders:
+        prov = o.setdefault('provenance', {})
+        if auto and not str(o.get('order_date') or '').strip():
+            o['order_date'] = datetime.now().date().isoformat()
+            prov['order_date'] = {'derivation': 'Today — the file has no order confirmation date', 'reason': 'default'}
+        pieces = sum(_qty(x.get('quantity')) for l in o.get('lines') or [] for x in l.get('sizes') or [])
+        if auto and o.get('quantity_basis') not in ('sample', 'order_demo') and pieces > 0:
+            o['quantity_basis'] = 'order_demo'
+            prov['quantity_basis'] = {'derivation': 'The file has no sample quantities, so its order quantities are used',
+                                      'reason': 'default'}
         if not o.get('exporter'):
             o['exporter'] = s['company_exporter']
             o.setdefault('provenance', {})['exporter'] = {'derivation': 'Company default (Settings)'}
@@ -381,6 +395,13 @@ def _new_order_defaults(orders):
             o['sample_type'] = s['default_sample_type']
             o.setdefault('provenance', {})['sample_type'] = {'derivation': 'Company default (Settings)'}
     return orders
+
+
+def _qty(v):
+    try:
+        return float(v) if v not in (None, '') else 0.0
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def current_fields():
@@ -1181,6 +1202,18 @@ def _field_view(f, saved=None):
     s = (saved or {}).get(f['key']) or {}
     out.update(changed_by=s.get('actor'), changed_at=s.get('at'))
     return out
+
+
+@app.get('/api/oc/next')
+def next_oc(count: int = 1, user=Depends(authenticated)):
+    """The next OC numbers of the automatic series, shown in the OC No. field before saving. Oracle offline or no series:
+    numbers is null and the screen shows the series pattern instead."""
+    count = max(1, min(count, 50))
+    try:
+        numbers = oracle.next_order_numbers(count)
+    except Exception:
+        numbers = None
+    return dict(series=_oc_series(), numbers=numbers)
 
 
 @app.get('/api/fields')

@@ -127,3 +127,14 @@ def test_empty_reference_gets_the_next_oc_number_of_the_series_on_real_oracle():
             cur = c.cursor(); cur.execute('select DOCID from GARMENT_DEMO.ORDMAS where ORDMASID=:id', id=receipt['orders'][0]['ordmasid'])
             assert cur.fetchone()[0] == numbers[-1]
     assert numbers == expected
+
+
+def test_next_oc_numbers_shown_before_saving_match_what_the_save_gives():
+    from backend.erp import order_numbers as on
+    if on.series() is None:
+        pytest.skip('No automatic OC number series in config/company.json')
+    [shown] = db.next_order_numbers(1)
+    d = draft(); d['orders'][0]['order_ref'] = ''
+    with db.connect() as c:
+        p = db.plan(c, d['orders'], d['filehash'])
+    assert db.commit(d, p['hash'], 'integration-test')['orders'][0]['order_ref'] == shown

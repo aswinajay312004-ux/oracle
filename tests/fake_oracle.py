@@ -71,6 +71,10 @@ class FakeOracle:
         self.receipts[draft['id']] = deepcopy(result)
         return result
 
+    def next_order_numbers(self, count, mapping=None):
+        spec = order_numbers.series()
+        return order_numbers.following(self.refs, order_numbers.prefix(spec, datetime.now().date()), count, spec['digits']) if spec else None
+
     def live_rows(self, conn, table, pk, ids, mapping):
         return {i: dict(self.rows.get(table, {}).get(i, {})) for i in ids if i in self.rows.get(table, {})}
 
@@ -79,7 +83,7 @@ class FakeOracle:
 
     def install(self, monkeypatch):
         monkeypatch.setattr(oracle_store, 'connect', lambda: FakeConn())
-        for name in ('plan', 'read_result', 'commit', 'live_rows', 'history'):
+        for name in ('plan', 'read_result', 'commit', 'live_rows', 'history', 'next_order_numbers'):
             monkeypatch.setattr(oracle_store, name, getattr(self, name))
         monkeypatch.setattr(oracle_store, 'masters', lambda conn, mapping=None, roles=None: {})
         monkeypatch.setattr(main, 'OracleCatalog', lambda conn: self.catalog())

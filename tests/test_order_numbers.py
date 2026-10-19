@@ -53,7 +53,7 @@ def test_plan_carries_a_stand_in_so_the_preview_hash_does_not_depend_on_the_numb
     assert not any('reference' in e for e in a['errors']), a['errors']
     head = next(op for op in a['operations'] if op['table'] == 'ORDMAS')
     assert head['values']['DOCID'] == 'AUTO-OC#1#'
-    assert any('OC No. is given automatically' in w for w in a['warnings'])
+    assert not any('OC No' in w for w in a['warnings'])          # the screen shows the next number instead
     b = planner.plan(snapshot(existing_refs={'PK/26-27/S/1320'}), [deepcopy(o)], 'f' * 64, mapping.effective())
     assert a['hash'] == b['hash']
     typed = dict(deepcopy(o), order_ref='AUTO-OC#1#')
@@ -109,3 +109,11 @@ def test_without_a_series_the_reference_field_stays_required(env, monkeypatch):
     monkeypatch.setattr(on, 'series', lambda company=None: None)
     f = next(f for f in c.get('/api/fields').json() if f['key'] == 'order_ref')
     assert f['automatic'] is None and f['required']
+
+
+def test_the_review_screen_gets_the_next_numbers_before_saving(env):
+    c, oracle = env
+    head = on.prefix(SPEC, date.today())
+    oracle.refs.add(f'{head}1320')
+    assert c.get('/api/oc/next?count=2').json() == {'series': head + 'N', 'numbers': [f'{head}1321', f'{head}1322']}
+    assert len(c.get('/api/oc/next?count=500').json()['numbers']) == 50          # bounded

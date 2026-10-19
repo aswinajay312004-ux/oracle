@@ -244,11 +244,30 @@ def assign_order_numbers(cursor, orders, mapping):
     target = planner._written(mapping).get('order.order_ref')
     if not target or target[2] != 'verified':
         raise ValueError('The order reference has no verified column in the write mapping.')
-    table, column = target[0], target[1]
     day = datetime.now().date()
-    # Table and column come from the verified write mapping; the series prefix holds no LIKE wildcards (order_numbers.SAFE).
+    return order_numbers.assign(orders, _series_refs(cursor, spec, day, target), spec, day)
+
+
+def _series_refs(cursor, spec, day, target):
+    """The references of this year's series already in Oracle. Table and column come from the verified write mapping; the
+    series prefix holds no LIKE wildcards (order_numbers.SAFE)."""
+    table, column = target[0], target[1]
     cursor.execute(f'SELECT {column} FROM {OWNER}.{table} WHERE {column} LIKE :p', p=order_numbers.prefix(spec, day) + '%')
-    return order_numbers.assign(orders, [r[0] for r in cursor], spec, day)
+    return [r[0] for r in cursor]
+
+
+def next_order_numbers(count, mapping=None):
+    """The next `count` OC numbers as the screen shows them before saving (read only, no lock: the save itself takes the
+    lock and may give a later number if another order was saved first). None when there is no automatic series."""
+    spec = order_numbers.series()
+    if spec is None:
+        return None
+    target = planner._written(mapping or current_mapping()).get('order.order_ref')
+    if not target or target[2] != 'verified':
+        return None
+    day = datetime.now().date()
+    with connect() as conn:
+        return order_numbers.following(_series_refs(conn.cursor(), spec, day, target), order_numbers.prefix(spec, day), count, spec['digits'])
 
 
 def history():

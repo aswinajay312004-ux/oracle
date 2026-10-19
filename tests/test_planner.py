@@ -158,10 +158,13 @@ def test_duplicate_file_and_existing_order_reference_are_blocked():
 def test_order_reference_without_a_verified_column_blocks_saving():
     # Found on the owner's laptop: DOCID marked unverified in Setup → Write mapping, and the save failed after the
     # inserts. An order saved without its reference could not be found again, so the preview refuses it.
-    m = mapping.effective([dict(table='ORDMAS', column='DOCID', status='proposed')])
+    # Setup → Write mapping can no longer switch the OC No. column off …
+    assert mapping.effective([dict(table='ORDMAS', column='DOCID', status='proposed')])['tables']['ORDMAS']['columns']['DOCID']['status'] == 'verified'
+    # … and a mapping file without it still refuses to save.
+    m = mapping.effective(); m['tables']['ORDMAS']['columns']['DOCID']['status'] = 'proposed'
     p = planner.plan(snapshot(), [order_from_fixture(accessories=[])], 'f' * 64, m)
-    assert any('order reference has no verified column' in e for e in p['errors'])
-    assert not any('order reference has no verified column' in e
+    assert any('no Oracle column set for the OC No' in e for e in p['errors'])
+    assert not any('no Oracle column set for the OC No' in e
                    for e in planner.plan(snapshot(), [order_from_fixture(accessories=[])], 'f' * 64, mapping.effective())['errors'])
 
 

@@ -80,6 +80,59 @@ def _bands(cells, by_rc):
     return bands
 
 
+def _close(a, b):
+    return abs(a - b) <= 0.005 + 1e-9 * max(abs(a), abs(b))
+
+
+def _run(by_rc, row, col, dr, dc):
+    """The numbers next to (row, col) going up (dr=-1) or left (dc=-1) until the first cell that is not a number."""
+    out = []; r, c = row + dr, col + dc
+    while r > 0 and c > 0 and is_number(by_rc.get((r, c))):
+        out.append((r, c)); r += dr; c += dc
+    return out
+
+
+def _is_total_label(by_rc, row, col):
+    head = _heading(by_rc, None, [col], row)[1]
+    label = _row_label(by_rc, row, col)
+    return bool(head and TOTAL_WORDS.match(head[0])) or bool(label and TOTAL_WORDS.match(label))
+
+
+def _checked_totals(unread, by_rc, known):
+    """Unread numbers that are totals: the sum (of two or more) of the numbers right above them or right left of them,
+    where those numbers were read (or are themselves checked totals) or the row/column is labelled Total. Such a
+    number is checked against what was read, not lost. The read-backed or labelled condition keeps an ordinary size
+    row (1, 2, 3) from being taken for a total by coincidence."""
+    found = set(); changed = True
+    while changed:
+        changed = False
+        for c in unread:
+            rc = (c['row'], c['col'])
+            if rc in found:
+                continue
+            for run in (_run(by_rc, *rc, -1, 0), _run(by_rc, *rc, 0, -1)):
+                if len(run) < 2 or not _close(sum(by_rc[x] for x in run), c['value']):
+                    continue
+                if all(x in known or x in found for x in run) or _is_total_label(by_rc, *rc):
+                    found.add(rc); changed = True
+                    break
+    return found
+
+
+def _repeat_of(band, by_rc, accounted):
+    """Rows a band repeats exactly (same numbers in the same columns, same row labels, a fixed number of rows higher),
+    e.g. a SUMMARY table that copies the order table. Returns the source rows or None."""
+    first = min(band['cells'], key=lambda c: (c['row'], c['col']))
+    for dr in sorted({first['row'] - r for (r, col) in accounted if col == first['col'] and r < first['row']
+                      and is_number(by_rc.get((r, col))) and _close(by_rc[(r, col)], first['value'])}):
+        if all((c['row'] - dr, c['col']) in accounted and is_number(by_rc.get((c['row'] - dr, c['col'])))
+               and _close(by_rc[(c['row'] - dr, c['col'])], c['value'])
+               and _row_label(by_rc, c['row'], min(band['cols'])).upper() == _row_label(by_rc, c['row'] - dr, min(band['cols'])).upper()
+               for c in band['cells']):
+            return band['first'] - dr, band['last'] - dr
+    return None
+
+
 def _describe(sheet, band, by_rc):
     cols = band['cols']; first, last = band['first'], band['last']
     head_row, words = _heading(by_rc, None, cols, first)
@@ -104,7 +157,8 @@ def manifest(sheets, orders, notes=()):
     """The coverage of one draft. exclusions: sentences the approver must see (data that is not in any order)."""
     used = referenced(orders)
     out = []; exclusions = []
-    totals = dict(worksheets=len(sheets), read=0, not_read=0, hidden=0, cells=0, numbers=0, numbers_read=0, numbers_not_read=0)
+    totals = dict(worksheets=len(sheets), read=0, not_read=0, hidden=0, cells=0, numbers=0, numbers_read=0, numbers_checked=0,
+                  numbers_not_read=0)
     for sheet in sheets:
         cells = [c for c in sheet.get('cells') or [] if c.get('value') not in (None, '')]
         mine = used.get(sheet['name'], set())
@@ -113,14 +167,36 @@ def manifest(sheets, orders, notes=()):
         read = bool(mine)
         status = 'read' if read else 'hidden, not read' if sheet.get('hidden') else 'not read' if cells else 'empty'
         by_rc = {(c['row'], c['col']): c['value'] for c in cells}
-        bands = [_describe(sheet, b, by_rc) for b in _bands(unread, by_rc)]
+        # On a sheet that was read, totals of what was read, exact repeats of it (a SUMMARY table) and tables of zeros
+        # are checked, not lost: they are listed under "checked", and only the rest is "not read".
+        known = {(c['row'], c['col']) for c in numbers if c['cell'].upper() in mine}
+        totals_found = _checked_totals(unread, by_rc, known) if read else set()
+        accounted = known | totals_found
+        bands = []
+        for b in _bands([c for c in unread if (c['row'], c['col']) not in totals_found], by_rc):
+            item = _describe(sheet, b, by_rc)
+            source = _repeat_of(b, by_rc, accounted) if read else None
+            if read and all(c['value'] == 0 for c in b['cells']):
+                item.update(kind='zeros', text=item['text'].replace(' not read', ', all 0'))
+            elif source:
+                item.update(kind='repeat', text=item['text'].replace(' not read', f' repeat rows {source[0]}–{source[1]} exactly'
+                                                                     if source[0] != source[1] else f' repeat row {source[0]} exactly'))
+                accounted |= {(c['row'], c['col']) for c in b['cells']}
+            if item['kind'] == 'totals':
+                item['text'] = item['text'].replace(' not read', ' in a Total row')
+            bands.append(item)
+        checked_n = len(totals_found) + sum(b['count'] for b in bands if b['kind'] in ('zeros', 'repeat', 'totals'))
+        not_read_n = len(unread) - checked_n
+        checked = ([f'Sheet “{sheet["name"]}”: {len(totals_found)} total{"" if len(totals_found) == 1 else "s"} match the numbers they add up.']
+                   if totals_found else []) + [b['text'] for b in bands if b['kind'] in ('zeros', 'repeat', 'totals')]
         entry = dict(name=sheet['name'], hidden=bool(sheet.get('hidden')), status=status, cells=len(cells), numbers=len(numbers),
-                     numbers_read=len(numbers) - len(unread), numbers_not_read=len(unread),
+                     numbers_read=len(numbers) - len(unread), numbers_checked=checked_n, numbers_not_read=not_read_n,
                      text_cells=len(cells) - len(numbers), cells_cited=len(mine), regions=bands[:MAX_BANDS],
-                     regions_total=len(bands))
+                     regions_total=len(bands), checked=checked)
         out.append(entry)
         totals['cells'] += len(cells); totals['numbers'] += len(numbers)
-        totals['numbers_read'] += entry['numbers_read']; totals['numbers_not_read'] += len(unread)
+        totals['numbers_read'] += entry['numbers_read']; totals['numbers_not_read'] += not_read_n
+        totals['numbers_checked'] = totals.get('numbers_checked', 0) + checked_n
         totals['read' if read else 'hidden' if sheet.get('hidden') else 'not_read'] += 1 if cells or read else 0
         if not read and cells:
             what = f'{len(numbers)} number{"" if len(numbers) == 1 else "s"} and {len(cells) - len(numbers)} text cells'
@@ -129,8 +205,9 @@ def manifest(sheets, orders, notes=()):
                               f'Sheet “{sheet["name"]}”{" (hidden in Excel)" if sheet.get("hidden") else ""} was not read '
                               f'({len(cells)} text cells, no numbers).')
         elif read:
-            exclusions += [b['text'] for b in bands if b['kind'] != 'totals']
-    result = dict(sheets=out, totals=totals, exclusions=exclusions, notes=list(notes or ()))
+            exclusions += [b['text'] for b in bands if b['kind'] in ('data', 'hidden')]
+    result = dict(sheets=out, totals=totals, exclusions=exclusions, checked=[t for e in out for t in e['checked']],
+                  notes=list(notes or ()))
     result['digest'] = hashlib.sha256(json.dumps(dict(sheets=out, exclusions=exclusions), sort_keys=True, default=str)
                                       .encode()).hexdigest()
     return result

@@ -1,5 +1,5 @@
 // App shell: authentication, navigation, status lights, saved orders and global actions.
-import { $, $$, esc, plural, fmt, state, can, notify, busy, closeDrawer } from './util.js';
+import { $, $$, esc, plural, fmt, state, can, notify, busy, closeDrawer, setRail } from './util.js';
 import { api, id, onUnauthorized } from './api.js';
 import * as ws from './workspace.js';
 import { loadExplorer, bindExplorer, exploreOrder } from './explorer.js';
@@ -56,6 +56,7 @@ function go(next, push = true) {
   $$('.nav [data-view]').forEach(t => t.classList.toggle('active', t.dataset.view === next));
   $$('.view').forEach(v => { v.hidden = v.id !== `view-${next}`; });
   closeDrawer();
+  if (next !== 'workspace' || !state.sourceView) setRail(null);   // the file view widens the page only on its own screen
   if (next === 'dashboard') loadDashboard();
   if (next === 'history') history();
   if (next === 'explorer') loadExplorer();
@@ -106,6 +107,10 @@ function showPassword(visible) {
 
 function bind() {
   onUnauthorized(() => session());
+  // Icons-only menu: each item keeps its name as a tooltip; the choice is remembered on this computer.
+  $$('.nav [data-view]').forEach(b => { b.title = b.textContent.trim(); });
+  $('#rail-toggle').addEventListener('click', () => setRail(!$('.shell').classList.contains('rail'), { remember: true }));
+  setRail(null);
   $('#auth-pass-show').addEventListener('click', () => { showPassword($('#auth-pass').type === 'password'); $('#auth-pass').focus(); });
   $('#auth-form').addEventListener('submit', async e => {
     e.preventDefault(); $('#auth-error').hidden = true; $('#auth-submit').disabled = true;

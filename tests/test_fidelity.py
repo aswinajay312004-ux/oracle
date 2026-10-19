@@ -118,6 +118,29 @@ def test_a_second_size_table_on_the_same_sheet_is_named_not_dropped():
                                                                                   'first_size_col': 2, 'last_size_col': 4}})
     cov = coverage.manifest(sheets, orders)
     assert cov['exclusions'] == ['Sheet “PO” rows 6–7, columns B–D: 6 numbers not read (under S, M, L at row 5).']
+    assert cov['totals']['numbers_checked'] == 0          # 3 = 1 + 2 in a size row is not taken for a total
+
+
+def test_totals_repeats_and_zero_tables_are_checked_not_reported_as_lost():
+    wb = Workbook(); ws = wb.active; ws.title = 'PO'
+    rows = [['Colour', 'S', 'M', 'Total'], ['NAVY', 10, 20, 30], ['RED', 5, 5, 10], ['Total', 15, 25, 40], [],
+            ['Colour', 'S', 'M', 'Total'], ['NAVY', 10, 20, 30], ['RED', 5, 5, 10], [],
+            ['Colour', 'S', 'M', 'Total'], ['NAVY', 0, 0, 0], [],
+            ['Colour', 'S', 'M', 'Total'], ['GREEN', 7, 8, 15]]
+    for r, row in enumerate(rows, 1):
+        for c, v in enumerate(row, 1):
+            ws.cell(r, c, v)
+    from backend import workbooks
+    sheets = workbooks.inspect(save(wb), 'x.xlsx')
+    orders = workbooks.apply_template(sheets, sheets[0], {'fields': {'style': 'A2'}, 'table': {
+        'type': 'matrix', 'header_row': 1, 'color_col': 1, 'first_size_col': 2, 'last_size_col': 3, 'last_row': 3}})
+    cov = coverage.manifest(sheets, orders)
+    text = ' | '.join(cov['checked'])
+    assert 'totals match' in text and 'rows 7–8, columns B–C: 4 numbers repeat rows 2–3 exactly' in text and 'all 0' in text
+    # a table with other colours and numbers is still reported, whatever its totals
+    assert cov['exclusions'] == ['Sheet “PO” row 14, columns B–C: 2 numbers not read (under S, M at row 13).']
+    t = cov['totals']
+    assert t['numbers'] == t['numbers_read'] + t['numbers_checked'] + t['numbers_not_read']
 
 
 def test_a_matrix_longer_than_the_row_limit_says_so(monkeypatch):
@@ -268,7 +291,9 @@ def test_receipt_extras_say_complete_only_when_nothing_was_left_out():
 def test_merch_bom_lists_its_unsaved_summary_block_and_bom_rows(env):
     c, _, _ = env
     d = upload(c, merch_bom())
-    assert any('rows 20–21' in e for e in d['coverage']['exclusions']), d['coverage']['exclusions']
+    # The summary block repeats the order block number for number: checked and listed, not reported as lost.
+    assert any('rows 20–21' in e and 'repeat rows 12–13 exactly' in e for e in d['coverage']['checked']), d['coverage']
+    assert not any('rows 20–21' in e for e in d['coverage']['exclusions'])
     _ = BytesIO
 
 

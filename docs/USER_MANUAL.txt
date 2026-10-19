@@ -289,6 +289,21 @@ STEP 3 - CHECK & APPROVE
     Ellaa rows um ORE transaction la save aagum: ellame save, illa onnum
     illa. Paadhi save aagi nikkaadhu.
 
+PUDHU EASY FLOW (2026-10-19):
+  Excel upload pannunga. Format theriyum na app thaane ellam fill panni
+  Oracle oda check pannum, apram "Check and accept" popup varum:
+    - Order (OC No - adutha number, buyer, style, PO, dates, colour x size)
+    - "Where each value goes in Oracle": ovvoru table la enna values
+      (Order header, Colour lines, Sizes, pudhu masters)
+    - "Before you approve": save aagaadha values, "Check" points
+  Ellam sari na "I've reviewed these items" tick -> Accept and save.
+  Maathanum na "Edit" -> entry screen la maathi "Check & continue".
+  File la order confirmation date illaatti inniku date ("today" chip);
+  sample quantities illaatti file oda order quantities ("default" chip).
+  Rendum maathalaam.
+  Edhavadhu missing aa irundhaa popup varaadhu; entry screen la andha
+  field red la kaattum.
+
 STEP 4 - SAVED
   "Order PK/26-27/S/... is saved in Oracle" nu varum. Keezha "Order in
   Oracle": OC No, buyer, style, PO, dates, apram colour x size table

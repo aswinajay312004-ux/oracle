@@ -108,3 +108,16 @@ export function timeAgo(iso) {
   if (s < 60) return 'just now'; if (s < 3600) return `${Math.floor(s / 60)} min ago`; if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   return d.toLocaleDateString();
 }
+
+// Side menu as icons only ("rail"), to give the order and the file more room. on=true/false is the person's choice and
+// is remembered on this computer; on=null goes back to that choice (used when "Show the file" closes).
+export function setRail(on, { remember = false } = {}) {
+  if (typeof document === 'undefined') return;
+  let saved = false;
+  try { saved = localStorage.getItem('poppys.rail') === '1'; } catch (_) { /* private window */ }
+  const value = on === null ? saved : on;
+  if (remember) { try { localStorage.setItem('poppys.rail', value ? '1' : '0'); } catch (_) { /* not kept */ } }
+  document.querySelector('.shell')?.classList.toggle('rail', !!value);
+  const b = document.getElementById('rail-toggle');
+  if (b) { b.setAttribute('aria-pressed', String(!!value)); b.setAttribute('aria-label', value ? 'Show the menu' : 'Hide the menu'); b.title = b.getAttribute('aria-label'); }
+}

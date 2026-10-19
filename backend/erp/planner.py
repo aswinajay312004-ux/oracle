@@ -172,8 +172,8 @@ def plan(catalog, orders, filehash, mapping, required=()):
                      'Saving stays off until a write mapping for this schema is prepared and verified.')
     ref_target = _written(mapping).get('order.order_ref')
     if not ref_target or ref_target[2] != 'verified':
-        issues.error('The order reference has no verified column in the write mapping, so a saved order could not be found '
-                     'again. Mark its column verified in Setup → Write mapping before saving.')
+        issues.error('Saving is off: this installation has no Oracle column set for the OC No. An administrator has to set it '
+                     'in config/oracle_mapping.json.')
     if not orders or len(orders) > LIMITS['orders']:
         issues.error('Import must contain 1–50 orders.')
     if catalog.file_committed(filehash):
@@ -277,9 +277,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
         if not ref and auto:
             # The OC number is given when the order is saved (oracle_store.commit); until then a stand-in keeps the plan
             # and its hash independent of a number another order could take first.
-            ref = order_numbers.marker(index)
-            issues.warn(f'{prefix}: the OC No. is given automatically when the order is saved — the next number in the '
-                        f'{order_numbers.example(auto, datetime.now().date())} series.', base + '.order_ref')
+            ref = order_numbers.marker(index)          # the screen shows the next number; nothing to warn about
         elif not ref:
             issues.error(f'{prefix}: enter a unique sample order reference.', base + '.order_ref')
         elif order_numbers.is_marker(ref):

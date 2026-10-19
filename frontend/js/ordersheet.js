@@ -34,11 +34,12 @@ function sizeTable(sheet) {
   </table></div>`;
 }
 
-export function sheetHtml(sheet, { shipNote = true, planned = false, series = '' } = {}) {
+export function sheetHtml(sheet, { shipNote = true, planned = false, series = '', next = '' } = {}) {
   const ship = [...new Set(sheet.lines.map(l => l.ship_date).filter(Boolean))];
   return `<article class="order-sheet">
     <header class="os-head"><div><span class="eyebrow">OC No</span>${planned && /given on save/.test(sheet.order_ref || '')
-      ? `<h2 class="os-ref os-pending">Assigned when saved</h2>${series ? `<p class="muted small-text">Next number in ${esc(series)}</p>` : ''}`
+      ? (next ? `<h2 class="os-ref">${esc(next)}</h2><p class="muted small-text">Next number — confirmed when saved</p>`
+        : `<h2 class="os-ref os-pending">Assigned when saved</h2>${series ? `<p class="muted small-text">Next number in ${esc(series)}</p>` : ''}`)
       : `<h2 class="os-ref">${esc(sheet.order_ref || '—')}</h2>`}</div>
       ${planned ? '<span class="pill info">Preview · not saved yet</span>'
     : `<span class="pill ${sheet.verified ? 'ok' : 'err'}">${sheet.verified ? '✓ Verified in Oracle' : '⚠ Differences found'}</span>`}</header>
@@ -65,4 +66,38 @@ export function openFullView(sheets, { title = 'Order saved in Oracle', readAt =
   document.body.appendChild(d); d.showModal();
   d.querySelector('[data-fv="close"]').focus();
   return d;
+}
+
+// Where each value goes: one small grid per Oracle table of the plan (planned graph), in business words. Record IDs
+// and the links between new records are left out (they are generated on save); masters show their names.
+const KIND_ORDER = { header: 0, detail: 1, master: 2 };
+export function tablesHtml(graph, nexts = {}) {
+  const nodes = (graph?.nodes || []).filter(n => (n.records || []).length && !n.reference_only)
+    .sort((a, b) => (KIND_ORDER[a.kind] ?? 3) - (KIND_ORDER[b.kind] ?? 3));
+  if (!nodes.length) return '';
+  return nodes.map(n => {
+    const written = n.records.filter(r => r.kind === 'written');
+    const rows = written.length ? written : n.records;
+    const linkCol = c => /link|belongs to/i.test((n.labels || {})[c] || '');     // generated on save, nothing to check
+    const shown = c => c !== n.key && !linkCol(c) && rows.some(r => { const v = r.live?.[c]; return v != null && v !== '' && !(typeof v === 'string' && v.startsWith('$')) || r.decoded?.[c] != null; });
+    const cols = [...new Set(rows.flatMap(r => r.written_columns?.length ? r.written_columns : Object.keys(r.live || {})))].filter(shown);
+    const cell = (r, c, i = 0) => {
+      const v = r.decoded?.[c] ?? r.live?.[c];
+      if (typeof v === 'string' && v.includes('(OC No. given on save)') && n.kind === 'header' && nexts[i]) return `${nexts[i]} (confirmed when saved)`;
+      return typeof v === 'string' && v.startsWith('$') ? 'new' : niceValue(v);
+    };
+    const label = c => (n.labels || {})[c] || c;
+    const what = n.kind === 'master' ? (written.length ? `${written.length} new` : `${n.records.length} existing, linked`)
+      : `${rows.length} row${rows.length === 1 ? '' : 's'}`;
+    const list = rows.slice(0, 60);
+    const head = `<summary><b>${esc(n.business || n.table)}</b> <span class="muted">· ${esc(n.table)} · ${esc(what)}</span></summary>`;
+    if (rows.length === 1) {      // one record (the order header, one new master): label and value, like the order screen
+      return `<details class="ot" ${n.kind === 'header' ? 'open' : ''}>${head}<dl class="os-details ot-one">${cols.map(c =>
+        `<div title="${esc(n.table + '.' + c)}"><dt>${esc(label(c))}</dt><dd>${esc(cell(rows[0], c, 0))}</dd></div>`).join('')}</dl></details>`;
+    }
+    return `<details class="ot">${head}
+      <div class="tbl-wrap"><table><thead><tr>${cols.map(c => `<th scope="col" title="${esc(n.table + '.' + c)}">${esc(label(c))}</th>`).join('')}</tr></thead>
+      <tbody>${list.map((r, i) => `<tr>${cols.map(c => `<td>${esc(cell(r, c, i))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      ${rows.length > list.length ? `<p class="muted small-text">and ${rows.length - list.length} more rows</p>` : ''}</details>`;
+  }).join('');
 }

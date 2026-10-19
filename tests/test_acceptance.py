@@ -329,8 +329,10 @@ def test_B_another_buyers_lookalike_file_reuses_the_layout_but_never_its_unit(en
     d = upload(c, zen_kids_po(**BLUE_LOOKALIKE), 'bluebay-lookalike.xlsx')
     assert 'ZEN KIDS PO' in d['format'], 'the layout itself may be reused (same structure)'
     o = d['orders'][0]
-    assert o['buyer'] == 'BLUE BAY' and unit(o) == ('', None, 'unconfirmed'), \
+    # ZEN KIDS's "sample" basis is not carried over; the file's own quantities are the marked, editable default.
+    assert o['buyer'] == 'BLUE BAY' and unit(o) == ('', None, 'order_demo'), \
         f'§2.3: ZEN KIDS\'s unit and quantity basis must not be applied to BLUE BAY: {unit(o)}'
+    assert o['provenance']['quantity_basis']['reason'] == 'default'
     assert any('saved for buyer “ZEN KIDS”' in w for w in o['warnings']), o['warnings']
     question = o['provenance']['qty_unit']['question']
     assert 'packs of 3' in question and 'BLUE BAY' in question, question

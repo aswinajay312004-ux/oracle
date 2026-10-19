@@ -44,7 +44,9 @@ def effective(overrides=()):
         if not o.get('column'):
             table['status'] = o['status']
         elif o['column'] in table['columns'] and not table['columns'][o['column']].get('key') \
-                and 'parent' not in table['columns'][o['column']]:
+                and 'parent' not in table['columns'][o['column']] \
+                and table['columns'][o['column']].get('field') != 'order.order_ref':
+            # Keys, parent links and the OC No. column (how a saved order is found again) cannot be switched off here.
             table['columns'][o['column']]['status'] = o['status']
     return data
 
