@@ -213,9 +213,125 @@ def excel_map(mapping, order, sheet, receipt, check, automatic=False):
         items = order.get(path)
         if path == 'lines':                             # the line's own cells, not the size names in the heading row
             items = [(l.get('provenance') or {}).get('color') for l in items or []]
-        cell = p.get('cell') or (_rows_of(items) if path in ('fabrics', 'accessories', 'lines') else None)
+        cell = x.get('cell') or p.get('cell') or (_rows_of(items) if path in ('fabrics', 'accessories', 'lines') else None)
         if not cell and p.get('derivation'):            # not in the file: say where the value came from
             what = f'{what} ({p["derivation"][0].lower()}{p["derivation"][1:]})'
         kept.append(dict(label=x['label'], cell=cell, excel=what,
-                         why='Oracle has no field for this' if x.get('kept') == 'poppys' else 'Oracle field not confirmed yet'))
+                         why=('No order field for this yet' if x.get('field') == 'other' else 'Oracle has no field for this')
+                         if x.get('kept') == 'poppys' else 'Oracle field not confirmed yet'))
     return dict(from_file=from_file, filled=filled, kept=kept)
+
+
+MAX_GRID_ROWS = 2000
+MAX_GRID_COLS = 60
+
+
+def _cells_in(value, out):
+    """Every Excel cell address cited inside a read item (fabric row, trim row, yarn split)."""
+    if isinstance(value, dict):
+        if isinstance(value.get('cell'), str) and value['cell']:
+            out.add(value['cell'])
+        for x in value.values():
+            _cells_in(x, out)
+    elif isinstance(value, list):
+        for x in value:
+            _cells_in(x, out)
+    return out
+
+
+def _ref(cell):
+    m = re.fullmatch(r'([A-Z]{1,3})(\d+)', cell or '')
+    if not m:
+        return None
+    col = 0
+    for ch in m.group(1):
+        col = col * 26 + ord(ch) - 64
+    return int(m.group(2)), col
+
+
+def _region_note(region):
+    if region.get('kind') == 'zeros':
+        return 'none', 'All 0 — nothing to save'
+    if region.get('kind') == 'repeat':
+        m = re.search(r'repeat rows? ([\d–-]+)', region.get('text') or '')
+        return 'none', f'Same numbers as rows {m.group(1)} — saved once' if m else 'A copy of the order quantities — saved once'
+    where = f' in “{region["section"]}”' if region.get('section') else ''
+    return 'unused', f'Calculation column{where} — not part of the order, not used'
+
+
+def excel_grid(order, sheet, xmap, check, coverage, oracle_sheet):
+    """The Excel sheet the order was read from, cell by cell as uploaded, each cell marked with where its value is now:
+    'oracle' (saved in Oracle, same value), 'diff' (Oracle holds something else now), 'kept' (not in Oracle, kept in
+    POPPYS with the import), 'unused' (numbers that are not part of the order), 'none' (nothing to save: all 0, a copy)
+    or '' (headings and labels). A note says it in words. {name, rows, cols, merged, hidden_rows, hidden_cols, cells:
+    [[row, col, value, status, note]], truncated}."""
+    marks = {}
+
+    def mark(cell, status, note):
+        if cell and cell not in marks:
+            marks[cell] = (status, note)
+
+    for r in xmap.get('from_file') or []:
+        if r['cell'] and '–' not in r['cell']:
+            status = {'same': 'oracle', 'changed': 'oracle', 'different': 'diff'}[r['state']]
+            mark(r['cell'], status, f'{r["label"]} → in Oracle: {r["oracle"]}' + (' (changed before saving)' if r['state'] == 'changed' else ''))
+    diffs = {(_key(d['colour']), _key(d['size'])): d['oracle'] for d in (check or {}).get('cells', {}).get('different', [])}
+    lines = [l for l in (order.get('order_lines') if order.get('quantity_basis') == 'order_demo' else order.get('lines')) or order.get('lines') or []
+             if any(s.get('quantity') for s in l.get('sizes') or [])]
+    by_row = {}
+    for c in sheet.get('cells') or []:
+        by_row.setdefault(c['row'], []).append(c)
+    olines = oracle_sheet.get('lines') or []
+    for i, l in enumerate(lines):
+        colour = (l.get('provenance') or {}).get('color') or {}
+        now = olines[i]['colour'] if len(olines) == len(lines) else None
+        mark(colour.get('cell'), 'oracle', f'Colour → in Oracle: {now}' if now else 'Colour — saved in Oracle')
+        rc = _ref(colour.get('cell'))
+        if rc and l.get('label'):
+            for c in by_row.get(rc[0], []):
+                if c.get('value') == l['label']:
+                    mark(c['cell'], 'kept', 'Line label — not in Oracle (Oracle has no field for this), kept in POPPYS')
+        for s in l.get('sizes') or []:
+            cell = (s.get('source') or {}).get('cell')
+            if not s.get('quantity'):
+                continue
+            k = (_key(l.get('color')), _key(s.get('size')))
+            if k in diffs:
+                mark(cell, 'diff', f'{l.get("color")} · {s.get("size")}: Excel {s["quantity"]} → Oracle now {diffs[k]}')
+            else:
+                mark(cell, 'oracle', f'{l.get("color")} · {s.get("size")} = {s["quantity"]} pcs → saved in Oracle')
+    packs = order.get('packs') or {}
+    pieces = (check or {}).get('pieces') or {}
+    if (packs.get('source') or {}).get('pieces') and pieces.get('oracle') is not None:
+        same = readback._same(packs.get('pieces'), pieces['oracle'])
+        mark(packs['source']['pieces'].get('cell'), 'oracle' if same else 'diff',
+             f'Total pieces {packs.get("pieces")} → Oracle total {pieces["oracle"]}' + ('' if same else ' (different)'))
+        mark((packs['source'].get('packs') or {}).get('cell'), 'none',
+             f'Packs: {packs.get("packs")} packs = {packs.get("pieces")} pieces — used to check the total')
+    for key, block in (('sample_lines', 'Sample'), ('order_lines', 'Order')):     # the quantity block that was not saved
+        for l in order.get(key) or []:
+            for s in l.get('sizes') or []:
+                if (s.get('source') or {}).get('cell'):
+                    mark(s['source']['cell'], 'none', 'All 0 — nothing to save' if not s.get('quantity')
+                         else f'{block} quantity — not saved; the other quantity block was saved')
+    for r in xmap.get('kept') or []:
+        if r.get('cell') and _ref(r['cell']):
+            mark(r['cell'], 'kept', f'{r["label"]} — not in Oracle ({r["why"].lower()}), kept in POPPYS')
+    for section, label in (('fabrics', 'Fabric'), ('accessories', 'Trims / accessories')):
+        for cell in sorted(_cells_in(order.get(section) or [], set())):
+            mark(cell, 'kept', f'{label} — not in Oracle yet (Oracle field not confirmed), kept in POPPYS')
+    for region in (coverage or {}).get('regions') or []:
+        status, note = _region_note(region)
+        rows = region.get('rows') or []
+        for row in range(rows[0], rows[-1] + 1) if rows else ():
+            for col in region.get('columns') or []:
+                mark(f'{col}{row}', status, note)
+    cells = [c for c in sheet.get('cells') or [] if c['row'] <= MAX_GRID_ROWS and c['col'] <= MAX_GRID_COLS]
+    shown_rows = {c['row'] for c in cells if not c.get('hidden')}
+    shown_cols = {c['col'] for c in cells if not c.get('hidden')}
+    hidden_cols = sorted({c['col'] for c in cells if c.get('hidden')} - shown_cols)
+    hidden_rows = sorted({c['row'] for c in cells if c.get('hidden') and c['col'] not in hidden_cols} - shown_rows)
+    return dict(name=sheet.get('name'), rows=min(sheet.get('rows') or 0, MAX_GRID_ROWS), cols=min(sheet.get('cols') or 0, MAX_GRID_COLS),
+                merged=list(sheet.get('merged') or []), hidden_rows=hidden_rows, hidden_cols=hidden_cols,
+                truncated=(sheet.get('rows') or 0) > MAX_GRID_ROWS or (sheet.get('cols') or 0) > MAX_GRID_COLS,
+                cells=[[c['row'], c['col'], c.get('value'), *marks.get(c['cell'], ('', ''))] for c in cells])

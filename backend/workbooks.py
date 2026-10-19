@@ -121,7 +121,7 @@ def source(sheet, address, value, formula=None):
 def base_order():
     return dict(buyer='', style='', description='', po_number='', order_ref='', ship_date='',
         order_date='', season='', merch='', sample_type='', exporter='', against='',
-        department='', gender='', packing_type='', components=None,
+        department='', gender='', packing_type='', components=None, other_fields=[],
         qty_unit='', pieces_per_unit=None, quantity_basis='unconfirmed', lines=[], provenance={},
         warnings=[], order_lines=[], sample_lines=[], fabrics=[], accessories=[], packs=None, workbook_pieces=None)
 
@@ -375,6 +375,27 @@ def header_fields(g, o, limit_row, only_missing=False):
         target = header_value(g, key, limit_row)
         if target:
             o[key] = field_value(g, *target, key); o['provenance'][key] = g.p(*target)
+    if not only_missing:
+        o['other_fields'] = other_header_fields(g, o, limit_row)
+
+
+def other_header_fields(g, o, limit_row):
+    """Label | value pairs above the first data block that are not order fields ("DESTINATION | USA - SEA",
+    "FAB IH DATE | 04-Dec"): [{label, cell, value}], so they are listed as kept in POPPYS, never silently dropped."""
+    cited = {(p.get('sheet'), p.get('cell')) for p in o['provenance'].values() if isinstance(p, dict) and p.get('cell')}
+    name = g.sheet['name']; out = []
+    for (r, c), cell in sorted(g.cells.items()):
+        label = cell.get('value')
+        if r >= limit_row or not isinstance(label, str) or not label.strip() or (name, cell['cell']) in cited:
+            continue
+        target = g.right(r, c)
+        if not target or (name, g.cells[target]['cell']) in cited or looks_like_label(g.v(*target), g.fields):
+            continue
+        v = g.v(*target)
+        if isinstance(v, str) and v.strip().endswith(':'):
+            continue
+        out.append(dict(label=text(label).rstrip(' :'), cell=g.cells[target]['cell'], value=v if isinstance(v, (int, float)) else text(v)))
+    return out
 
 
 # --- quantity unit evidence (docs/EXCEL_UNDERSTANDING.md §5) ---------------------------

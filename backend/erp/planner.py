@@ -482,6 +482,11 @@ def destination(orders, mapping):
             out.append(dict(order=index, path=f'{base}.fabrics', field='yarns', label=YARNS[1], values=[], count=len(yarns),
                             reason='not saved to Oracle yet — checked and shown here only, until an administrator confirms where they go.',
                             kept='unverified' if spec else 'poppys', column=YARNS[0] if spec else None))
+        for x in o.get('other_fields') or []:
+            if FILLED(x.get('value')):
+                out.append(dict(order=index, path=f'{base}.other_fields', field='other', label=x['label'], values=[str(x['value'])],
+                                count=1, cell=x.get('cell'), kept='poppys', column=None,
+                                reason='not saved to Oracle — POPPYS has no order field for it yet. POPPYS keeps it with this import.'))
     return out
 
 

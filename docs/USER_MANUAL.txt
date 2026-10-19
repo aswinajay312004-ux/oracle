@@ -795,6 +795,22 @@ DATABASE SCREEN - SAVE AANA ORDER AH CHECK PANNA (2026-10-19):
       ORDMAS / ORDSTYLE / ORDSIZE rows, record IDs).
   "All tables" tab = munnadi irundha table explorer (ella tables um).
 
+  ORDER PAGE LA 3 TABS:
+    "As in your Excel" (first) = upload panna Excel sheet appadiye, adhe rows,
+      columns, merged cells oda. Ovvoru cell um colour la:
+        Green  = Oracle la save aachu, Oracle la ippo adhe value.
+        Red    = save aana apram Oracle la maathiruchu.
+        Orange = Oracle la innum illa, POPPYS la (import oda) irukku
+                 (Season, BOM DATE, FAB IH DATE, DESTINATION, Fabric, Trims...).
+        Kodu (stripes) = save panna theva illa: calculation column, ellaam 0,
+                 illa mela irukkura order oda copy (SUMMARY block).
+        Colour illa = headings, labels, totals.
+      Cell ah click panna adhu enga pochu nu words la mela varum.
+      Excel la hide panna rows (17-21...) hide aagi irukkum; "Show them" click
+      panna theriyum.
+    "Value by value" = keezha sonna Excel -> Oracle table.
+    "As in Oracle" = Oracle la irundhu ippo padicha order sheet.
+
   "YOUR EXCEL -> ORACLE" TABLE (order page la, illa Saved screen la
   "Check against the Excel" button):
     Ovvoru value um: Excel cell (C2, E5...) - Excel la enna - Oracle la ippo enna.
@@ -804,9 +820,11 @@ DATABASE SCREEN - SAVE AANA ORDER AH CHECK PANNA (2026-10-19):
       Red = save aana apram Oracle la yaaro maathittaanga.
     - Filled in by POPPYS: Excel la illadhadhu (OC No, inniku date,
       company default).
-    - Not in Oracle yet: Season, line label, Fabric (rows 31-36), Trims
-      (rows 41-348)... POPPYS la irukku, Oracle la innum illa (Axpert la endha
-      column nu confirm aagala).
+    - Not in Oracle yet: Season, line label, BOM DATE, FAB IH DATE,
+      DESTINATION, Fabric (rows 31-36), Trims (rows 41-348)... POPPYS la
+      irukku, Oracle la innum illa (Axpert la endha column nu confirm aagala).
+      Excel header la "LABEL | value" maadhiri irukkura edhuvum (order field
+      illa na kooda) ippo indha list la varum, silent aa vidaadhu.
   Saved screen "Excel numbers not used" = Excel la trims calculation columns
   (15-L Prongs stud/socket, Sewing thread METER...). Order quantities illa.
 

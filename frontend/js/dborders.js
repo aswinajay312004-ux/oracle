@@ -5,7 +5,7 @@ import { api, id } from './api.js';
 import { sheetHtml, niceValue, openFullView, LABELS } from './ordersheet.js';
 import { showRecord } from './explorer.js';
 
-const view = { q: '', list: [], next: null, loaded: false, error: null, order: null, seq: 0 };   // seq: the newest read wins
+const view = { q: '', list: [], next: null, loaded: false, error: null, order: null, seq: 0, tab: 'excel', hidden: false };   // seq: the newest read wins
 const run = (message, fn) => state.busy ? fn().catch(e => notify(e.message, 'error')) : busy(message, fn);
 const when = v => v ? new Date(v).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
@@ -61,7 +61,7 @@ export async function openOrder(ordmasid) {
     try { order = await api(`/api/orders/${id(ordmasid)}`); }
     catch (e) { if (mine === view.seq) notify(`The order could not be read. ${e.message}`, 'error'); return; }
     if (mine !== view.seq) return;
-    view.order = order;
+    view.order = order; view.tab = order.saved?.grid ? 'excel' : 'oracle'; view.hidden = false;
     drawOrder();
     $('#view-explorer')?.scrollIntoView({ block: 'start' });
   });
@@ -124,6 +124,68 @@ function mapHtml(x) {
     </table></div></section>`;
 }
 
+// The Excel sheet as uploaded, cell by cell, each cell coloured by where its value is now (Oracle, kept in POPPYS, not used).
+const GRID_KEYS = [['oracle', 'Saved in Oracle'], ['diff', 'Different in Oracle now'], ['kept', 'Not in Oracle yet · kept in POPPYS'],
+  ['unused', 'Not used · calculation column'], ['none', 'Nothing to save · all 0 or a copy']];
+const colName = c => { let s = ''; while (c) { const r = (c - 1) % 26; s = String.fromCharCode(65 + r) + s; c = (c - 1 - r) / 26; } return s; };
+const cellRef = a => { const m = /^([A-Z]{1,3})(\d+)$/.exec(a); if (!m) return null; let c = 0; for (const ch of m[1]) c = c * 26 + ch.charCodeAt(0) - 64; return [Number(m[2]), c]; };
+const show = v => typeof v === 'number' ? fmt(v) : typeof v === 'string' && /^\d{4}-\d{2}-\d{2}(T00:00(:00)?)?$/.test(v) ? niceValue(v) : String(v ?? '');
+
+function gridHtml(g) {
+  const hidR = new Set(view.hidden ? [] : g.hidden_rows), hidC = new Set(view.hidden ? [] : g.hidden_cols);
+  const cells = new Map(g.cells.map(x => [`${x[0]},${x[1]}`, x]));
+  const used = new Set(g.cells.map(x => x[0]));
+  const cols = []; for (let c = 1; c <= g.cols; c++) if (!hidC.has(c)) cols.push(c);
+  const span = new Map(), covered = new Set(), keep = new Set();
+  for (const rng of g.merged) {
+    const [a, b] = String(rng).split(':').map(cellRef);
+    if (!a || !b || hidR.has(a[0]) || hidC.has(a[1])) continue;
+    let rs = 0, cs = 0;
+    for (let r = a[0]; r <= b[0]; r++) if (!hidR.has(r)) rs++;
+    for (let c = a[1]; c <= b[1]; c++) if (!hidC.has(c)) cs++;
+    if (rs * cs < 2) continue;
+    span.set(`${a[0]},${a[1]}`, [rs, cs]);
+    for (let r = a[0]; r <= b[0]; r++) keep.add(r);
+    for (let r = a[0]; r <= b[0]; r++) for (let c = a[1]; c <= b[1]; c++) if (r !== a[0] || c !== a[1]) covered.add(`${r},${c}`);
+  }
+  const count = Object.fromEntries(GRID_KEYS.map(([k]) => [k, 0])); g.cells.forEach(x => { if (x[3]) count[x[3]]++; });
+  const rows = []; let gap = null;
+  const flush = () => { if (gap) { rows.push(gap[1] - gap[0] >= 2 ? `<tr class="xg-gap"><th scope="row">${gap[0]}–${gap[1]}</th><td colspan="${cols.length}">empty rows</td></tr>` : ''); if (gap[1] - gap[0] < 2) for (let r = gap[0]; r <= gap[1]; r++) rows.push(row(r)); gap = null; } };
+  function row(r) {
+    return `<tr><th scope="row">${r}</th>${cols.map(c => {
+      const k = `${r},${c}`; if (covered.has(k)) return '';
+      const x = cells.get(k); const sp = span.get(k);
+      const attrs = sp ? `${sp[0] > 1 ? ` rowspan="${sp[0]}"` : ''}${sp[1] > 1 ? ` colspan="${sp[1]}"` : ''}` : '';
+      if (!x) return `<td${attrs}></td>`;
+      const v = show(x[2]); const where = `${colName(c)}${r}`;
+      return `<td${attrs} class="${x[3] ? `xg-${x[3]}` : ''}${typeof x[2] === 'number' ? ' num' : ''}" tabindex="0" data-xg="${esc(where)}" data-v="${esc(v)}" data-n="${esc(x[4] || '')}" title="${esc(`${where}: ${v}${x[4] ? ` — ${x[4]}` : ''}`)}">${esc(v)}</td>`;
+    }).join('')}</tr>`;
+  }
+  for (let r = 1; r <= g.rows; r++) {
+    if (hidR.has(r)) { flush(); continue; }
+    if (!used.has(r) && !keep.has(r)) { gap = gap ? [gap[0], r] : [r, r]; continue; }
+    flush(); rows.push(row(r));
+  }
+  flush();
+  const hiddenN = g.hidden_rows.length + g.hidden_cols.length;
+  return `<section class="card db-grid" aria-labelledby="db-grid-title">
+    <div class="card-head"><div><h2 id="db-grid-title">Your Excel, as uploaded · sheet “${esc(g.name)}”</h2>
+      <p class="muted small-text">The same rows and columns as your file. The colour of each cell says where that value is now. Click a cell to see it in words.</p></div></div>
+    <ul class="xg-legend">${GRID_KEYS.filter(([k]) => count[k] || k === 'oracle').map(([k, t]) => `<li><span class="xg-key xg-${k}" aria-hidden="true"></span>${esc(t)} <b>${fmt(count[k], 0)}</b></li>`).join('')}
+      <li><span class="xg-key" aria-hidden="true"></span>Headings, labels and totals</li></ul>
+    <p class="xg-info" id="xg-info" aria-live="polite">Click a cell to see where its value is.</p>
+    ${hiddenN ? `<p class="small-text muted">${view.hidden ? 'Showing' : 'Hidden in your Excel:'} ${g.hidden_rows.length ? `rows ${esc(g.hidden_rows.join(', '))}` : ''}${g.hidden_cols.length ? ` columns ${esc(g.hidden_cols.map(colName).join(', '))}` : ''} · <button class="link" data-dbx="hidden">${view.hidden ? 'Hide them again' : 'Show them'}</button></p>` : ''}
+    <div class="xg-wrap" tabindex="0" aria-label="Excel sheet ${esc(g.name)}"><table class="xg"><thead><tr><th></th>${cols.map(c => `<th scope="col">${colName(c)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>
+    ${g.truncated ? '<p class="small-text muted">Only the first 2,000 rows and 60 columns are shown. Open the Excel file for the rest.</p>' : ''}
+  </section>`;
+}
+
+function cellInfo(td) {
+  const n = td.dataset.n;
+  $('#xg-info').innerHTML = `<span class="db-cell">${esc(td.dataset.xg)}</span> <b>${esc(td.dataset.v)}</b> — ${n ? esc(n) : 'a heading, label or total in your Excel'}`;
+  $('#xg-info').className = `xg-info ${[...td.classList].find(c => c.startsWith('xg-')) || ''}`;
+}
+
 function badge(d) {
   if (!d.saved?.check) return '<span class="pill">Read from Oracle</span>';
   return d.saved.check.same ? '<span class="pill ok">✓ Same as the Excel</span>' : '<span class="pill err">⚠ Different from the Excel</span>';
@@ -137,13 +199,19 @@ function drawOrder() {
     <div class="db-order-bar"><button class="ghost small" data-dbx="back">← All orders</button><span class="spacer"></span>
       <button class="secondary small" data-dbx="full">Full screen · Print</button><button class="ghost small" data-dbx="tech" title="The Oracle tables, columns and record IDs behind this order">Oracle tables &amp; IDs</button></div>
     ${checkHtml(d)}
-    ${mapHtml(d.saved?.excel)}
-    <div class="card db-sheet">${sheetHtml(sheet, { badge: badge(d) })}<p class="muted small-text db-read">Read from Oracle ${esc(when(d.read_at))}</p></div>
+    ${d.saved?.excel ? `<div class="subnav db-tabs" role="tablist" aria-label="How to show this order">${[
+      ...(d.saved.grid ? [['excel', 'As in your Excel']] : []), ['values', 'Value by value'], ['oracle', 'As in Oracle']].map(([k, t]) =>
+      `<button role="tab" aria-selected="${view.tab === k}" class="${view.tab === k ? 'active' : ''}" data-tab="${k}">${t}</button>`).join('')}</div>` : ''}
+    ${view.tab === 'excel' && d.saved?.grid ? gridHtml(d.saved.grid) : view.tab === 'values' && d.saved?.excel ? mapHtml(d.saved.excel)
+      : `<div class="card db-sheet">${sheetHtml(sheet, { badge: badge(d) })}<p class="muted small-text db-read">Read from Oracle ${esc(when(d.read_at))}</p></div>`}
   </div>`;
+  box.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { view.tab = b.dataset.tab; drawOrder(); box.querySelector(`[data-tab="${view.tab}"]`)?.focus(); }));
+  box.querySelectorAll('td[data-xg]').forEach(td => { td.addEventListener('click', () => cellInfo(td)); td.addEventListener('focus', () => cellInfo(td)); });
   box.querySelectorAll('[data-dbx]').forEach(b => b.addEventListener('click', () => ({
     back: () => { view.order = null; drawList(); },
     full: () => openFullView([sheet], { title: `Order ${d.sheet.order_ref || ''}`.trim(), readAt: d.read_at, badge: badge(d) }),
     tech: () => showRecord('ORDMAS', d.sheet.ordmasid),
+    hidden: () => { view.hidden = !view.hidden; drawOrder(); box.querySelector('[data-dbx="hidden"]')?.focus(); },
   })[b.dataset.dbx]()));
-  box.querySelector('[data-dbx="back"]').focus();
+  if (!box.contains(document.activeElement)) box.querySelector('[data-dbx="back"]').focus();
 }

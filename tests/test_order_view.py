@@ -1,7 +1,8 @@
 """Database screen, Orders: orders in Oracle by business name, and a saved order compared value by value with the Excel
 file it came from (backend/erp/order_view.py)."""
 import secrets
-from test_acceptance import world, real, approved_zen_order, zen_kids_po, SECOND_ZEN, SECOND_PIECES, REAL  # noqa: F401  (fixtures)
+from test_acceptance import world, real, approved_zen_order, zen_kids_po, SECOND_ZEN, SECOND_PIECES, REAL, upload, edit, preview, accept  # noqa: F401  (fixtures)
+from fixtures import merch_bom
 
 
 def test_order_list_is_newest_first_by_business_name_and_marks_poppys_orders(world):  # noqa: F811
@@ -47,6 +48,31 @@ def test_saved_order_is_compared_with_the_excel_value_by_value(world):  # noqa: 
     [diff] = d['saved']['check']['cells']['different']
     assert diff['excel'] == size[1] and diff['oracle'] == size[1] + 7
     assert any(l.get('excel') for l in d['sheet']['lines'])
+    marks = [x[3] for x in d['saved']['grid']['cells']]                  # the Excel view marks that one cell red
+    assert marks.count('diff') == 1 and marks.count('oracle') > 10
+
+
+def test_the_excel_sheet_is_shown_as_uploaded_with_each_cell_marked_where_it_is_now(world):  # noqa: F811
+    c = world
+    d = upload(c, merch_bom(), 'bom.xlsx')
+    o = d['orders'][0]
+    assert [(x['label'], x['cell'], x['value']) for x in o['other_fields']] == [
+        ('BOM DATE', 'E2', '2026-09-01'), ('FAB IH DATE', 'E4', '2026-11-01'), ('DESTINATION', 'E6', 'SEA')]   # never silently dropped
+    p = preview(c, edit(c, d, order_ref='TEST/OV/3', order_date='2026-10-10', qty_unit='PCS', pieces_per_unit=1))
+    assert {'BOM DATE', 'FAB IH DATE', 'DESTINATION'} <= {x['label'] for x in p['plan']['not_saved']}   # listed before approving
+    r = accept(c, p)
+    assert r.status_code == 200, r.text
+    ordmasid = r.json()['orders'][0]['ordmasid']
+    saved = c.get(f'/api/orders/{ordmasid}').json()['saved']
+    g = saved['grid']
+    assert g['name'] == 'D99001' and g['rows'] >= 24 and not g['truncated']
+    cells = {f'{chr(64 + col)}{row}': (value, status, note) for row, col, value, status, note in g['cells']}
+    assert cells['C2'][:2] == ('TESTBUYER', 'oracle') and 'in Oracle: TESTBUYER' in cells['C2'][2]
+    assert cells['B2'][1] == '' and cells['E6'][:2] == ('SEA', 'kept')       # a label; a value Oracle has no field for
+    assert cells['C3'][1] == 'kept'                                         # season
+    assert cells['E12'][:2] == (10, 'oracle') and cells['H13'][:2] == (20, 'oracle')
+    assert {cells[a][1] for a in ('E16', 'F16', 'E20', 'F21')} == {'none'}  # sample block all 0, summary block a copy
+    assert {'BOM DATE', 'FAB IH DATE', 'DESTINATION'} <= {r['label'] for r in saved['excel']['kept']}
 
 
 def test_an_order_entered_outside_poppys_opens_without_a_comparison(world):  # noqa: F811
