@@ -16,7 +16,7 @@ no external fonts or scripts.
 | Saved | Hero with the OC No; **Order in Oracle** — header and colour × size table from the fresh read-back (`readback.order_sheets`), "Verified in Oracle" badge; **View the order in Oracle** opens it full screen with Print; not-saved table; flowchart, IDs and Database link under **Technical details** | Implemented, browser-tested |
 | Saved orders | Receipts from Oracle with Verified / with exceptions / not verified / differences; **View order** | Implemented |
 | Ask AI | Catalog answers from the data dictionary; "Not sure I understood — did you mean …?" instead of a low-confidence number; checks strip; chart + table | Implemented, browser-tested (earlier sessions) |
-| Database | Business-named tables, paging, linked records, relationship graph | Implemented |
+| Database | Opens on **Orders**: Oracle's orders newest first by business name (OC No, date, buyer, style, description, PO, pieces, saved by POPPYS or Axpert), one search box (OC No, PO, buyer/style/description name); an order opens as the order sheet read from Oracle now and, for an order POPPYS saved, a check against the Excel file (order details, pieces, colours, every colour × size quantity; differing values red with the Excel value under them; what is kept only in POPPYS on one grey line; the original file). **All tables** keeps the table explorer (business-named tables, paging, linked records, relationship graph); "Oracle tables & IDs" on an order opens its record there | Implemented, browser-tested (1440 px, 390 px) |
 | Setup | Write mapping, data dictionary, order fields, layout templates, users (password dialog, confirmed role changes), audit, settings, answer accuracy | Implemented |
 
 ### Copy rules (2026-10-19)

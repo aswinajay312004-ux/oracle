@@ -66,7 +66,8 @@ Left side menu la 6 screens:
   New order      Excel upload -> Review -> Check & approve -> Saved.
   Saved orders   Oracle ku save aana ellaa orders um, proof flowchart oda.
   Ask AI         Database pathi kelvi kekkalaam.
-  Database       Oracle tables, records, linked records paakalaam.
+  Database       Oracle la save aana orders, order order aa check pannalaam
+                 (Excel kooda compare). "All tables" = technical view.
   Setup          Mapping, data dictionary, order fields, templates, accuracy
                  check, users, audit history, settings.
 
@@ -570,7 +571,8 @@ APPROVER:
   1. Overview -> work queue -> file open.
   2. "Open the approval view": flowchart, rows, warnings ellam padinga.
   3. Sari na "Accept and save to Oracle".
-  4. Saved screen la green ticks paarunga. Venumna "Open in Database".
+  4. Saved screen la green ticks paarunga. Venumna Database -> Orders la
+     andha OC No click panni Excel kooda compare paarunga.
 
 ADMIN:
   - Pudhu staff ku accounts (Users & roles).
@@ -581,7 +583,8 @@ ADMIN:
 
 MANAGER / VIEWER:
   - Ask AI la kelvi: buyer wise, month wise, size wise quantities.
-  - Database la orders paakalaam.
+  - Database -> Orders la OC No / buyer / style / PO search panni order
+    paakalaam.
 
 
 --------------------------------------------------------------------------------
@@ -773,6 +776,24 @@ UNGA LAPTOP LA PANNANUM (order la):
   .\.venv\Scripts\python.exe scripts\axpert_gap_report.py
           -> data\axpert_gap_report.md anuppunga (counts mattum, data illa)
   Axpert screen la andha POPPYS order ah open panni enna missing nu sollunga.
+
+DATABASE SCREEN - SAVE AANA ORDER AH CHECK PANNA (2026-10-19):
+  Database -> "Orders" (default). Oracle la irukkura orders, pudhusu mela:
+  OC No, Date, Buyer, Style, Description, PO, Pieces, "Saved by"
+  (POPPYS = indha computer la Excel la irundhu save aanadhu, Axpert = vera).
+  Search box la OC No (1321 mattum kooda podhum), buyer, style, PO podalaam.
+  Order ah click panna:
+    - Mela green box "Same as the Excel file" (illa na red, "2 differences"):
+        Order details 12 of 12 same, Pieces Excel 2,520 - Oracle 2,520,
+        Colours 3 - 3, Colour x size quantities 30 of 30 same.
+        Fabric / trims maadhiri Oracle la save aagaadhadhu grey line la.
+        "Open the Excel file" = upload panna file appadiye.
+    - Keezha order: buyer, style, PO, dates... business per la (ID illa),
+      colour x size table total oda. Excel la irundhu vera maadhiri irundhaa
+      andha box / cell red aa, keezha "Excel 175" nu kaattum.
+    - "Full screen - Print", "Oracle tables & IDs" (technical aalukku:
+      ORDMAS / ORDSTYLE / ORDSIZE rows, record IDs).
+  "All tables" tab = munnadi irundha table explorer (ella tables um).
 
 INNUM BAAKI (detail: docs\engineering\KNOWN_LIMITATIONS.md):
   - Axpert compatibility verify (mela sonna gap report + screen check).

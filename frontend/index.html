@@ -132,11 +132,17 @@
 
         <!-- DATABASE EXPLORER -->
         <section id="view-explorer" class="view" hidden>
-          <div class="page-head"><div><span class="eyebrow" id="explorer-eyebrow">Read-only</span><h1>Database</h1><p class="lead">Browse Oracle data by business name and follow linked records.</p></div>
-            <form id="order-lookup" class="row"><input id="order-id" maxlength="100" placeholder="Find an order: reference or record ID" style="width:300px" aria-label="Find an order"><button class="secondary">Find</button></form></div>
-          <div class="explorer">
-            <aside class="card table-list"><div class="search"><input id="table-filter" placeholder="Search tables (e.g. buyer, size, ORDSIZE)" aria-label="Search tables"></div><div class="items" id="tables"></div></aside>
-            <section class="card" id="table-view"><p class="empty">Choose a table on the left.</p></section>
+          <div class="page-head"><div><span class="eyebrow" id="explorer-eyebrow">Read-only</span><h1>Database</h1><p class="lead">Check what is saved in Oracle, order by order.</p></div></div>
+          <nav class="subnav" aria-label="Database views" role="tablist">
+            <button class="active" data-dbview="orders" role="tab" aria-selected="true">Orders</button>
+            <button data-dbview="tables" role="tab" aria-selected="false" title="Every Oracle table, column and record ID">All tables</button>
+          </nav>
+          <div id="db-orders"></div>
+          <div id="db-tables" hidden>
+            <div class="explorer">
+              <aside class="card table-list"><div class="search"><input id="table-filter" placeholder="Search tables (e.g. buyer, size, ORDSIZE)" aria-label="Search tables"></div><div class="items" id="tables"></div></aside>
+              <section class="card" id="table-view"><p class="empty">Choose a table on the left.</p></section>
+            </div>
           </div>
         </section>
 

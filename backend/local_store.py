@@ -337,6 +337,20 @@ def summaries():
                 for r in c.execute('SELECT payload FROM drafts ORDER BY rowid DESC LIMIT 100') for d in [json.loads(r[0])]]
 
 
+def saved_orders():
+    """{Oracle order record ID: the POPPYS save it came from} for every order this installation saved."""
+    out = {}
+    with db() as c:
+        for job, filename, orders, at, approver in c.execute(
+                "SELECT json_extract(payload,'$.id'), json_extract(payload,'$.filename'), json_extract(payload,'$.result.orders'), "
+                "json_extract(payload,'$.result.committed_at'), json_extract(payload,'$.result.approver') "
+                "FROM drafts WHERE json_extract(payload,'$.result') IS NOT NULL"):
+            for o in json.loads(orders or '[]'):
+                if o.get('ordmasid') is not None:
+                    out[o['ordmasid']] = dict(job_id=job, filename=filename, saved_at=at, saved_by=approver, order_ref=o.get('order_ref'))
+    return out
+
+
 def _merge_rows(old_rows, incoming, fields, child=None):
     """Keep server-owned provenance for known rows; accept only whitelisted business fields."""
     by_id = {r['id']: r for r in old_rows if 'id' in r}; out = []

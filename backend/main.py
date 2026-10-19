@@ -21,7 +21,7 @@ from . import auth, coverage, evidence, logs, local_store as store, oracle_store
 from .config import COMPANY, DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
-from .erp import planner, order_numbers
+from .erp import planner, order_numbers, order_view
 from . import insight_api as insight
 from .insight import benchmark, engine, understand
 from .insight.query import Dialect, QueryError, compile_intent
@@ -1949,6 +1949,118 @@ def explorer_related(table: str, pk: int, user=Depends(authenticated)):
         decoded = _decode(kb, execute, dialect, t['name'], [record])
     return dict(table=t['name'], business=t['business'], key=t['key'], label=t.get('label'), display=t['display'],
                 columns=_columns(t), record=record, related=out, decoded=decoded)
+
+
+# --- orders in Oracle, as people check them (Database screen) -----------------------------------------
+ORDER_PAGE = 30
+
+
+def _order_reader(kb, execute, dialect):
+    """Read-only queries for backend/erp/order_view: tables and columns come from the write mapping and are only used
+    when the catalog has them on this database."""
+    def present(table):
+        return set(((kb.table(table) or {}).get('columns') or {}))
+
+    def fetch(table, cols, where, value, limit):
+        return _rows(execute, dialect.limit(f'SELECT {", ".join(cols)} FROM {dialect.table(table)} WHERE {where} = :v', limit), {'v': value}, cols, limit)
+
+    def names(table, key, label, ids):
+        out = {}
+        if not kb.table(table):
+            return out
+        for start in range(0, len(ids), 500):
+            binds = {f'i{n}': v for n, v in enumerate(ids[start:start + 500])}
+            for k, v in execute(f'SELECT {key}, {label} FROM {dialect.table(table)} WHERE {key} IN ({",".join(":" + b for b in binds)})', binds, 500):
+                out[engine.cell(k)] = v
+        return out
+    return present, fetch, names
+
+
+def _order_table(kb, mapping):
+    head = order_view.tables(mapping)[0]
+    meta = _oracle_tables(kb).get(head) if head else None
+    if not meta:
+        raise HTTPException(404, 'The order table is not available on this database.')
+    return head, meta
+
+
+@app.get('/api/orders')
+def orders_in_oracle(q: str | None = Query(default=None, max_length=60), after: int | None = None, user=Depends(authenticated)):
+    """Newest orders first, by business name (buyer, style and description decoded). q looks inside the OC No and the PO
+    number, and finds orders of a buyer, style or description by its name. Orders POPPYS saved say from which file."""
+    m = oracle.current_mapping(); kb = knowledge_base()
+    head, meta = _order_table(kb, m)
+    key = m['tables'][head]['key']
+    cols = order_view.list_columns(m, set(meta['columns']))
+    names = list(dict.fromkeys([key, *cols.values()]))
+    where, binds = [], {}
+    with query_sources() as sources:
+        execute, dialect = _db(sources)
+        present, _, master_names = _order_reader(kb, execute, dialect)
+        text = (q or '').strip().upper()
+        if text:
+            binds['q'] = '%' + re.sub(r'([\\%_])', r'\\\1', text) + '%'
+            like = "LIKE :q ESCAPE '\\'"
+            conds = [f'{dialect.text(cols[k])} {like}' for k in ('order_ref', 'po') if k in cols]
+            masters = order_view.master_of(m, head)
+            for k in ('buyer', 'style', 'description'):
+                c = cols.get(k)
+                if c in masters and masters[c][1] in present(masters[c][0]) and masters[c][2] in present(masters[c][0]):
+                    mt, mk, ml = masters[c]
+                    conds.append(f'{c} IN (SELECT {mk} FROM {dialect.table(mt)} WHERE {dialect.text(ml)} {like})')
+            where.append('(' + ' OR '.join(conds or ['1 = 0']) + ')')
+        if after is not None:
+            where.append(f'{key} < :after'); binds['after'] = after
+        sql = dialect.limit(f'SELECT {", ".join(names)} FROM {dialect.table(head)}' + (' WHERE ' + ' AND '.join(where) if where else '')
+                            + f' ORDER BY {key} DESC', ORDER_PAGE)
+        run = execute.limited(8000) if hasattr(execute, 'limited') else execute
+        try:
+            rows = _rows(run, sql, binds, names, ORDER_PAGE)
+        except QueryError:
+            raise HTTPException(409, 'The search took too long on this database. Type the whole OC No (for example PK/26-27/S/1321).')
+        labels = order_view.decode(m, {head: rows}, master_names)[head]
+    saved = store.saved_orders()
+    shown = lambda r, k: labels.get(cols[k], {}).get(r.get(cols[k]), r.get(cols[k])) if k in cols else None
+    items = [dict(id=r[key], **{k: shown(r, k) for k in order_view.LIST_FIELDS},
+                  poppys={k: v for k, v in saved[r[key]].items() if k in ('job_id', 'filename', 'saved_at')} if r[key] in saved else None)
+             for r in rows]
+    return dict(orders=items, next_after=rows[-1][key] if len(rows) == ORDER_PAGE else None)
+
+
+@app.get('/api/orders/{ordmasid}')
+def order_in_oracle(ordmasid: int, user=Depends(authenticated)):
+    """One order as Oracle has it now (header by business name, colour × size table). For an order POPPYS saved, every
+    value is also compared with what the Excel file gave (the save receipt kept with the import)."""
+    m = oracle.current_mapping(); kb = knowledge_base()
+    head, _ = _order_table(kb, m)
+    _, line, size = order_view.tables(m)
+    saved = store.saved_orders().get(ordmasid)
+    receipt = None
+    if saved:
+        try:
+            receipt = store.get(saved['job_id']).get('result')
+        except KeyError:
+            receipt = None
+    excel = order_view.receipt_rows(m, receipt, ordmasid) if receipt else ([], [], [])
+    with query_sources() as sources:
+        execute, dialect = _db(sources)
+        present, fetch, names = _order_reader(kb, execute, dialect)
+        h, lines, sizes = order_view.read(m, present, fetch, ordmasid)
+        if h is None:
+            raise HTTPException(404, 'This order is not in Oracle.')
+        rows = {head: [h, *excel[0]], **({line: lines + excel[1]} if line else {}), **({size: sizes + excel[2]} if size else {})}
+        labels = order_view.decode(m, rows, names)
+    sheet = readback.order_sheets(order_view.nodes(m, [h], lines, sizes, labels), m)[0]
+    sheet['verified'] = None
+    out = dict(sheet=sheet, read_at=datetime.now().astimezone().isoformat(timespec='seconds'), saved=None)
+    if saved:
+        out['saved'] = dict({k: saved[k] for k in ('job_id', 'filename', 'saved_at', 'saved_by')},
+                            not_saved=[x['label'] for x in (receipt or {}).get('not_saved') or []], check=None)
+        if excel[0]:
+            [from_excel] = readback.order_sheets(order_view.nodes(m, *excel, labels), m)
+            out['saved']['check'] = order_view.compare(sheet, from_excel)
+            sheet['verified'] = out['saved']['check']['same']
+    return out
 
 
 # --- assistant --------------------------------------------------------------------------

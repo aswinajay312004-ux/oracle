@@ -1,10 +1,13 @@
-// Read-only GARMENT_DEMO explorer: business names, records with decoded master labels, linked records
-// (parents and children through the relationship map), and an expandable relationship diagram.
+// Read-only GARMENT_DEMO explorer. The Database screen opens on Orders (dborders.js: each order as people check it);
+// "All tables" is this table explorer: business names, records with decoded master labels, linked records (parents
+// and children through the relationship map), and an expandable relationship diagram.
 import { $, $$, esc, show, fmt, plural, busy, drawer, closeDrawer, notify, formView, state } from './util.js';
 import { api, id } from './api.js';
 import { renderGraph } from './graph.js';
+import { loadOrders, findOrder } from './dborders.js';
 
-let tables = []; let tablesReady = null; let current = null; let tab = 'records'; let finding = false;
+let tables = []; let tablesReady = null; let current = null; let tab = 'records';
+let mode = 'orders';   // 'orders' | 'tables'
 let trail = [];   // records opened one inside another in the drawer, for the Back button
 const lastPage = new Map();   // table -> its last page that loaded, so a failed read can still draw the filter bar
 const view = { showSys: false, showEmpty: false };   // grid toggles, kept while the app is open
@@ -24,14 +27,34 @@ function fetchTables(force = false) {
   return tablesReady;
 }
 
+function setMode(next) {
+  mode = next;
+  $$('[data-dbview]').forEach(b => { b.classList.toggle('active', b.dataset.dbview === mode); b.setAttribute('aria-selected', String(b.dataset.dbview === mode)); });
+  $('#db-orders').hidden = mode !== 'orders'; $('#db-tables').hidden = mode !== 'tables';
+}
+
 export async function loadExplorer(force = false) {
+  setMode(mode);
+  return mode === 'orders' ? loadOrders(force) : loadTables(force);
+}
+
+// "Oracle tables & IDs" of an order on the Orders view: the record with its linked rows, in All tables.
+export async function showRecord(table, pk) {
+  setMode('tables');
+  try { await fetchTables(); drawTables(); } catch (e) { return notify(e.message, 'error'); }
+  const key = tables.find(t => t.table === table)?.key;
+  if (key) await openTable(table, { column: key, value: String(pk), exact: true });
+  return openRecord(table, pk);
+}
+
+async function loadTables(force = false) {
   if (tables.length && !force) { drawTables(); if (current) return load(); return; }
   const ok = await run('Reading the table list from Oracle…', async () => {
     try { await fetchTables(force); }
     catch (e) { $('#tables').innerHTML = `<p class="empty">${esc(e.message)}</p>`; $('#table-view').innerHTML = '<p class="empty">Connect Oracle to browse tables.</p>'; return false; }
     drawTables(); return true;
   });
-  if (ok && !current && !finding && tables.some(t => t.table === 'ORDMAS')) await openTable('ORDMAS');
+  if (ok && !current && tables.some(t => t.table === 'ORDMAS')) await openTable('ORDMAS');
 }
 
 function drawTables() {
@@ -307,49 +330,14 @@ function bindRecord(body, rel) {
   });
 }
 
-// "Find an order": an exact order reference or record ID opens that order straight away; anything else
-// lists the orders whose reference contains it.
-// Every outcome is one message: a failed lookup a single toast, no match or a failed partial search the
-// grid's own empty state (never the previous search's rows under the new text).
-const ORDER_REF_MAX = 100;   // the server's limit for a filter value; #order-id has the same maxlength
+// "Open in Database" on the Saved screen: that order on the Orders view.
 export async function exploreOrder(ref) {
-  ref = String(ref ?? '').trim(); if (!ref) return;
-  if (ref.length > ORDER_REF_MAX) return notify(`That is too long for an order reference (at most ${ORDER_REF_MAX} characters). Check what was pasted into Find an order.`, 'warning');
-  finding = true;
-  try {
-    await fetchTables();
-    const meta = tables.find(t => t.table === 'ORDMAS');
-    if (!meta) return notify('The order table (ORDMAS) is not available on this database.', 'warning');
-    const key = meta.key || 'ORDMASID', label = meta.label || 'DOCID';
-    const exact = column => api(`/api/explorer/tables/ORDMAS?${new URLSearchParams({ column, value: ref, exact: 'true', limit: 2 })}`);
-    let page = null, failed = null;
-    await run('Finding the order…', async () => {
-      try {
-        if (/^\d+$/.test(ref)) { const p = await exact(key); if (p.rows.length) page = p; }   // a record ID
-        if (!page) { const p = await exact(label); if (p.rows.length) page = p; }            // the order reference, any case
-      } catch (e) { failed = e; }
-    });
-    if (failed) return notify(`The order could not be looked up. ${failed.message}`, 'error');
-    if (page?.rows.length === 1) {
-      const row = page.rows[0];
-      await openTable('ORDMAS', blank(row[label]) ? { column: key, value: String(row[key]), exact: true } : { column: label, value: String(row[label]), exact: true });
-      return openRecord('ORDMAS', row[key], { row, data: page });
-    }
-    if (page) return openTable('ORDMAS', { column: label, value: ref, exact: true });   // the same reference on several orders
-    // no whole match: list the orders whose reference contains it. Find already tried the exact lookup, so a
-    // partial search that runs out of time on a very large table must not advise "is exactly" again.
-    const big = meta.approx || (meta.rows || 0) > 1e6;
-    await openTable('ORDMAS', { column: label, value: ref,
-      empty: `No order reference is or contains “${ref}”. Check it, or search for a part of it such as 9001.`,
-      explain: e => e.status !== 409 ? null : big
-        ? `No order has the reference “${ref}”. Looking for it inside every order reference took too long on this very large table, so type the whole reference (for example PK/26-27/S/9001) or the order’s record ID.`
-        : `No order has the reference “${ref}”, and the search for references containing it did not finish. ${e.message}` });
-  } catch (e) { notify(e.message, 'error'); }
-  finally { finding = false; }
+  setMode('orders');
+  return findOrder(ref);
 }
 
 export function bindExplorer() {
   $('#table-filter').addEventListener('input', drawTables);
   $('#tables').addEventListener('click', e => { const b = e.target.closest('[data-table]'); if (b) openTable(b.dataset.table); });
-  $('#order-lookup').addEventListener('submit', e => { e.preventDefault(); exploreOrder($('#order-id').value); });
+  $$('[data-dbview]').forEach(b => b.addEventListener('click', () => { setMode(b.dataset.dbview); loadExplorer(); }));
 }

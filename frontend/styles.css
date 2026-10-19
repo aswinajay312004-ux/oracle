@@ -859,7 +859,7 @@ details.banner.coverage ul { margin: 8px 0 4px 30px; padding: 0; }
 .os-table table { min-width: 100%; }
 .os-table th, .os-table td { padding: 9px 12px; font-size: 14px; }
 .os-table thead th { background: var(--brand-soft); color: var(--brand-ink); }
-.os-table tbody th { text-align: left; font-weight: 650; background: #fff; }
+.os-table tbody th { text-align: left; font-weight: 650; background: #fff; white-space: normal; min-width: 140px; max-width: 240px; }
 .os-table tfoot th, .os-table tfoot td { background: var(--line-2); font-weight: 700; border-top: 2px solid var(--line); }
 .tech-details { margin-top: 14px; padding: 0; }
 .tech-details > summary { cursor: pointer; padding: 14px 18px; font-weight: 650; color: var(--ink-2); }
@@ -973,3 +973,40 @@ body.popup-open { overflow: hidden; }
 .pv-simple { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .pv-simple li { display: flex; gap: 10px; align-items: baseline; font-size: 14px; }
 .pv-ic { flex: none; width: 20px; text-align: center; font-weight: 700; color: var(--brand-2); }
+
+/* Database screen, Orders: the list, the Excel ↔ Oracle check and the order sheet (dborders.js) */
+#db-orders { display: grid; gap: 14px; }
+.db-search { display: flex; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.db-search input { flex: 1 1 260px; min-width: 0; font-size: 15px; }
+.db-table th, .db-table td { padding: 11px 14px; font-size: 14px; vertical-align: middle; }
+.db-table tbody th { text-align: left; font-weight: 650; }
+.db-table tbody tr.clickable { cursor: pointer; }
+.db-table tbody tr.clickable:hover { background: var(--brand-soft); }
+.db-table .link { font-weight: 700; font-size: 14px; }
+.db-order { display: grid; gap: 14px; }
+.db-order-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.db-check { padding: 16px 18px; display: grid; gap: 12px; }
+.db-check p { margin: 0; }
+.db-check.ok { border-color: #b7e4c7; background: linear-gradient(var(--ok-soft), #fff 70%); }
+.db-check.bad { border-color: var(--err-line); background: linear-gradient(var(--err-soft), #fff 70%); }
+.db-check-head { display: flex; gap: 12px; align-items: flex-start; }
+.db-check-head h2 { margin: 0; font-size: 18px; }
+.db-check-head .db-ic { width: 30px; height: 30px; font-size: 16px; }
+.db-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.db-checks li { display: flex; gap: 9px; align-items: center; font-size: 14px; }
+.db-ic { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; background: var(--line-2); color: var(--muted); }
+.db-ic.ok { background: var(--ok); color: #fff; }
+.db-ic.bad { background: var(--err); color: #fff; }
+.db-diffs { min-width: 100%; }
+.db-diffs th, .db-diffs td { padding: 8px 12px; font-size: 13.5px; text-align: left; }
+.db-sheet { padding: 18px; }
+.db-read { margin: 10px 0 0; }
+.os-diff { background: var(--err-soft); }
+.os-details > div.os-diff dd { color: var(--err); }
+.os-diff small, .os-extra small { display: block; font-size: 11px; font-weight: 600; color: var(--err); }
+.os-table td.os-diff b { color: var(--err); }
+.os-extra th, .os-extra td { background: var(--err-soft); }
+@media (max-width: 760px) {
+  .db-table .opt { display: none; }
+  .db-table th, .db-table td { padding: 10px; }
+}
