@@ -1059,3 +1059,17 @@ body.popup-open { overflow: hidden; }
 .xg-key.xg-oracle { border-color: #b7e4c7; } .xg-key.xg-diff { border-color: var(--err-line); } .xg-key.xg-kept { border-color: var(--warn-line); }
 @media (max-width: 600px) { .xg-wrap { max-height: 60vh; } .xg th, .xg td { max-width: 160px; } }
 .xg-key.xg-oracle { background: #c9ecd5; } .xg-key.xg-diff { background: #f8c9c9; } .xg-key.xg-kept { background: #fde3b0; }
+
+/* Database → order → "Check in SQL Developer" */
+.db-sql .card-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.db-sql-steps { margin: 4px 0 14px; padding-left: 20px; font-size: 13.5px; color: var(--ink-2); display: grid; gap: 4px; }
+.db-sql-steps kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--card); }
+.db-sql-q { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+.db-sql-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 12px; background: var(--line-2); font-size: 13.5px; }
+.db-sql-head .ghost { margin-left: auto; }
+.db-sql-q pre { margin: 0; padding: 10px 12px; font-family: var(--mono); font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre; background: var(--card); max-width: 100%; }
+.db-sql > :not(.card-head), .db-grid > :not(.card-head) { margin-left: 18px; margin-right: 18px; }
+.db-sql > :first-child + *, .db-grid > .card-head + * { margin-top: 12px; }
+.db-sql > :last-child, .db-grid > :last-child { margin-bottom: 16px; }
+@media (max-width: 600px) { .db-sql > :not(.card-head), .db-grid > :not(.card-head) { margin-left: 12px; margin-right: 12px; } }
+.db-sql-head .pill { white-space: normal; text-align: left; }

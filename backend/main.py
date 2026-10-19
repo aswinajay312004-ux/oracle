@@ -2060,9 +2060,11 @@ def order_in_oracle(ordmasid: int, user=Depends(authenticated)):
             raise HTTPException(404, 'This order is not in Oracle.')
         rows = {head: [h, *excel[0]], **({line: lines + excel[1]} if line else {}), **({size: sizes + excel[2]} if size else {})}
         labels = order_view.decode(m, rows, names)
+        qualified = dialect.table
     sheet = readback.order_sheets(order_view.nodes(m, [h], lines, sizes, labels), m)[0]
     sheet['verified'] = None
-    out = dict(sheet=sheet, read_at=datetime.now().astimezone().isoformat(timespec='seconds'), saved=None)
+    out = dict(sheet=sheet, read_at=datetime.now().astimezone().isoformat(timespec='seconds'), saved=None,
+               sql=order_view.proof_sql(m, present, ordmasid, sheet, qualified))
     if saved:
         out['saved'] = dict({k: saved[k] for k in ('job_id', 'filename', 'saved_at', 'saved_by')},
                             not_saved=[x['label'] for x in (receipt or {}).get('not_saved') or []], check=None)

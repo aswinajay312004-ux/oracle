@@ -335,3 +335,62 @@ def excel_grid(order, sheet, xmap, check, coverage, oracle_sheet):
                 merged=list(sheet.get('merged') or []), hidden_rows=hidden_rows, hidden_cols=hidden_cols,
                 truncated=(sheet.get('rows') or 0) > MAX_GRID_ROWS or (sheet.get('cols') or 0) > MAX_GRID_COLS,
                 cells=[[c['row'], c['col'], c.get('value'), *marks.get(c['cell'], ('', ''))] for c in cells])
+
+
+def proof_sql(mapping, present, ordmasid, sheet, name=lambda t: t):
+    """Read-only SELECTs a person can paste into SQL Developer (connected as the order schema) to see this order straight
+    from Oracle, with the master IDs decoded to names, and what each should show (from the order read now):
+    [{title, sql, expect}]. Only mapped columns this database has are used; ``name`` qualifies a table with its schema."""
+    head, line, size = tables(mapping)
+    spec = mapping['tables']; n = int(ordmasid)
+
+    def select(table, alias):
+        cols = [c for c in spec[table]['columns'] if c in present(table)]
+        masters = {c: m for c, m in master_of(mapping, table).items() if c in cols and present(m[0])}
+        out = [f'{alias}.{c}' + (f', m_{c.lower()}.{masters[c][2]} AS {c[:25]}_NAME' if c in masters else '') for c in cols]
+        joins = [f'LEFT JOIN {name(mt)} m_{c.lower()} ON m_{c.lower()}.{key} = {alias}.{c}' for c, (mt, key, _) in masters.items()]
+        return out, joins
+
+    def where(table, alias):
+        c = spec[table]['key'] if table == head else column(mapping, table, parent=head)
+        return f'WHERE {alias}.{c} = {n}'
+
+    out = []
+    cols, joins = select(head, 'o')
+    out.append(dict(title='1. The order (header)', expect='1 row',
+                    sql='\n'.join([f'SELECT {", ".join(cols)}', f'FROM {name(head)} o', *joins, where(head, 'o') + ';'])))
+    row = lambda t: next((c for c, x in spec[t]['columns'].items() if x.get('field') == 'calc.row' and c in present(t)), None)
+    if line and column(mapping, line, parent=head):
+        cols, joins = select(line, 'l')
+        out.append(dict(title='2. Colour lines', expect=f'{len(sheet.get("lines") or [])} rows',
+                        sql='\n'.join([f'SELECT {", ".join(cols)}', f'FROM {name(line)} l', *joins, where(line, 'l'),
+                                       *([f'ORDER BY l.{row(line)}'] if row(line) else [])]) + ';'))
+    link = next((x['on'] for x in mapping.get('links') or [] if x.get('from') == line and x.get('to') == size and '=' in x['on']), None)
+    if size and link and column(mapping, size, parent=head):
+        lc, sc = (x.strip() for x in link.split('=', 1))
+        colour = column(mapping, line, field='line.color'); sname = column(mapping, size, field='size.size')
+        qty = column(mapping, size, field='calc.pieces'); srow = row(size) or spec[size]['key']
+        ms, ml = master_of(mapping, size).get(sname), master_of(mapping, line).get(colour)
+        if colour and sname and qty and lc in present(line) and sc in present(size):
+            cname = f'c.{ml[2]}' if ml else f'l.{colour}'; zname = f'z.{ms[2]}' if ms else f's.{sname}'
+            pieces = sheet.get('total') or 0
+            out.append(dict(title='3. Colour × size, one row per colour (like the Excel)',
+                            expect=f'{len(sheet.get("lines") or [])} rows · {pieces:,} pieces in all',
+                            sql='\n'.join([
+                                f"SELECT {cname} AS COLOUR,",
+                                f"       LISTAGG({zname} || ' = ' || s.{qty}, '  |  ') WITHIN GROUP (ORDER BY s.{srow}) AS SIZE_QUANTITIES,",
+                                f'       SUM(s.{qty}) AS PIECES',
+                                f'FROM {name(size)} s',
+                                f'JOIN {name(line)} l ON l.{column(mapping, line, parent=head)} = s.{column(mapping, size, parent=head)} AND l.{lc} = s.{sc}',
+                                *([f'LEFT JOIN {name(ml[0])} c ON c.{ml[1]} = l.{colour}'] if ml else []),
+                                *([f'LEFT JOIN {name(ms[0])} z ON z.{ms[1]} = s.{sname}'] if ms else []),
+                                where(size, 's'), f'GROUP BY l.{row(line) or lc}, {cname}', f'ORDER BY l.{row(line) or lc};'])))
+            total = column(mapping, head, field='calc.pieces')
+            out.append(dict(title='4. Totals check', expect=f'{len(sheet.get("lines") or [])} lines · {pieces:,} pieces, header total the same',
+                            sql='\n'.join([
+                                'SELECT ' + (f'o.{total} AS HEADER_TOTAL,\n       ' if total and total in present(head) else '') +
+                                f'(SELECT COUNT(*) FROM {name(line)} l {where(line, "l")}) AS COLOUR_LINES,',
+                                f'       (SELECT COUNT(*) FROM {name(size)} s {where(size, "s")}) AS SIZE_ROWS,',
+                                f'       (SELECT SUM(s.{qty}) FROM {name(size)} s {where(size, "s")}) AS SIZE_TOTAL',
+                                f'FROM {name(head)} o {where(head, "o")};'])))
+    return out

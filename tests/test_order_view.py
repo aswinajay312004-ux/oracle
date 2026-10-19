@@ -33,6 +33,8 @@ def test_saved_order_is_compared_with_the_excel_value_by_value(world):  # noqa: 
     assert check['same'] and check['pieces'] == {'excel': SECOND_PIECES, 'oracle': SECOND_PIECES}
     assert check['cells']['count'] == 12 and not check['cells']['different'] and check['details']['count'] > 5
     assert d['saved']['filename'] == 'zen-po.xlsx'
+    assert [q['title'][:1] for q in d['sql']] == ['1', '2', '3', '4'] and all(f'= {ordmasid}' in q['sql'] for q in d['sql'])
+    assert all(q['sql'].lstrip().startswith('SELECT') and q['sql'].count(';') == 1 for q in d['sql'])
     excel = d['saved']['excel']                                    # each Excel value with its cell, for ticking off
     rows = {r['label']: r for r in excel['from_file']}
     assert rows['Buyer']['excel'] == rows['Buyer']['oracle'] == 'ZEN KIDS' and rows['Buyer']['cell']
@@ -106,6 +108,20 @@ def test_real_oracle_saved_order_is_found_by_name_and_matches_the_excel(real):  
     assert d['saved']['check']['cells']['count'] == 12 and d['sheet']['total'] == SECOND_PIECES
     labels = {f['label']: f['value'] for f in d['sheet']['header']}
     assert labels['Buyer'] == 'ZEN KIDS' and labels['Order confirmation date'] == '2026-10-17'
+    # the SQL Developer queries shown on the order page run on Oracle and show the same order
+    rows = {q['title'][:1]: run_sql(q['sql']) for q in d['sql']}
+    assert len(rows['1']) == 1 and 'ZEN KIDS' in rows['1'][0] and ref in rows['1'][0]
+    assert len(rows['2']) == len(rows['3']) == len(d['sheet']['lines']) == 3
+    assert {r[0] for r in rows['3']} == {l['colour'] for l in d['sheet']['lines']} and sum(r[2] for r in rows['3']) == SECOND_PIECES
+    assert rows['4'] == [(SECOND_PIECES, 3, 12, SECOND_PIECES)]
+
+
+def run_sql(sql):
+    """Runs a statement on Oracle as SQL Developer would: its own connection, the trailing ; removed."""
+    from backend import oracle_store
+    with oracle_store.connect() as conn, conn.cursor() as cur:
+        cur.execute(sql.rstrip().rstrip(';'))
+        return [tuple(r) for r in cur.fetchall()]
 
 
 def test_a_value_changed_before_saving_is_not_shown_as_the_excel_value():

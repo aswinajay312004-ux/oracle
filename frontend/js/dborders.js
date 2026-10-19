@@ -186,6 +186,30 @@ function cellInfo(td) {
   $('#xg-info').className = `xg-info ${[...td.classList].find(c => c.startsWith('xg-')) || ''}`;
 }
 
+// The same order straight from Oracle in SQL Developer: read-only SELECTs for this order, with what each should show.
+function sqlHtml(d) {
+  return `<section class="card db-sql" aria-labelledby="db-sql-title">
+    <div class="card-head"><div><h2 id="db-sql-title">Check this order in SQL Developer</h2>
+      <p class="muted small-text">Proof straight from Oracle, without POPPYS. These only read (SELECT); they change nothing.</p></div>
+      <button class="secondary small" data-copy="all">Copy all ${d.sql.length}</button></div>
+    <ol class="db-sql-steps"><li>Open SQL Developer and the <b>GARMENT_DEMO</b> connection (the worksheet).</li>
+      <li>Copy a query below and paste it in the worksheet.</li>
+      <li>Put the cursor in it and press <kbd>Ctrl</kbd>+<kbd>Enter</kbd>. The result grid should show what is written next to the query. (<kbd>F5</kbd> runs all of them at once.)</li></ol>
+    ${d.sql.map((q, i) => `<div class="db-sql-q"><div class="db-sql-head"><b>${esc(q.title)}</b><span class="pill ok">You should see: ${esc(q.expect)}</span>
+      <button class="ghost small" data-copy="${i}">Copy</button></div><pre tabindex="0">${esc(q.sql)}</pre></div>`).join('')}
+  </section>`;
+}
+
+async function copySql(button, text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const pre = button.closest('.db-sql-q')?.querySelector('pre');
+    if (pre) { const r = document.createRange(); r.selectNodeContents(pre); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+    return notify('Copy is blocked by the browser. The query is selected: press Ctrl+C.', 'error');
+  }
+  const was = button.textContent; button.textContent = 'Copied ✓'; setTimeout(() => { button.textContent = was; }, 1500);
+}
+
 function badge(d) {
   if (!d.saved?.check) return '<span class="pill">Read from Oracle</span>';
   return d.saved.check.same ? '<span class="pill ok">✓ Same as the Excel</span>' : '<span class="pill err">⚠ Different from the Excel</span>';
@@ -199,13 +223,17 @@ function drawOrder() {
     <div class="db-order-bar"><button class="ghost small" data-dbx="back">← All orders</button><span class="spacer"></span>
       <button class="secondary small" data-dbx="full">Full screen · Print</button><button class="ghost small" data-dbx="tech" title="The Oracle tables, columns and record IDs behind this order">Oracle tables &amp; IDs</button></div>
     ${checkHtml(d)}
-    ${d.saved?.excel ? `<div class="subnav db-tabs" role="tablist" aria-label="How to show this order">${[
-      ...(d.saved.grid ? [['excel', 'As in your Excel']] : []), ['values', 'Value by value'], ['oracle', 'As in Oracle']].map(([k, t]) =>
-      `<button role="tab" aria-selected="${view.tab === k}" class="${view.tab === k ? 'active' : ''}" data-tab="${k}">${t}</button>`).join('')}</div>` : ''}
+    <div class="subnav db-tabs" role="tablist" aria-label="How to show this order">${[
+      ...(d.saved?.grid ? [['excel', 'As in your Excel']] : []), ...(d.saved?.excel ? [['values', 'Value by value']] : []), ['oracle', 'As in Oracle'],
+      ...(d.sql?.length ? [['sql', 'Check in SQL Developer']] : [])].map(([k, t]) =>
+      `<button role="tab" aria-selected="${view.tab === k}" class="${view.tab === k ? 'active' : ''}" data-tab="${k}">${t}</button>`).join('')}</div>
     ${view.tab === 'excel' && d.saved?.grid ? gridHtml(d.saved.grid) : view.tab === 'values' && d.saved?.excel ? mapHtml(d.saved.excel)
+      : view.tab === 'sql' && d.sql?.length ? sqlHtml(d)
       : `<div class="card db-sheet">${sheetHtml(sheet, { badge: badge(d) })}<p class="muted small-text db-read">Read from Oracle ${esc(when(d.read_at))}</p></div>`}
   </div>`;
   box.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { view.tab = b.dataset.tab; drawOrder(); box.querySelector(`[data-tab="${view.tab}"]`)?.focus(); }));
+  box.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => copySql(b, b.dataset.copy === 'all'
+    ? d.sql.map(q => `-- ${q.title} (expect: ${q.expect})\n${q.sql}`).join('\n\n') : d.sql[Number(b.dataset.copy)].sql)));
   box.querySelectorAll('td[data-xg]').forEach(td => { td.addEventListener('click', () => cellInfo(td)); td.addEventListener('focus', () => cellInfo(td)); });
   box.querySelectorAll('[data-dbx]').forEach(b => b.addEventListener('click', () => ({
     back: () => { view.order = null; drawList(); },

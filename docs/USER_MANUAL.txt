@@ -810,6 +810,19 @@ DATABASE SCREEN - SAVE AANA ORDER AH CHECK PANNA (2026-10-19):
       panna theriyum.
     "Value by value" = keezha sonna Excel -> Oracle table.
     "As in Oracle" = Oracle la irundhu ippo padicha order sheet.
+    "Check in SQL Developer" = indha order ku ready-made SQL (4 queries),
+      ovvonnukkum "You should see: 3 rows - 2,520 pieces" maadhiri expected
+      result. Client ku proof kaatta:
+        1. SQL Developer la GARMENT_DEMO connection open pannunga.
+        2. "Copy" (illa "Copy all 4") click panni worksheet la paste pannunga.
+        3. Cursor ah query la vechu Ctrl+Enter (ellaam onna: F5).
+        4. Result grid la varra numbers, expected numbers oda same aa irukkanum.
+      Query 3 Excel maadhiri oru colour ku oru row: "S = 36 | M = 72 ...".
+      Query 4: HEADER_TOTAL um SIZE_TOTAL um same number aa irukkanum.
+      Ellaam SELECT mattum, edhaiyum maathaadhu.
+    Website illama OC No vechu paakkanum na: docs\sql\check_order_by_oc_no.sql
+      ah SQL Developer la open panni F5; OC_NO kekkum (eg PK/26-27/S/1).
+      Kadaisi 20 orders list um adhula irukku.
 
   "YOUR EXCEL -> ORACLE" TABLE (order page la, illa Saved screen la
   "Check against the Excel" button):
