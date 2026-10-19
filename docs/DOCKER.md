@@ -10,7 +10,10 @@ cd D:\oracle
 .\docker-stop.ps1 -Oracle     # stop both
 ```
 
-After `git pull`: `.\docker-start.ps1 -Rebuild`.
+Or **double-click `docker-start.cmd`** in `D:\oracle` (it runs the same script; also works from Command Prompt:
+`cd /d D:\oracle` then `docker-start.cmd`). `docker-stop.cmd` stops it.
+
+After `git pull`: `.\docker-start.ps1 -Rebuild` (or `docker-start.cmd -Rebuild`).
 
 ## What runs where
 

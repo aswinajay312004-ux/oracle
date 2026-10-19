@@ -105,6 +105,9 @@ DOCKER LA (EASY - ORE COMMAND, docs/DOCKER.md):
        .\docker-start.ps1
   Idhu oracle26ai ah start pannum, POPPYS AI container ah start pannum,
   ready aanadhum browser la http://127.0.0.1:8008 thaane open aagum.
+  Innum easy: File Explorer la D:\oracle open panni docker-start.cmd ah
+  double-click pannunga (PowerShell type panna thevai illa).
+  Command Prompt (cmd) la na: cd /d D:\oracle  apram  docker-start.cmd
   Mudhal thadava image build aagum (internet venum, sila nimisham).
   Mudhal thadava D:\oracle\data la irukkura users/drafts um Docker ku
   copy aagum (ore oru thadava).
