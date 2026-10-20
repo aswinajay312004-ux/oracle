@@ -18,6 +18,7 @@ services:
       POPPYS_ORACLE_DSN: ${POPPYS_ORACLE_DSN:-host.docker.internal:1521/FREEPDB1}
       POPPYS_OLLAMA_URL: ${POPPYS_OLLAMA_URL:-http://host.docker.internal:11434}
       POPPYS_AI_ALLOWED_HOST: host.docker.internal
+      POPPYS_REMOTE: ${POPPYS_REMOTE:-0}       # 1 only while share-online.ps1 shares the app through a Cloudflare link
     extra_hosts:
       - "host.docker.internal:host-gateway"   # Docker Desktop defines it; this line makes Linux hosts work too
     volumes:

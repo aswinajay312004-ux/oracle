@@ -47,6 +47,25 @@ folder itself is not changed. Stop `start.ps1` first (Ctrl+C) — both use port 
 
 Scripts that use the laptop's `.venv` (`verify_local.ps1`, `scripts\axpert_gap_report.py`) keep working beside Docker.
 
+## Share with other computers (demo)
+
+`share-online.cmd` (double-click) lets people on other computers use POPPYS AI in a browser, with nothing installed on
+their side. It uses a free Cloudflare quick tunnel (no account): it starts POPPYS AI with `POPPYS_REMOTE=1`, downloads
+`cloudflared.exe` once into `tools\` (or uses an installed one), and prints an `https://<random>.trycloudflare.com` link,
+also copied to the clipboard.
+
+- Only the POPPYS AI pages go through the link; port 8008 stays on 127.0.0.1 and Oracle (1521) is never shared.
+- With sharing on, the app accepts `*.trycloudflare.com` besides 127.0.0.1/localhost, checks changes against the https
+  link, marks the sign-in cookie Secure, refuses creating the first administrator through the link, and counts wrong
+  passwords per person (Cloudflare's `CF-Connecting-IP`).
+- Ctrl+C in the window stops the link and restarts POPPYS AI laptop-only. If the window is just closed, run
+  `docker-start.cmd` to go back to laptop-only.
+- Free quick tunnels: the link changes every start, there is no uptime guarantee, and the laptop must stay on and awake.
+  Order data passes through Cloudflare (https) while sharing is on.
+
+Tested here with simulated tunnel requests (`tests/test_share_online.py`); the script itself was only syntax-checked.
+**A real Cloudflare link has not been tried yet.**
+
 ## Verified
 
 Built and run in the development environment against a real Oracle 23.26 replica: `/readyz` local store and Oracle

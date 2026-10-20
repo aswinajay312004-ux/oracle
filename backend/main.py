@@ -12,9 +12,8 @@ import time
 import uuid
 from urllib.parse import quote as _quote
 from fastapi import FastAPI, UploadFile, File, Request, Response, HTTPException, Depends, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 import oracledb
 from . import auth, coverage, evidence, logs, local_store as store, oracle_store as oracle, workbooks, readers, ai, matcher, fields as F
@@ -61,7 +60,25 @@ _dev = os.environ.get('POPPYS_DEV') == '1'
 app = FastAPI(title='POPPYS AI — Order entry automation', lifespan=lifespan,
               docs_url='/docs' if _dev else None, redoc_url=None, openapi_url='/openapi.json' if _dev else None)
 log = logging.getLogger('poppys.http')
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
+# Sharing with people on other computers (share-online.ps1, docs/DOCKER.md "Share with other computers"): with
+# POPPYS_REMOTE=1 the app also answers on a Cloudflare quick-tunnel address (https://<random>.trycloudflare.com). The port
+# itself stays on 127.0.0.1; the tunnel program on this laptop is the only way in from outside.
+REMOTE = os.environ.get('POPPYS_REMOTE') == '1'
+REMOTE_SUFFIX = '.trycloudflare.com'
+LOCAL_HOSTS = ('127.0.0.1', 'localhost', 'testserver')
+
+
+def remote(request):
+    """True for a request that came in through the sharing tunnel (always https outside)."""
+    return REMOTE and request.headers.get('host', '').split(':')[0].lower().endswith(REMOTE_SUFFIX)
+
+
+def client_address(request):
+    """The person's address for sign-in throttling: through the tunnel every request comes from this laptop, so
+    Cloudflare's header names the real one (outside requests can only arrive through the tunnel)."""
+    if remote(request) and request.headers.get('cf-connecting-ip'):
+        return request.headers['cf-connecting-ip'][:64]
+    return request.client.host if request.client else 'local'
 
 
 @app.middleware('http')
@@ -84,12 +101,16 @@ async def protect(request, call_next):
 
 
 async def _protected(request, call_next):
+    # Only this laptop's own names (a page on another site cannot reach the API by DNS tricks), plus the tunnel when shared.
+    if request.headers.get('host', '').rsplit(':', 1)[0].lower().strip('[]') not in LOCAL_HOSTS and not remote(request):
+        return PlainTextResponse('Invalid host header', status_code=400)
     if int(request.headers.get('content-length', '0') or 0) > 14 * 1024 * 1024:
         return JSONResponse({'detail': 'Request exceeds 14 MB.'}, status_code=413)
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
         # Fetch metadata first (another site or another local port is refused), then Origin for browsers without it.
         site = request.headers.get('sec-fetch-site'); origin = request.headers.get('origin')
-        if site not in (None, 'same-origin', 'none') or (origin and origin != str(request.base_url).rstrip('/')):
+        own = f'https://{request.headers["host"]}' if remote(request) else str(request.base_url).rstrip('/')
+        if site not in (None, 'same-origin', 'none') or (origin and origin != own):
             return JSONResponse({'detail': 'Cross-origin changes are not permitted.', 'code': 'csrf'}, status_code=403,
                                 headers={'Vary': 'Sec-Fetch-Site, Origin'})
     response = await call_next(request)
@@ -163,7 +184,7 @@ def issue(request, response, username):
         c.execute('DELETE FROM sessions WHERE expires<? OR token_hash=?', (now, _token_hash(request)))
         c.execute('INSERT INTO sessions(token_hash,username,expires,last_seen) VALUES (?,?,?,?)',
                   (hashlib.sha256(token.encode()).hexdigest(), username, now + auth.ABSOLUTE_S, now))
-    response.set_cookie('poppys_session', token, httponly=True, samesite='strict', max_age=auth.ABSOLUTE_S, path='/')
+    response.set_cookie('poppys_session', token, httponly=True, samesite='strict', max_age=auth.ABSOLUTE_S, path='/', secure=remote(request))
 
 
 class Credentials(BaseModel):
@@ -194,6 +215,8 @@ def who(request: Request):
 
 @app.post('/api/setup')
 def setup(data: Credentials, request: Request, response: Response):
+    if remote(request):
+        raise HTTPException(403, 'The first administrator is created on the laptop that runs POPPYS AI, not through a shared link.')
     hashed = new_password(data.password, data.username)
     with LOCK, store.db() as c:
         if c.execute('SELECT 1 FROM users').fetchone():
@@ -206,7 +229,7 @@ def setup(data: Credentials, request: Request, response: Response):
 
 @app.post('/api/login')
 def login(data: Credentials, request: Request, response: Response):
-    address = request.client.host if request.client else 'local'
+    address = client_address(request)
     wait = auth.wait_seconds(data.username, address)
     if wait:
         store.audit(data.username, 'login_throttled', 'workspace', wait_s=wait)

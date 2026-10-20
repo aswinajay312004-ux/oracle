@@ -841,6 +841,19 @@ DATABASE SCREEN - SAVE AANA ORDER AH CHECK PANNA (2026-10-19):
   Saved screen "Excel numbers not used" = Excel la trims calculation columns
   (15-L Prongs stud/socket, Sewing thread METER...). Order quantities illa.
 
+VERA COMPUTER / FRIENDS / CLIENTS KU KAATTA (share-online.cmd):
+  Avanga laptop la edhuvum install panna vendaam, browser podhum. Free (Cloudflare).
+    1. Unga laptop la docker-start.cmd run aagi POPPYS open aaganum.
+    2. D:\oracle la share-online.cmd double-click.
+       (Mudhal thadava cloudflared.exe download aagum, 1-2 nimisham.)
+    3. Pachai box la https://....trycloudflare.com link varum (copy aagidum).
+       WhatsApp la paste panni anuppunga. 30 second la work aagum.
+    4. Avanga Chrome / Edge la open panni adhe username / password la login.
+    5. Mudinjadhum andha window la Ctrl+C -> link nirkum, POPPYS laptop-only
+       aagidum. (Window ah close pannidunga na: docker-start.cmd run pannunga.)
+  Gavanikka: window open aa irukkanum, laptop sleep aaga koodaadhu. Ovvoru
+  thadava pudhu link varum. Oracle database share aagaadhu, POPPYS page mattum.
+
 INNUM BAAKI (detail: docs\engineering\KNOWN_LIMITATIONS.md):
   - Axpert compatibility verify (mela sonna gap report + screen check).
   - Fabric / yarn / trims Oracle la save aagala (mapping verify aaganum).
