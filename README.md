@@ -38,7 +38,7 @@ A local, offline, admin-only application that turns a buyer's Excel order into O
 1. Start Docker Desktop and confirm the existing `oracle26ai` container is healthy.
 2. Run `python scripts/bootstrap_local.py` once. It creates the limited `POPPYS_APP` account and the ignored `.env.poppys` file. It does not reset or delete `GARMENT_DEMO`.
 3. Run `python scripts/upgrade_local.py`. It is additive and re-runnable. It grants read access for the explorer and update access to `ORDMAS/ORDSTYLE/ORDSIZE` for approved edits. It also creates the change and schema audit tables and the guarded schema-change procedure.
-4. Run `./start.ps1`, open `http://127.0.0.1:8008`, create the admin account and upload a workbook.
+4. Run `start.bat` (Command Prompt, or double-click it) or `./start.ps1` (PowerShell), open `http://127.0.0.1:8008`, create the admin account and upload a workbook.
 
 For a fresh development or CI container only, `python scripts/create_test_schema.py` builds a **synthetic** `GARMENT_DEMO` from `docs/live_schema_columns.json`. It refuses to run if `GARMENT_DEMO` exists.
 
