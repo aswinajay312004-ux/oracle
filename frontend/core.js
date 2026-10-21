@@ -6,7 +6,7 @@ const App = { routes: {}, state: { user: null, health: null }, pending: 0 };
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = v => v == null || v === '' ? '—' : typeof v === 'number' ? v.toLocaleString('en-IN', { maximumFractionDigits: 5 }) : String(v);
 // Identifiers and codes are shown exactly as stored; only quantities and amounts are grouped.
-const isCode = col => /(ID|NO|NUM|SUBNO|CODE)$/.test(String(col || '')) || ['BUYER', 'MERCH', 'UOM', 'PUOM', 'COMBO', 'GSIZE', 'STNO', 'STYLENAME', 'STYLEDESC', 'SNO', 'ORDSIZEROW'].includes(col);
+const isCode = col => /(ID|NO|NUM|SUBNO|CODE|KEY|ROW)$/.test(String(col || '')) || ['BUYER', 'MERCH', 'UOM', 'PUOM', 'COMBO', 'GSIZE', 'STNO', 'STYLENAME', 'STYLEDESC', 'SNO', 'ORDSIZEROW'].includes(col);
 const val = (col, v) => v == null || v === '' ? '—' : isCode(col) ? String(v) : fmt(v);
 const num = v => Number.isFinite(Number(v)) ? Number(v) : 0;
 const when = v => { if (!v) return '—'; const d = new Date(String(v).replace(' ', 'T') + (/[zZ+]|\d-\d\d:\d\d$/.test(v) ? '' : 'Z')); return isNaN(d) ? esc(v) : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); };
@@ -89,11 +89,14 @@ async function confirmDialog(title, message, action = 'Continue') {
 /* Business-friendly names for Oracle tables (actual identifiers always shown alongside). */
 const TABLE_LABELS = { ORDMAS: 'Order header', ORDSTYLE: 'Order lines', ORDSIZE: 'Size quantities', BUYMAS: 'Buyers', STYLENUM: 'Style numbers', STYLEMAS: 'Garment descriptions',
   SIZE_MAS: 'Sizes', COLORMAS: 'Colours', UNITMAS: 'Units', MERCHMAS: 'Merchandisers', PARTYMAS: 'Parties', ORDSHIP: 'Shipments', ORDFAB: 'Fabrics', ORDYARN: 'Yarns',
-  ORDACC: 'Accessories', ORDCOMP: 'Components', ORDDOC: 'Documents', ORDCMTFAB: 'CMT fabrics', ORDERENTRY: 'Order entry' };
+  ORDACC: 'Accessories', ORDCOMP: 'Components', ORDDOC: 'Documents', ORDCMTFAB: 'CMT fabrics', ORDERENTRY: 'Order entry', EXCEL_ORDERS: 'Excel orders' };
 const COLUMN_LABELS = { DOCID: 'Order reference', BUYER: 'Buyer', STYLENO: 'Style number', STYLEDESC: 'Description', BONO: 'Buyer PO', ODATE: 'Order date', UOM: 'Unit',
   SAMPLETYPE: 'Sample type', ORDCATEGORY: 'Category', MERCH: 'Merchandiser', OQTY: 'Order quantity', REMARKS: 'Remarks', STNO: 'Style', STYLENAME: 'Description',
   PONUM: 'PO number', SUBNO: 'Line key', COMBO: 'Colour', ORDQTY: 'Line quantity', PRODQTY: 'Production qty', SHIPDT: 'Ship date', PUOM: 'Unit', SNO: 'Line no.',
-  GSIZE: 'Size', RQTY: 'Quantity', PQTY: 'Production qty', ORDSIZEROW: 'Row', SUB3_SUBNO: 'Line key', ORDMASID: 'Order ID', ORDSTYLEID: 'Line ID', ORDSIZEID: 'Size ID' };
+  GSIZE: 'Size', RQTY: 'Quantity', PQTY: 'Production qty', ORDSIZEROW: 'Row', SUB3_SUBNO: 'Line key', ORDMASID: 'Order ID', ORDSTYLEID: 'Line ID', ORDSIZEID: 'Size ID',
+  IONO: 'OC number', BUYERNAME: 'Buyer', SEASON: 'Season', DESCOUNTRY: 'Destination', ORDERDATE: 'Order date', BOMDATE: 'BOM date', FABIHDATE: 'Fabric in-house date',
+  PACKQTY: 'Packs', PRICE: 'Price', GARMENT: 'Garment', ORDSTYLEROW: 'Line no.', SIZES: 'Size', ORDERQTY: 'Quantity', QTYTYPE: 'Quantity type', SOURCE_FILE: 'Excel file',
+  SOURCE_CELL: 'Excel cell', ENTRY_ID: 'Row ID', ORDER_KEY: 'Order ID', IMPORT_ID: 'Import ID', CREATEDBY: 'Approved by', CREATEDON: 'Saved on' };
 const tableLabel = t => TABLE_LABELS[t] || t;
 const sourceChip = src => { if (!src) return ''; if (src.cell) return `<span class="chip" title="${esc(src.sheet)} ${esc(src.cell)}${src.value != null ? ' = ' + esc(src.value) : ''}${src.formula ? ' · ' + esc(src.formula) : ''}${src.via ? ' · ' + esc(src.via) : ''}">${icon('file')}${esc(src.sheet)}!${esc(src.cell)}</span>`; if (src.origin) return `<span class="chip manual">${esc(src.origin)}</span>`; return ''; };
 

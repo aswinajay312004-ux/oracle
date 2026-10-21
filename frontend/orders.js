@@ -71,6 +71,7 @@ function valueText(d, table, col, v) {
   return v == null ? '<span class="blank">blank</span>' : esc(val(col, v));
 }
 function orderDetails(d) {
+  if (d.mode === 'table') return tableOrderDetails(d);
   const s = d.summary; const head = d.rows.ORDMAS[0]; const src = d.sources || {};
   const filled = Object.entries(head).filter(([, v]) => v != null);
   return `<div class="row"><a class="btn primary small" href="#/orders/${d.ordmasid}/edit">${icon('edit')} Edit order</a><a class="btn small" href="#/database/flow/${d.ordmasid}">${icon('flow')} Database flow</a></div>
@@ -121,7 +122,8 @@ function historyHtml(h) {
 const EDIT_HEAD = ['DOCID', 'BUYER', 'STYLENO', 'STYLEDESC', 'BONO', 'ODATE', 'SAMPLETYPE', 'MERCH', 'REMARKS'];
 const REF_ROLE = { 'ORDMAS.BUYER': 'buyer', 'ORDMAS.STYLENO': 'style', 'ORDMAS.STYLEDESC': 'description', 'ORDMAS.MERCH': 'merch', 'ORDSTYLE.COMBO': 'color', 'ORDSIZE.GSIZE': 'size' };
 async function renderEdit(view, id) {
-  const d = await loadOrder(id, true); const masters = await api('/api/masters').catch(() => ({}));
+  const d0 = await loadOrder(id, true); if (d0.mode === 'table') return renderTableEdit(view, id, d0);
+  const d = d0; const masters = await api('/api/masters').catch(() => ({}));
   setTitle(`Edit ${d.summary.order_ref || 'order'}`, 'Proposed changes are previewed and approved before Oracle is updated');
   const head = d.rows.ORDMAS[0]; const src = d.sources || {};
   const excel = (t, rid, col) => { const s = src[`${t}:${rid}`]?.[col]; const v = s?.raw ?? s?.source?.value; return v == null ? '<span class="faint">—</span>' : `${esc(fmt(v))} ${sourceChip(s.source)}`; };
@@ -151,6 +153,57 @@ async function renderEdit(view, id) {
     const body = Modal.open('Review changes before approval', `
       ${p.errors.length ? `<div class="callout attention">${icon('alert')}<div><strong>Please correct</strong><ul>${p.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div></div>` : ''}
       ${p.changes.length ? `<div class="table-wrap"><table><thead><tr><th>Oracle column</th><th>Record</th><th>Current</th><th></th><th>After approval</th></tr></thead><tbody>${p.changes.map(c => `<tr><td><span class="col-name">${esc(c.table)}.${esc(c.column)}</span>${c.derived ? '<span class="col-label">recalculated total</span>' : ''}</td><td class="mono">${esc(c.id)}</td><td>${c.old == null ? '<span class="blank">blank</span>' : esc(c.old_label || fmt(c.old))}</td><td class="arrow">→</td><td><strong>${c.new == null ? '<span class="blank">blank</span>' : esc(c.new_label || fmt(c.new))}</strong></td></tr>`).join('')}</tbody></table></div>` : ''}
+      ${p.notes.length ? `<div class="callout">${icon('info')}<ul>${p.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
+      <div class="modal-foot"><button class="btn" data-cancel>Keep editing</button><button class="btn primary" data-approve ${p.errors.length ? 'disabled' : ''}>${icon('check')} Approve &amp; update Oracle</button></div>`);
+    $('[data-cancel]', body).onclick = () => Modal.close();
+    $('[data-approve]', body).onclick = () => busy('Updating Oracle and verifying…', async () => {
+      await api(`/api/changes/${p.id}/approve`, { method: 'POST', body: { hash: p.hash } }); Modal.close();
+      toast(`${plural(p.changes.length, 'value')} updated in Oracle and verified. The change is in the order history.`); go(`#/orders/${id}/history`);
+    });
+  });
+}
+
+/* ---------------- single-table orders (EXCEL_ORDERS) ---------------- */
+const ROW_LEVEL = new Set(['ORDSTYLEROW', 'GARMENT', 'COMBO', 'ORDSIZEROW', 'SIZES', 'ORDERQTY', 'QTYTYPE', 'SOURCE_CELL']);
+const SYSTEM_COLS = new Set(['ENTRY_ID', 'ORDER_KEY', 'IMPORT_ID', 'SOURCE_FILE', 'CREATEDBY', 'CREATEDON']);
+function tableOrderDetails(d) {
+  const s = d.summary; const rows = d.rows[d.table]; const head = rows[0]; const src = d.sources || {};
+  const order = Object.keys(head).filter(k => head[k] != null && !ROW_LEVEL.has(k) && !SYSTEM_COLS.has(k));
+  return `<div class="row"><a class="btn primary small" href="#/orders/${d.ordmasid}/edit">${icon('edit')} Edit order</a><a class="btn small" href="#/database/flow/${d.ordmasid}">${icon('flow')} Database</a></div>
+    <div class="dash-tiles"><div><span>Buyer</span><strong>${esc(s.buyer || '—')}</strong></div><div><span>Style</span><strong>${esc(s.style || '—')}</strong></div><div><span>Total pieces</span><strong>${fmt(s.total)}</strong></div><div><span>Ship date</span><strong>${esc(s.ship_dates.join(', ') || '—')}</strong></div></div>
+    ${d.import ? `<div class="callout success">${icon('check')}<div>Saved from <strong>${esc(d.import.filename || 'workbook')}</strong> on ${when(d.import.committed_at)} by ${esc(d.import.approver)} into <code>${esc(d.table)}</code>. Values below are read live from Oracle.</div></div>` : ''}
+    <section class="card"><div class="card-head"><div class="table-name"><span class="tname">${esc(d.table)}</span><span class="muted">· order details (same in every row)</span></div></div>
+      <div class="table-wrap"><table class="kv"><tbody>${order.map(k => `<tr><td><span class="col-name">${esc(k)}</span><span class="col-label">${esc(COLUMN_LABELS[k] || '')}</span></td><td>${esc(val(k, head[k]))}</td><td>${sourceChip(src[`${d.table}:${head.ENTRY_ID}`]?.[k]?.source)}</td></tr>`).join('')}</tbody></table></div></section>
+    ${rowsTable(d, d.table, ['ORDSTYLEROW', 'GARMENT', 'COMBO', 'SIZES', 'ORDERQTY', 'QTYTYPE', 'SOURCE_CELL'], 'ENTRY_ID').replace(/<th>(\w+)<\/th>/, '<th>Row ID</th>')}`;
+}
+
+async function renderTableEdit(view, id, d) {
+  const meta = await api('/api/schema/order-columns'); const rows = d.rows[d.table]; const head = rows[0]; const src = d.sources || {};
+  setTitle(`Edit ${d.summary.order_ref || 'order'}`, 'Proposed changes are previewed and approved before Oracle is updated');
+  const cols = (meta.columns || []).filter(c => c.level === 'order');
+  const excel = (rid, col) => { const x = src[`${d.table}:${rid}`]?.[col]; const v = x?.raw ?? x?.source?.value; return v == null ? '<span class="faint">—</span>' : `${esc(fmt(v))} ${sourceChip(x.source)}`; };
+  const cur = v => v == null ? '' : String(v);
+  view.innerHTML = `<div class="stack"><div class="row between"><a class="btn ghost" href="#/orders/${id}">${icon('back')} Back to order</a><span class="muted">Oracle is not changed until you approve the preview.</span></div>
+    <section class="card"><div class="card-head"><div><h2>Order details</h2><span class="sub">${esc(d.table)} · a change here updates all ${rows.length} rows of this order</span></div></div>
+      <div class="table-wrap"><table class="compare"><thead><tr><th>Field</th><th>Original Excel</th><th>Current Oracle</th><th>Proposed</th></tr></thead><tbody>
+      ${cols.map(c => `<tr data-row><td><span class="col-name">${esc(c.name)}</span><span class="col-label">${esc(c.label)}</span></td><td>${excel(head.ENTRY_ID, c.name)}</td><td>${head[c.name] == null ? '<span class="blank">blank</span>' : esc(val(c.name, head[c.name]))}</td>
+        <td><input data-id="all" data-c="${esc(c.name)}" data-orig="${esc(cur(head[c.name]))}" value="${esc(cur(head[c.name]))}" placeholder="${c.type === 'DATE' ? 'YYYY-MM-DD' : 'blank'}"></td></tr>`).join('')}</tbody></table></div></section>
+    <section class="card"><div class="card-head"><div><h2>Quantities</h2><span class="sub">One row per size · total pieces is recalculated</span></div></div>
+      <div class="table-wrap"><table class="compare"><thead><tr><th>Line · colour</th><th>Size</th><th>Original Excel</th><th>Current Oracle</th><th>Proposed</th></tr></thead><tbody>
+      ${rows.filter(r => r.SIZES != null).map(r => `<tr data-row><td>${esc(r.ORDSTYLEROW ?? '')} · ${esc(r.COMBO || '')}</td><td><strong>${esc(r.SIZES)}</strong></td><td>${excel(r.ENTRY_ID, 'ORDERQTY')}</td><td>${esc(fmt(r.ORDERQTY))}</td>
+        <td><input data-id="${r.ENTRY_ID}" data-c="ORDERQTY" data-orig="${esc(cur(r.ORDERQTY))}" value="${esc(cur(r.ORDERQTY))}" inputmode="numeric"></td></tr>`).join('')}</tbody></table></div></section>
+    <div class="action-bar"><span class="muted" id="e-count">No changes yet.</span><div class="row"><a class="btn" href="#/orders/${id}">Cancel</a><button class="btn primary" id="e-review" disabled>${icon('eye')} Review changes</button></div></div></div>`;
+  paintIcons(view);
+  const changed = () => $$('input[data-c]', view).filter(i => i.value.trim() !== i.dataset.orig);
+  view.addEventListener('input', () => { const n = changed().length; $$('[data-row]', view).forEach(r => { const i = $('input', r); r.classList.toggle('changed', !!i && i.value.trim() !== i.dataset.orig); });
+    $('#e-count', view).textContent = n ? `${plural(n, 'value')} changed — not saved yet.` : 'No changes yet.'; $('#e-review', view).disabled = !n; });
+  $('#e-review', view).onclick = () => busy('Checking the changes against Oracle…', async () => {
+    const list = changed().map(i => ({ id: i.dataset.id === 'all' ? 'all' : Number(i.dataset.id), column: i.dataset.c, value: i.value.trim() }));
+    const p = await api(`/api/orders/${id}/changes`, { method: 'POST', body: { changes: list } });
+    const grouped = {}; p.changes.forEach(c => { const k = `${c.column}|${c.old}|${c.new}`; (grouped[k] ||= { ...c, rows: 0 }).rows++; });
+    const body = Modal.open('Review changes before approval', `
+      ${p.errors.length ? `<div class="callout attention">${icon('alert')}<div><strong>Please correct</strong><ul>${p.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+      ${p.changes.length ? `<div class="table-wrap"><table><thead><tr><th>Oracle column</th><th>Rows</th><th>Current</th><th></th><th>After approval</th></tr></thead><tbody>${Object.values(grouped).map(c => `<tr><td><span class="col-name">${esc(c.column)}</span><span class="col-label">${esc(c.label || '')}${c.derived ? ' · recalculated' : ''}</span></td><td>${c.rows}</td><td>${c.old == null ? '<span class="blank">blank</span>' : esc(fmt(c.old))}</td><td class="arrow">→</td><td><strong>${c.new == null ? '<span class="blank">blank</span>' : esc(fmt(c.new))}</strong></td></tr>`).join('')}</tbody></table></div>` : ''}
       ${p.notes.length ? `<div class="callout">${icon('info')}<ul>${p.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
       <div class="modal-foot"><button class="btn" data-cancel>Keep editing</button><button class="btn primary" data-approve ${p.errors.length ? 'disabled' : ''}>${icon('check')} Approve &amp; update Oracle</button></div>`);
     $('[data-cancel]', body).onclick = () => Modal.close();

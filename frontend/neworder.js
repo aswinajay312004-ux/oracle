@@ -72,6 +72,8 @@ function masterLabels(plan) {
 function shown(table, col, value, labels) {
   if (value == null) return '<span class="blank">left blank</span>';
   const master = MASTER_OF[`${table}.${col}`];
+  if (value === '$approver') return '<span class="generated">You, when you approve</span>';
+  if (value === '$job') return '<span class="generated">Import ID · given when saved</span>';
   if (typeof value === 'string' && value.startsWith('$')) {
     if (master) { const m = labels[`${master}:${value}`]; return `<span class="value-new">${esc(m?.label ?? '')}</span> <span class="badge blue">new ${esc(tableLabel(master).replace(/s$/, '').toLowerCase())}</span>`; }
     return '<span class="generated">New ID · assigned when saved</span>';
@@ -88,7 +90,7 @@ function renderReview(view) {
   const status = !plan ? ['Preview not ready', 'amber'] : errors.length ? [`${plural(errors.length, 'item')} to check`, 'amber'] : ['Ready to approve', 'green'];
   const first = orders[0] || {};
   const lines = plan ? plan.totals.lines : orders.reduce((n, o) => n + (o.lines || []).length, 0);
-  const sizes = plan ? plan.operations.filter(o => o.table === 'ORDSIZE').length : orders.reduce((n, o) => n + (o.lines || []).reduce((m, l) => m + (l.sizes || []).filter(s => s.quantity != null && s.quantity !== '').length, 0), 0);
+  const sizes = plan ? plan.operations.filter(o => plan.mode === 'table' ? o.values.SIZES != null : o.table === 'ORDSIZE').length : orders.reduce((n, o) => n + (o.lines || []).reduce((m, l) => m + (l.sizes || []).filter(s => s.quantity != null && s.quantity !== '').length, 0), 0);
   view.innerHTML = `${stepper(ready ? 3 : 2)}<div class="stack">
     <section class="card"><div class="review-bar"><div class="file"><span class="file-ico">XLS</span><div><strong>${esc(d.filename)}</strong>
       <small class="muted">${esc(d.format)} · ${plural((d.sheets || []).length, 'sheet')} · uploaded ${when(d.created_at)}</small></div>
@@ -103,7 +105,7 @@ function renderReview(view) {
     ${errors.length ? attention(errors, orders) : ''}
     ${plan?.warnings?.length ? `<div class="callout attention">${icon('info')}<div><strong>Please check</strong><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div></div>` : ''}
     ${plan?.info?.length ? `<details class="quiet"><summary>Good to know · ${plural(plan.info.length, 'note')} (optional details, nothing to fix)</summary><div class="callout" style="margin-top:8px">${icon('info')}<ul>${plan.info.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div></details>` : ''}
-    ${plan ? oracleTables(plan) : ''}
+    ${plan ? (plan.mode === 'table' ? singleTable(plan) : oracleTables(plan)) : ''}
     <section class="card"><div class="card-head"><div><h2>Structured JSON from Excel</h2><span class="sub">Exactly what was read, with sheet and cell for every value</span></div><button class="btn small" id="toggle-json" type="button">${NO.showJson ? 'Hide' : 'Show'}</button></div>
       ${NO.showJson ? `<div class="card-pad"><div class="json-view">${esc(JSON.stringify(orders.map(cleanOrder), null, 2))}</div></div>` : ''}</section>
     <div class="action-bar"><span class="muted">${icon('shield')} Nothing is written until you approve. All records are saved together, or none are.</span>
@@ -198,4 +200,32 @@ function renderResult(view, result) {
     <section class="card" style="margin-top:16px"><div class="card-head"><h2>Saved records</h2><span class="sub">${when(result.committed_at)}</span></div>
       <div class="table-wrap" style="max-height:420px"><table><thead><tr><th>Table</th><th>ID</th><th>Saved values</th></tr></thead><tbody>${result.rows.map(r => `<tr><td><span class="col-name">${esc(r.table)}</span><span class="col-label">${esc(tableLabel(r.table))}</span></td><td class="mono">${esc(r.id ?? '')}</td><td>${Object.entries(r.values).map(([k, v]) => `<span class="mono faint">${esc(k)}</span> ${esc(val(k, v))}`).join(' · ')}</td></tr>`).join('')}</tbody></table></div></section>`;
   paintIcons(view);
+}
+
+/* Single-table mode: one Oracle table, one row per size. Order details are shown once ("same in every row"). */
+const ROW_COLS = ['ORDSTYLEROW', 'GARMENT', 'COMBO', 'SIZES', 'ORDERQTY', 'QTYTYPE', 'SOURCE_CELL'];
+const AUTO_COLS = ['ENTRY_ID', 'ORDER_KEY', 'IMPORT_ID', 'SOURCE_FILE', 'CREATEDBY', 'CREATEDON'];
+function singleTable(plan) {
+  const meta = plan.tables[plan.table]; const byOrder = new Map();
+  plan.operations.forEach(op => { if (!byOrder.has(op.order)) byOrder.set(op.order, []); byOrder.get(op.order).push(op); });
+  const level = Object.fromEntries(meta.columns.map(c => [c.name, c]));
+  return `<div class="row between"><div><h2>Oracle preview</h2><p class="muted">Everything goes into <strong>one</strong> Oracle table. This is a proposal: nothing is in Oracle until you approve.</p></div>
+    <label class="row muted" style="gap:6px"><input type="checkbox" id="show-empty" ${NO.showEmpty ? 'checked' : ''}> Show every Oracle column</label></div>
+    ${[...byOrder.values()].map(ops => {
+      const first = ops[0]; const orderCols = meta.columns.filter(c => c.level === 'order');
+      const filled = orderCols.filter(c => first.values[c.name] != null); const blanks = orderCols.filter(c => first.values[c.name] == null);
+      const total = ops.reduce((n, op) => n + num(op.values.ORDERQTY), 0);
+      return `<section class="card oracle-table"><div class="card-head"><div class="table-name"><span class="table-ico">${icon('table')}</span><div><span class="tname">${esc(plan.table)}</span> <span class="muted">· ${esc(meta.label)}</span><span class="sub" style="display:block">${esc(meta.purpose)}</span></div></div>
+        <span class="badge green">${plural(ops.length, 'new row')}</span></div>
+        <div class="card-pad" style="padding-bottom:6px"><h3>Order details <span class="muted" style="font-weight:500">· same in every row</span></h3></div>
+        <div class="table-wrap"><table class="kv"><thead><tr><th>Oracle column</th><th>Value to save</th><th>From Excel</th></tr></thead><tbody>
+        ${filled.map(c => { const info = first.columns[c.name] || {}; return `<tr><td><span class="col-name">${esc(c.name)}</span><span class="col-label">${esc(c.label)}</span></td>
+          <td><span class="value-new">${esc(val(c.name, first.values[c.name]))}</span>${info.raw != null && String(info.raw) !== String(first.values[c.name]) ? `<span class="sub">Excel: ${esc(info.raw)}</span>` : ''}</td>
+          <td>${sourceChip(info.source) || originBadge(info)}${info.source?.via && info.source.via.startsWith('Excel label') ? `<span class="sub">${esc(info.source.via)}</span>` : ''}</td></tr>`; }).join('')}</tbody></table></div>
+        ${blanks.length ? `<p class="card-pad" style="padding-top:10px;padding-bottom:4px"><span class="muted">Not in this Excel — left blank (that's fine):</span> ${blanks.map(c => `<span class="badge">${esc(c.label)}</span>`).join(' ')}</p>` : ''}
+        <div class="card-pad" style="padding-bottom:6px"><h3>Rows <span class="muted" style="font-weight:500">· one per size · total ${fmt(total)} pieces</span></h3></div>
+        <div class="table-wrap" style="max-height:460px"><table><thead><tr><th>#</th>${(NO.showEmpty ? meta.columns.map(c => c.name).filter(n => !ROW_COLS.includes(n)) : []).concat(ROW_COLS).map(n => `<th title="${esc(level[n]?.label || '')}">${esc(n)}<span class="col-label" style="text-transform:none;letter-spacing:0">${esc(level[n]?.label || '')}</span></th>`).join('')}</tr></thead><tbody>
+          ${ops.map((op, i) => `<tr><td class="faint">${i + 1}</td>${(NO.showEmpty ? meta.columns.map(c => c.name).filter(n => !ROW_COLS.includes(n)) : []).concat(ROW_COLS).map(n => `<td>${op.values[n] == null ? '<span class="blank">—</span>' : AUTO_COLS.includes(n) ? shown(plan.table, n, op.values[n], {}) : esc(val(n, op.values[n]))}</td>`).join('')}</tr>`).join('')}
+        </tbody></table></div>
+        <p class="faint card-pad" style="padding-top:8px;padding-bottom:12px">${AUTO_COLS.join(', ')} are filled automatically when you approve (row ID, order ID, import, file, who approved, date).</p></section>`; }).join('')}`;
 }

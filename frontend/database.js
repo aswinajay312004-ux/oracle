@@ -124,7 +124,7 @@ function recordsHtml(table, rows, d) {
 
 /* ------------------------------------------------------------------ tables */
 async function tablesTab(body, selected) {
-  const tables = DB.graph.tables; selected = selected || 'ORDMAS';
+  const tables = DB.graph.tables; selected = selected || (DB.graph.mode === 'table' ? DB.graph.order_table : 'ORDMAS');
   body.innerHTML = `<div class="db-layout"><section class="card order-pick"><div style="padding:10px 12px"><label class="search">${icon('search')}<input id="t-q" placeholder="Search tables" aria-label="Search tables"></label></div><div class="items" id="t-list"></div></section><section id="t-detail"></section></div>`;
   const list = () => { const q = $('#t-q', body).value.trim().toUpperCase(); $('#t-list', body).innerHTML = tables.filter(t => !q || t.name.includes(q) || t.label.toUpperCase().includes(q)).map(t => `<button class="order-item ${t.name === selected ? 'active' : ''}" data-t="${esc(t.name)}"><strong class="mono">${esc(t.name)}</strong><small>${esc(t.label !== t.name ? t.label + ' · ' : '')}${plural(t.columns, 'column')}</small></button>`).join('');
     $$('[data-t]', body).forEach(b => b.onclick = () => { selected = b.dataset.t; history.replaceState(null, '', `#/database/tables/${selected}`); list(); show(0); }); };
@@ -184,7 +184,7 @@ function createTable() {
 
 /* ------------------------------------------------------------------ relationships */
 async function linksTab(body, preset) {
-  const tables = DB.graph.tables.map(t => t.name); const L = { parent: 'ORDMAS', child: preset && tables.includes(preset) ? preset : '', pc: null, cc: null, kind: 'application', result: null };
+  const tables = DB.graph.tables.map(t => t.name); const L = { parent: DB.graph.mode === 'table' ? DB.graph.order_table : 'ORDMAS', child: preset && tables.includes(preset) ? preset : '', pc: null, cc: null, kind: 'application', result: null };
   const cache = {}; const columns = async t => (cache[t] ||= (await api(`/api/db/tables/${encodeURIComponent(t)}`)).columns);
   const draw = async () => {
     const [pcols, ccols] = await Promise.all([columns(L.parent), L.child ? columns(L.child) : []]);

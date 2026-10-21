@@ -14,7 +14,7 @@ const Mapper = {
     Modal.open('Edit mapping', '<div id="mapper-root" class="stack" style="flex:1;min-height:0"></div>', { full: true, onClose: () => { const done = this.M?.onDone; const d = this.M?.draft; this.M = null; if (done) done(d); } });
     $('#modal-body').style.display = 'flex';
     this.render();
-    api('/api/schema/order-columns').then(c => { if (this.M) { this.M.columns = c; if (this.M.advanced) this.render(); } }).catch(() => {});
+    api('/api/schema/order-columns').then(c => { if (!this.M) return; this.M.columns = c; if (c.mode === 'table') { this.M.tcols = c; this.render(); } else if (this.M.advanced) this.render(); }).catch(() => {});
   },
   order() { return this.M.draft.orders[this.M.order] || null; },
   sources() {
@@ -27,10 +27,22 @@ const Mapper = {
       (l.sizes || []).forEach((s, si) => { add(s.source, `size:${li}:${si}:quantity`); add(s.size_source, `size:${li}:${si}:size`); }); });
     return out;
   },
+  /* Single-table mode: value of one order-level column = your mapping, else the reader's field, else the
+     automatic Excel-label match shown in the latest preview. */
+  tableCell(o, col) {
+    const prov = o.provenance || {}; const tv = (o.table_values || {})[col.name];
+    if (tv) return { target: `column:${this.M.tcols.table}.${col.name}`, value: tv.value, src: tv.source };
+    if (col.field) return { target: `field:${col.field}`, value: o[col.field], src: prov[col.field] };
+    const op = (this.M.draft.plan?.operations || []).find(x => x.order === this.M.order);
+    return { target: `column:${this.M.tcols.table}.${col.name}`, value: op?.values?.[col.name], src: op?.columns?.[col.name]?.source };
+  },
+  tableCols() { return this.M.tcols.columns.filter(c => c.level === 'order'); },
   // Status of every simple field: found in Excel / typed / optional blank / needed.
   status(value, src, required) { const has = String(value ?? '').trim() !== ''; return src?.cell && has ? 'ok' : has ? 'typed' : required ? 'needed' : 'blank'; },
   simpleTargets(o) {
     const prov = o.provenance || {};
+    if (this.M.tcols) return [...this.tableCols().map(c => { const x = this.tableCell(o, c); return { target: x.target, label: c.label, st: this.status(x.value, x.src, false) }; }),
+      ...(o.lines || []).map((l, li) => ({ target: `line:${li}:color`, label: `Colour of line ${li + 1}`, st: this.status(l.color, l.provenance?.color) }))];
     return [...ORDER_FIELDS.map(([f, , label, req]) => ({ target: `field:${f}`, label, st: this.status(o[f], prov[f], req), req })),
       { target: 'field:ship_date', label: 'Ship date', st: this.status(o.ship_date, prov.ship_date) },
       ...(o.lines || []).map((l, li) => ({ target: `line:${li}:color`, label: `Colour of line ${li + 1}`, st: this.status(l.color, l.provenance?.color) }))];
@@ -79,6 +91,13 @@ const Mapper = {
   },
   fieldsHtml(o) {
     const M = this.M; const prov = o.provenance || {};
+    if (M.tcols) {
+      const group = (title, body) => `<div class="map-group"><header><span><strong>${title}</strong> <span class="col-name faint">${esc(M.tcols.table)}</span></span></header>${body}</div>`;
+      return group('Order details · same in every row', this.tableCols().map(c => { const x = this.tableCell(o, c); return this.fieldRow(x.target, c.name, c.label, x.value, x.src); }).join(''))
+        + group('Garment / colour lines', `${(o.lines || []).map((l, li) => this.fieldRow(`line:${li}:color`, 'COMBO', `Line ${li + 1} colour`, l.color, l.provenance?.color) + this.fieldRow(`line:${li}:label`, 'GARMENT', `Line ${li + 1} garment`, l.label, l.provenance?.label)).join('')}
+          <div style="padding:8px 14px"><button class="btn small ghost" type="button" id="m-add-line">${icon('plus')} Add line</button></div>`)
+        + group('Sizes and quantities · one row each', (o.lines || []).map((l, li) => this.sizeGrid(l, li)).join('') || '<p class="faint" style="padding:10px 14px">No lines yet.</p>');
+    }
     const extras = (table, holder, line) => { const keys = [...new Set([...Object.keys(holder.extras || {}), ...M.added[table]])];
       return keys.map(k => this.fieldRow(`column:${table}.${k}`, k, COLUMN_LABELS[k] || k, holder.extras?.[k]?.value, holder.extras?.[k]?.source, { line })).join(''); };
     const addCol = (table, line) => !M.advanced ? '' : !M.columns ? `<p class="faint" style="padding:8px 14px">Connect Oracle to add more columns.</p>` :
@@ -176,17 +195,20 @@ const Mapper = {
     const M = this.M; const before = M.draft.version;
     await busy('Mapping…', async () => {
       M.draft = await api(`/api/drafts/${M.draft.id}/bind`, { method: 'POST', body: { version: M.draft.version, order: Math.min(M.order, M.draft.orders.length), target, sheet, cell, line } });
-      M.undo.push(before); M.redo = []; if (rerender) this.render();
+      M.undo.push(before); M.redo = []; await this.refresh(); if (rerender) this.render();
     });
   },
   async put(orders) {
     const M = this.M; const before = M.draft.version;
-    await busy('Saving…', async () => { M.draft = await api(`/api/drafts/${M.draft.id}`, { method: 'PUT', body: { version: M.draft.version, orders } }); M.undo.push(before); M.redo = []; this.render(); });
+    await busy('Saving…', async () => { M.draft = await api(`/api/drafts/${M.draft.id}`, { method: 'PUT', body: { version: M.draft.version, orders } }); M.undo.push(before); M.redo = []; await this.refresh(); this.render(); });
   },
+  // In single-table mode the automatic label matches live in the preview, so keep it current.
+  async refresh() { if (!this.M?.tcols) return; try { this.M.draft = await api(`/api/drafts/${this.M.draft.id}/preview`, { method: 'POST', body: { version: this.M.draft.version } }); } catch (_) { /* shown on the preview screen */ } },
   structural(change) { const orders = structuredClone(this.M.draft.orders); change(orders[this.M.order]); this.put(orders); },
   edit(target, value, line) {
     const orders = structuredClone(this.M.draft.orders); const o = orders[this.M.order]; let m;
     if ((m = /^field:(\w+)$/.exec(target))) o[m[1]] = value;
+    else if (this.M.tcols && (m = new RegExp(`^column:${this.M.tcols.table}\\.(\\w+)$`).exec(target))) { o.table_values ||= {}; o.table_values[m[1]] = { value: value === '' ? null : value }; }
     else if ((m = /^column:(ORDMAS|ORDSTYLE)\.(\w+)$/.exec(target))) { const holder = m[1] === 'ORDMAS' ? o : o.lines[line]; holder.extras ||= {}; holder.extras[m[2]] = { value }; if (value === '') delete holder.extras[m[2]]; }
     else if ((m = /^line:(\d+):(\w+)$/.exec(target))) o.lines[Number(m[1])][m[2]] = value;
     else if ((m = /^size:(\d+):(\d+):(\w+)$/.exec(target))) { const s = o.lines[Number(m[1])].sizes[Number(m[2])]; s[m[3]] = m[3] === 'quantity' ? (value.trim() === '' ? null : value.trim()) : value; }
