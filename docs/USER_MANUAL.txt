@@ -86,6 +86,12 @@ DATABASE
     tables blink aagum; andha table ah open panna blink nikkum (indha
     computer la mattum nyabagam).
 
+LIVE LINK LA PUTHU VERSION (LINK MAARAADHU)
+  - share-online.cmd window ah open laye vechukonga.
+  - update-live.cmd double-click: GitHub la irundhu puthu version eduthu,
+    POPPYS AI ah mattum restart pannum (10-30 second). Adhe link la puthu
+    version varum; paakuravanga F5 (refresh) pannanum.
+
 GAVANIKKA VENDIYADHU
   - ORDACC / ORDFAB / ORDYARN la Axpert enna meaning la vekkudhu nu innum
     Axpert la check pannala. Avanga name columns (ACCNAME, FABRIC, COUNTS)

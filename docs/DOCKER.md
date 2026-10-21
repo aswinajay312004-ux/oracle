@@ -63,8 +63,16 @@ also copied to the clipboard.
 - Free quick tunnels: the link changes every start, there is no uptime guarantee, and the laptop must stay on and awake.
   Order data passes through Cloudflare (https) while sharing is on.
 
-Tested here with simulated tunnel requests (`tests/test_share_online.py`); the script itself was only syntax-checked.
-**A real Cloudflare link has not been tried yet.**
+Tested here with simulated tunnel requests (`tests/test_share_online.py`). The owner ran it on the laptop on
+2026-10-20 and the link worked.
+
+## Update while sharing (same link)
+
+`update-live.cmd` (double-click; the `share-online.cmd` window stays open) pulls the newest version of the current
+branch (fast-forward only; it stops without changing anything if files were edited on the laptop), rebuilds the image
+and restarts only the POPPYS AI container, shared again if it was shared. The Cloudflare tunnel keeps pointing at port
+8008, so the **same link** shows the new version after a short restart (about 10–30 s); people with the page open press
+F5. Oracle and its data are not touched. Only syntax-checked here (PowerShell 7); not yet run on the laptop.
 
 ## Verified
 
