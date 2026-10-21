@@ -15,6 +15,8 @@ route('new', async (view, [id]) => {
   setTitle('New Order', 'Upload an Excel order, review it, approve it');
   if (!id) return renderUpload(view);
   if (!NO.draft || NO.draft.id !== id) NO.draft = await api(`/api/drafts/${encodeURIComponent(id)}`);
+  // Always show the Oracle preview when a draft is opened; it is rebuilt after every change.
+  if (!NO.draft.plan && !NO.draft.result) await preparePreview(true);
   renderReview(view);
 });
 
@@ -86,7 +88,7 @@ function renderReview(view) {
   const status = !plan ? ['Preview not ready', 'amber'] : errors.length ? [`${plural(errors.length, 'item')} to check`, 'amber'] : ['Ready to approve', 'green'];
   const first = orders[0] || {};
   const lines = plan ? plan.totals.lines : orders.reduce((n, o) => n + (o.lines || []).length, 0);
-  const sizes = plan ? plan.operations.filter(o => o.table === 'ORDSIZE').length : 0;
+  const sizes = plan ? plan.operations.filter(o => o.table === 'ORDSIZE').length : orders.reduce((n, o) => n + (o.lines || []).reduce((m, l) => m + (l.sizes || []).filter(s => s.quantity != null && s.quantity !== '').length, 0), 0);
   view.innerHTML = `${stepper(ready ? 3 : 2)}<div class="stack">
     <section class="card"><div class="review-bar"><div class="file"><span class="file-ico">XLS</span><div><strong>${esc(d.filename)}</strong>
       <small class="muted">${esc(d.format)} · ${plural((d.sheets || []).length, 'sheet')} · uploaded ${when(d.created_at)}</small></div>

@@ -40,3 +40,28 @@ def moved_layout():
     ws['A2'] = 'Note'; ws['B2'] = 'Moved'
     ws['A8'] = 'Buyer'; ws['B8'] = 'ABC TEXTILES'
     return save(wb)
+
+
+def merch_bom(ocn='TEST-OC-1', sample_qty=0):
+    """Merch BOM layout: header block, OCN under its label, order / sample / summary size blocks."""
+    from openpyxl.worksheet.formula import ArrayFormula
+    wb = Workbook(); ws = wb.active; ws.title = 'ST1'
+    for cell, value in {'B2': 'BUYER', 'C2': 'TEST BUYER', 'D3': 'FOB DATE', 'E3': date(2027, 2, 18), 'B3': 'SEASON', 'C3': 'SS-27',
+                        'B4': 'ITEM', 'C4': 'ST-001', 'B5': 'DESCRIPTION', 'C5': 'TEST BODYSUIT', 'E5': 'TEST-PO-1',
+                        'B6': 'MERCHANDISER', 'C6': 'TEST MERCH', 'B8': 'OCN', 'C8': 'QTY(IN PACKS)', 'D8': 'QTY(IN PIECES)'}.items():
+        ws[cell] = value
+    if ocn:
+        ws['B9'] = ocn
+    sizes = ['S', 'M', 'L']
+    for header, role, qty in ((11, 'CT-PO', [5, 7, 9]), (17, 'SAMPLE', [sample_qty] * 3), (23, 'SUMMARY', [5, 7, 9])):
+        ws.cell(header, 2, 'Garment '); ws.cell(header, 3, 'Description'); ws.cell(header, 4, 'CONTRACT')
+        for i, s in enumerate(sizes):
+            ws.cell(header, 5 + i, s)
+        ws.cell(header, 8, 'Total')
+        ws.cell(header + 1, 2, 'GARMENT-1'); ws.cell(header + 1, 3, 'NAVY'); ws.cell(header + 1, 4, role)
+        for i, q in enumerate(qty):
+            ws.cell(header + 1, 5 + i, q)
+        ws.cell(header + 1, 8, sum(qty))
+        ws.cell(header + 2, 2, 'Total')
+    ws['J20'] = ArrayFormula('J20', '=E18')
+    return save(wb)

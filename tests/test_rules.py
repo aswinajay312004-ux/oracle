@@ -159,3 +159,15 @@ def test_table_design_validation():
     for expected in ('already exists', 'reserved word', 'use letters', 'cannot contain', 'not in the table'):
         assert expected in errors
     assert database.has_cycle([dict(parent='A', child='B')], dict(parent='B', child='A'))
+
+
+def test_merch_bom_reads_ocn_prefers_real_quantities_and_keeps_array_formula_text():
+    data = workbooks.parse(factory.merch_bom())
+    o = data['orders'][0]
+    assert data['format'] == 'Merch BOM'
+    assert o['order_ref'] == 'TEST-OC-1' and o['provenance']['order_ref']['cell'] == 'B9'
+    assert o['quantity_basis'] == 'order'  # sample section is all zeros
+    assert [(s['size'], s['quantity']) for s in o['lines'][0]['sizes']] == [('S', 5), ('M', 7), ('L', 9)]
+    assert next(c for c in data['sheets'][0]['cells'] if c['cell'] == 'J20')['formula'] == '=E18'
+    filled = workbooks.parse(factory.merch_bom(ocn=None, sample_qty=2))['orders'][0]
+    assert filled['quantity_basis'] == 'sample' and filled['order_ref'] == ''

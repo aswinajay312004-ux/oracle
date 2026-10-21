@@ -27,55 +27,70 @@ const Mapper = {
       (l.sizes || []).forEach((s, si) => { add(s.source, `size:${li}:${si}:quantity`); add(s.size_source, `size:${li}:${si}:size`); }); });
     return out;
   },
+  // Status of every simple field: found in Excel / typed / optional blank / needed.
+  status(value, src, required) { const has = String(value ?? '').trim() !== ''; return src?.cell && has ? 'ok' : has ? 'typed' : required ? 'needed' : 'blank'; },
+  simpleTargets(o) {
+    const prov = o.provenance || {};
+    return [...ORDER_FIELDS.map(([f, , label, req]) => ({ target: `field:${f}`, label, st: this.status(o[f], prov[f], req), req })),
+      { target: 'field:ship_date', label: 'Ship date', st: this.status(o.ship_date, prov.ship_date) },
+      ...(o.lines || []).map((l, li) => ({ target: `line:${li}:color`, label: `Colour of line ${li + 1}`, st: this.status(l.color, l.provenance?.color) }))];
+  },
   render() {
     const M = this.M; if (!M) return; const root = $('#mapper-root'); const o = this.order();
+    const t = o ? this.simpleTargets(o) : []; const count = k => t.filter(x => x.st === k).length;
+    const guide = M.guide ? M.queue[M.step] : null;
     root.innerHTML = `<div class="row between">
-        <div class="row"><div class="seg"><button type="button" data-mode="simple" class="${M.advanced ? '' : 'active'}">Simple edit</button><button type="button" data-mode="advanced" class="${M.advanced ? 'active' : ''}">Advanced mapping</button></div>
+        <div class="row"><div class="seg"><button type="button" data-mode="simple" class="${M.advanced ? '' : 'active'}">Simple</button><button type="button" data-mode="advanced" class="${M.advanced ? 'active' : ''}">Advanced</button></div>
         ${M.draft.orders.length > 1 ? `<select id="m-order">${M.draft.orders.map((x, i) => `<option value="${i}" ${i === M.order ? 'selected' : ''}>Order ${i + 1} · ${esc(x.order_ref || x.style || '')}</option>`).join('')}</select>` : ''}
         <button class="btn small" id="m-suggest" type="button">${icon('sparkle')} Suggest mapping</button></div>
         <div class="row"><button class="icon-btn" id="m-undo" title="Undo" aria-label="Undo" ${M.undo.length ? '' : 'disabled'}>${icon('undo')}</button><button class="icon-btn" id="m-redo" title="Redo" aria-label="Redo" ${M.redo.length ? '' : 'disabled'}>${icon('redo')}</button>
-        <button class="btn small" id="m-template" type="button">${icon('save')} Save as buyer template</button><button class="btn primary" id="m-done" type="button">${icon('check')} Save mapping &amp; preview</button></div></div>
-      ${M.armed ? `<div class="callout info">${icon('info')}<div>Click the Excel cell that holds <strong>${esc(M.armedLabel)}</strong>. <button class="btn small" id="m-disarm">Cancel</button></div></div>` : ''}
+        <button class="btn small" id="m-template" type="button">${icon('save')} Save as buyer template</button><button class="btn primary" id="m-done" type="button">${icon('check')} Done — show preview</button></div></div>
+      ${o ? `<div class="map-summary"><span class="ms ok">${icon('check')} ${count('ok')} found in Excel</span>${count('typed') ? `<span class="ms typed">${icon('edit')} ${count('typed')} typed</span>` : ''}<span class="ms blank">${icon('info')} ${count('blank')} optional, left blank</span>${count('needed') ? `<span class="ms needed">${icon('alert')} ${count('needed')} needed</span>` : ''}
+        <span class="ms-help">Three easy ways: <b>click a field, then click the Excel cell</b> · drag a cell onto a field · or just type.</span>
+        ${!M.guide && (count('needed') + count('blank')) ? `<button class="btn small soft" id="m-guide" type="button">${icon('arrow')} Fill missing fields one by one</button>` : ''}</div>` : ''}
+      ${guide ? `<div class="callout success guide">${icon('arrow')}<div><strong>Step ${M.step + 1} of ${M.queue.length}:</strong> click the Excel cell that holds <strong>${esc(guide.label)}</strong> — or type it on the left.</div><button class="btn small" id="m-skip">Skip</button><button class="btn small ghost" id="m-stop">Stop</button></div>`
+        : M.armed ? `<div class="callout info">${icon('info')}<div>Now click the Excel cell that holds <strong>${esc(M.armedLabel)}</strong>.</div><button class="btn small" id="m-disarm">Cancel</button></div>` : ''}
       <div id="m-template-form" hidden class="row"><input id="m-template-name" placeholder="Template name, e.g. ${esc((o?.buyer || 'Buyer') + ' order format')}" style="min-width:280px"><button class="btn small primary" id="m-template-save">Save template</button><span class="muted">Reused automatically when the same layout is uploaded again.</span></div>
       ${M.suggestions ? this.suggestionsHtml() : ''}
       <div class="mapper">
-        <section class="card"><div class="card-head"><div><h2>Oracle mapping</h2><span class="sub">Drop an Excel cell on a field, or type the value</span></div></div><div class="pane-body">${o ? this.fieldsHtml(o) : this.noOrderHtml()}</div></section>
-        <section class="card"><div class="card-head"><div><h2>Original Excel</h2><span class="sub">Read-only · drag a cell to the left</span></div></div>
+        <section class="card"><div class="card-head"><div><h2>Oracle fields</h2><span class="sub">${M.advanced ? 'All mappable columns, line extras and size rows' : 'Only the fields that matter. Blank optional fields are fine.'}</span></div></div><div class="pane-body">${o ? this.fieldsHtml(o) : this.noOrderHtml()}</div></section>
+        <section class="card ${M.armed ? 'picking' : ''}"><div class="card-head"><div><h2>Original Excel</h2><span class="sub">Read-only · ${M.armed ? 'click a cell to use it' : 'green cells are already used'}</span></div></div>
           <div class="sheet-tabs">${M.draft.sheets.map(s => `<button type="button" data-sheet="${esc(s.name)}" class="${s.name === M.sheet ? 'active' : ''}">${esc(s.name)}${s.hidden ? ' (hidden)' : ''}</button>`).join('')}</div>
           <div class="pane-body" id="m-grid">${this.gridHtml()}</div><div class="cell-info" id="m-cell-info">${this.cellInfo()}</div></section>
       </div>`;
     paintIcons(root); this.wire(root);
   },
-  noOrderHtml() { return `<div class="empty">${icon('info')}<p>No order was recognised automatically.<br>Drag the order reference cell here to start, or use Suggest mapping.</p><div class="map-row" data-target="field:order_ref" style="margin-top:10px"><div class="target"><span class="col-name">DOCID</span><span class="col-label">Order reference</span></div><span class="faint">drop a cell</span><span></span></div></div>`; },
+  noOrderHtml() { return `<div class="empty">${icon('info')}<p>No order was recognised automatically.<br>Click <b>Order reference</b>, then click the Excel cell that holds it.</p></div>${this.fieldRow('field:order_ref', 'DOCID', 'Order reference', '', null, { required: true })}`; },
   fieldRow(target, col, label, value, src, opts = {}) {
-    const missing = opts.required && !String(value ?? '').trim();
-    return `<div class="map-row ${missing ? 'missing-required' : ''} ${this.M.armed === target + (opts.line != null ? '@' + opts.line : '') ? 'armed' : ''}" data-target="${esc(target)}" ${opts.line != null ? `data-line="${opts.line}"` : ''} data-label="${esc(label)}">
-      <div class="target"><span class="col-name">${esc(col)}</span><span class="col-label">${esc(label)}${opts.required ? ' · needed' : ''}${opts.note ? ' · ' + esc(opts.note) : ''}</span></div>
-      <input value="${esc(value ?? '')}" data-edit="${esc(target)}" ${opts.line != null ? `data-line="${opts.line}"` : ''} ${opts.readonly ? 'disabled' : ''} placeholder="${missing ? 'Needed' : 'Optional · blank'}" aria-label="${esc(label)}">
-      <span class="src">${sourceChip(src)}<button class="icon-btn" type="button" data-arm="${esc(target)}" ${opts.line != null ? `data-line="${opts.line}"` : ''} title="Pick an Excel cell" aria-label="Pick cell for ${esc(label)}">${icon('fit')}</button>${src?.cell ? `<button class="icon-btn" type="button" data-clear="${esc(target)}" ${opts.line != null ? `data-line="${opts.line}"` : ''} title="Remove mapping" aria-label="Remove mapping">${icon('x')}</button>` : ''}</span></div>`;
+    const st = this.status(value, src, opts.required); const line = opts.line != null ? `data-line="${opts.line}"` : '';
+    const armed = this.M.armed === target + (opts.line != null ? '@' + opts.line : '');
+    const ic = { ok: 'check', typed: 'edit', blank: 'info', needed: 'alert' }[st];
+    return `<div class="map-row st-${st} ${armed ? 'armed' : ''}" data-target="${esc(target)}" ${line} data-label="${esc(label)}">
+      <button type="button" class="pick" data-arm="${esc(target)}" ${line} title="Click, then click the Excel cell"><span class="st">${icon(ic)}</span><span><span class="flabel">${esc(label)}${st === 'needed' ? ' <em>needed</em>' : ''}</span><span class="col-name">${esc(col)}${opts.note ? ' · ' + esc(opts.note) : ''}</span></span></button>
+      <input value="${esc(value ?? '')}" data-edit="${esc(target)}" ${line} placeholder="${st === 'needed' ? 'Needed — click a cell or type' : 'Blank is OK'}" aria-label="${esc(label)}">
+      <span class="src">${sourceChip(src)}${src?.cell ? `<button class="icon-btn" type="button" data-clear="${esc(target)}" ${line} title="Remove mapping" aria-label="Remove mapping">${icon('x')}</button>` : ''}</span></div>`;
+  },
+  sizeGrid(l, li) {
+    const sizes = l.sizes || []; const total = sizes.reduce((n, s) => n + num(s.quantity), 0);
+    const check = l.declared_total == null ? '' : num(l.declared_total) === total ? `<span class="badge green">${icon('check')} matches Excel total ${fmt(l.declared_total)}</span>` : `<span class="badge amber">Excel total ${fmt(l.declared_total)}</span>`;
+    return `<div class="size-block"><div class="row between"><strong>Line ${li + 1}${l.color ? ' · ' + esc(l.color) : ''}</strong><span class="row" style="gap:6px"><span class="muted">Total ${fmt(total)}</span>${check}</span></div>
+      <div class="table-wrap"><table class="size-grid"><thead><tr><th>Size</th>${sizes.map((s, si) => `<th><input value="${esc(s.size)}" data-edit="size:${li}:${si}:size" aria-label="Size name" title="${s.size_source?.cell ? 'From ' + esc(s.size_source.cell) : ''}"></th>`).join('')}<th><button class="icon-btn" type="button" data-add-size="${li}" title="Add size" aria-label="Add size">${icon('plus')}</button></th></tr></thead>
+      <tbody><tr><th>Qty</th>${sizes.map((s, si) => `<td data-target="size:${li}:${si}:quantity" data-label="Quantity of size ${esc(s.size)}" class="${s.source?.cell ? 'from-excel' : ''}" title="${s.source?.cell ? 'From Excel ' + esc(s.source.cell) : 'Drop a cell here or type'}"><input value="${esc(s.quantity ?? '')}" data-edit="size:${li}:${si}:quantity" inputmode="numeric" aria-label="Quantity of ${esc(s.size)}" placeholder="—"></td>`).join('')}<td></td></tr></tbody></table></div></div>`;
   },
   fieldsHtml(o) {
     const M = this.M; const prov = o.provenance || {};
     const extras = (table, holder, line) => { const keys = [...new Set([...Object.keys(holder.extras || {}), ...M.added[table]])];
-      return keys.map(k => this.fieldRow(`column:${table}.${k}`, k, COLUMN_LABELS[k] || 'Extra column', holder.extras?.[k]?.value, holder.extras?.[k]?.source, { line })).join(''); };
+      return keys.map(k => this.fieldRow(`column:${table}.${k}`, k, COLUMN_LABELS[k] || k, holder.extras?.[k]?.value, holder.extras?.[k]?.source, { line })).join(''); };
     const addCol = (table, line) => !M.advanced ? '' : !M.columns ? `<p class="faint" style="padding:8px 14px">Connect Oracle to add more columns.</p>` :
-      `<div class="row" style="padding:8px 14px"><input list="cols-${table}" data-addcol="${table}" ${line != null ? `data-line="${line}"` : ''} placeholder="Add Oracle column (search ${table})…" style="flex:1"><datalist id="cols-${table}">${M.columns[table].columns.filter(c => c.mappable).map(c => `<option value="${esc(c.name)}">${esc(c.type)}</option>`).join('')}</datalist></div>`;
-    return `<div class="map-group"><header><span><span class="col-name">ORDMAS</span> <span class="muted">· Order header</span></span><span class="badge">1 record</span></header>
-        ${ORDER_FIELDS.map(([f, col, label, req]) => this.fieldRow(`field:${f}`, col, label, o[f], prov[f], { required: req })).join('')}
-        ${M.advanced ? this.fieldRow('field:season', '—', 'Season', o.season, prov.season, { note: 'reference only, not saved' }) : ''}
-        ${extras('ORDMAS', o)}${addCol('ORDMAS')}</div>
-      <div class="map-group"><header><span><span class="col-name">ORDSTYLE</span> <span class="muted">· Order lines</span></span><span class="badge">${plural((o.lines || []).length, 'line')}</span></header>
-        ${this.fieldRow('field:ship_date', 'SHIPDT', 'Ship date (all lines)', o.ship_date, prov.ship_date)}
-        ${(o.lines || []).map((l, li) => `<div class="map-row" style="background:var(--surface-2)"><strong>Line ${li + 1}</strong><span class="muted">${esc(l.label || '')}</span><button class="btn small ghost danger" type="button" data-remove-line="${li}">Remove line</button></div>
-          ${this.fieldRow(`line:${li}:color`, 'COMBO', 'Colour / combo', l.color, l.provenance?.color)}${M.advanced ? this.fieldRow(`line:${li}:label`, '—', 'Garment / component', l.label, l.provenance?.label, { note: 'reference only' }) : ''}
-          ${extras('ORDSTYLE', l, li)}${addCol('ORDSTYLE', li)}`).join('')}
-        <div style="padding:8px 14px"><button class="btn small" type="button" id="m-add-line">${icon('plus')} Add line</button></div></div>
-      <div class="map-group"><header><span><span class="col-name">ORDSIZE</span> <span class="muted">· Size quantities</span></span></header>
-        ${(o.lines || []).map((l, li) => `<div style="padding:6px 14px 2px" class="muted">Line ${li + 1}${l.color ? ' · ' + esc(l.color) : ''}${l.declared_total != null ? ` · Excel total ${esc(l.declared_total)}` : ''}</div>
-          ${(l.sizes || []).map((s, si) => `<div class="map-row" data-target="size:${li}:${si}:quantity" data-label="Quantity of size ${esc(s.size)}"><div class="row" style="gap:6px;flex-wrap:nowrap"><input value="${esc(s.size)}" data-edit="size:${li}:${si}:size" aria-label="Size" style="width:70px" placeholder="Size">${sourceChip(s.size_source)}</div>
-            <input value="${esc(s.quantity ?? '')}" data-edit="size:${li}:${si}:quantity" inputmode="numeric" aria-label="Quantity" placeholder="blank = no record">
-            <span class="src">${sourceChip(s.source)}<button class="icon-btn" type="button" data-arm="size:${li}:${si}:quantity" title="Pick quantity cell">${icon('fit')}</button><button class="icon-btn" type="button" data-remove-size="${li}:${si}" title="Remove size">${icon('x')}</button></span></div>`).join('')}
-          <div style="padding:4px 14px 10px"><button class="btn small ghost" type="button" data-add-size="${li}">${icon('plus')} Add size</button></div>`).join('') || '<p class="faint" style="padding:10px 14px">No lines. Add a line to enter sizes.</p>'}</div>`;
+      `<div class="row" style="padding:8px 14px"><input list="cols-${table}" data-addcol="${table}" ${line != null ? `data-line="${line}"` : ''} placeholder="Add another Oracle column (search ${table})…" style="flex:1"><datalist id="cols-${table}">${M.columns[table].columns.filter(c => c.mappable).map(c => `<option value="${esc(c.name)}">${esc(c.type)}</option>`).join('')}</datalist></div>`;
+    const group = (title, table, body) => `<div class="map-group"><header><span><strong>${title}</strong> <span class="col-name faint">${table}</span></span></header>${body}</div>`;
+    return group('Order details', 'ORDMAS', `${ORDER_FIELDS.map(([f, col, label, req]) => this.fieldRow(`field:${f}`, col, label, o[f], prov[f], { required: req })).join('')}
+          ${this.fieldRow('field:ship_date', 'SHIPDT', 'Ship date', o.ship_date, prov.ship_date)}
+          ${M.advanced ? this.fieldRow('field:season', '—', 'Season', o.season, prov.season, { note: 'reference only, not saved' }) : ''}${extras('ORDMAS', o)}${addCol('ORDMAS')}`)
+      + group('Garment / colour lines', 'ORDSTYLE', `${(o.lines || []).map((l, li) => `${this.fieldRow(`line:${li}:color`, 'COMBO', `Line ${li + 1} colour${l.label ? ' · ' + l.label : ''}`, l.color, l.provenance?.color)}
+          ${M.advanced ? `${this.fieldRow(`line:${li}:label`, '—', `Line ${li + 1} garment`, l.label, l.provenance?.label, { note: 'reference only' })}${extras('ORDSTYLE', l, li)}${addCol('ORDSTYLE', li)}<div style="padding:4px 14px 8px"><button class="btn small ghost danger" type="button" data-remove-line="${li}">Remove line ${li + 1}</button></div>` : ''}`).join('')}
+          <div style="padding:8px 14px"><button class="btn small ghost" type="button" id="m-add-line">${icon('plus')} Add line</button></div>`)
+      + group('Size quantities', 'ORDSIZE', (o.lines || []).map((l, li) => this.sizeGrid(l, li)).join('') || '<p class="faint" style="padding:10px 14px">No lines yet.</p>');
   },
   gridHtml() {
     const sheet = this.M.draft.sheets.find(s => s.name === this.M.sheet); if (!sheet) return '<div class="empty">No sheet.</div>';
@@ -115,6 +130,9 @@ const Mapper = {
     $('#m-order', root)?.addEventListener('change', e => { M.order = Number(e.target.value); this.render(); });
     $$('[data-sheet]', root).forEach(b => b.onclick = () => { M.sheet = b.dataset.sheet; this.render(); });
     $('#m-disarm', root)?.addEventListener('click', () => { M.armed = null; this.render(); });
+    $('#m-guide', root)?.addEventListener('click', () => { const o = this.order(); M.queue = this.simpleTargets(o).filter(x => x.st === 'needed').concat(this.simpleTargets(o).filter(x => x.st === 'blank')); M.step = 0; M.guide = true; this.armGuide(); });
+    $('#m-skip', root)?.addEventListener('click', () => { M.step++; this.armGuide(); });
+    $('#m-stop', root)?.addEventListener('click', () => { M.guide = false; M.armed = null; this.render(); });
     $('#m-done', root).onclick = () => Modal.close();
     $('#m-template', root).onclick = () => { const f = $('#m-template-form', root); f.hidden = !f.hidden; if (!f.hidden) $('#m-template-name', root).focus(); };
     $('#m-template-save', root).onclick = () => busy('Saving template…', async () => { const name = $('#m-template-name', root).value.trim(); if (name.length < 2) throw new Error('Enter a template name.');
@@ -128,9 +146,9 @@ const Mapper = {
     const grid = $('#m-grid', root);
     grid.addEventListener('dragstart', e => { const td = e.target.closest('td[data-cell]'); if (!td) return; e.dataTransfer.setData('text/plain', JSON.stringify({ sheet: M.sheet, cell: td.dataset.cell })); e.dataTransfer.effectAllowed = 'copy'; });
     grid.addEventListener('click', e => { const td = e.target.closest('td[data-cell]'); if (!td) return;
-      if (M.armed) { const [target, line] = M.armed.split('@'); M.armed = null; this.bind(target, M.sheet, td.dataset.cell, line === undefined ? null : Number(line)); return; }
+      if (M.armed) { const [target, line] = M.armed.split('@'); M.armed = null; this.bind(target, M.sheet, td.dataset.cell, line === undefined ? null : Number(line)).then(() => { if (M.guide) { M.step++; this.armGuide(); } }); return; }
       M.selected = td.dataset.cell; $$('td.selected', grid).forEach(x => x.classList.remove('selected')); td.classList.add('selected'); $('#m-cell-info', root).innerHTML = this.cellInfo(); });
-    $$('.map-row[data-target]', root).forEach(row => {
+    $$('[data-target]', root).forEach(row => {
       row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('drop-ok'); });
       row.addEventListener('dragleave', () => row.classList.remove('drop-ok'));
       row.addEventListener('drop', e => { e.preventDefault(); row.classList.remove('drop-ok'); try { const d = JSON.parse(e.dataTransfer.getData('text/plain')); this.bind(row.dataset.target, d.sheet, d.cell, row.dataset.line == null ? null : Number(row.dataset.line)); } catch (_) {} });
@@ -148,6 +166,11 @@ const Mapper = {
     $$('[data-remove-line]', root).forEach(b => b.onclick = () => this.structural(o => o.lines.splice(Number(b.dataset.removeLine), 1)));
     $$('[data-add-size]', root).forEach(b => b.onclick = () => this.structural(o => o.lines[Number(b.dataset.addSize)].sizes.push({ size: '', quantity: null })));
     $$('[data-remove-size]', root).forEach(b => b.onclick = () => { const [li, si] = b.dataset.removeSize.split(':').map(Number); this.structural(o => o.lines[li].sizes.splice(si, 1)); });
+  },
+  armGuide() {
+    const M = this.M; const left = M.queue[M.step];
+    if (!left) { M.guide = false; M.armed = null; this.render(); toast('All fields reviewed. Press “Done — show preview”.'); return; }
+    M.armed = left.target; M.armedLabel = left.label; this.render();
   },
   async bind(target, sheet, cell, line = null, rerender = true) {
     const M = this.M; const before = M.draft.version;

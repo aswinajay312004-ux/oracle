@@ -298,6 +298,34 @@ td .sub { display: block; font-size: 12px; color: var(--muted); }
 .cell-info { padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--text-2); background: var(--surface-2); min-height: 38px; }
 .suggestion { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 
+/* simple, guided mapping */
+.map-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+.ms { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+.ms .ico { width: 14px; height: 14px; }
+.ms.ok { background: var(--accent-soft); color: var(--accent-strong); } .ms.typed { background: var(--violet-soft); color: var(--violet); }
+.ms.blank { background: #f1f4f2; color: var(--muted); } .ms.needed { background: var(--amber-soft); color: var(--amber); }
+.ms-help { flex: 1; min-width: 240px; font-size: 12.5px; color: var(--muted); }
+.callout.guide { align-items: center; }
+.pick { display: flex; align-items: center; gap: 9px; border: none; background: none; padding: 2px 0; text-align: left; font: inherit; cursor: pointer; min-width: 0; color: inherit; }
+.pick:hover .flabel { color: var(--accent-strong); text-decoration: underline; }
+.pick .flabel { display: block; font-weight: 600; font-size: 13px; }
+.pick .flabel em { font-style: normal; font-size: 11px; color: var(--amber); font-weight: 650; }
+.pick .col-name { font-size: 10.5px; color: var(--faint); }
+.st { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; flex: none; }
+.st .ico { width: 14px; height: 14px; }
+.st-ok .st { background: var(--accent-soft); color: var(--accent); } .st-typed .st { background: var(--violet-soft); color: var(--violet); }
+.st-blank .st { background: #f1f4f2; color: var(--faint); } .st-needed .st { background: var(--amber-soft); color: var(--amber); }
+.st-needed { background: #fffcf4; }
+.picking .xl td.has { cursor: crosshair; }
+.size-block { padding: 10px 14px; border-top: 1px solid #f0f4f2; display: flex; flex-direction: column; gap: 6px; }
+.size-grid { width: auto; border: 1px solid var(--line); border-radius: 8px; border-collapse: separate; border-spacing: 0; }
+.size-grid th, .size-grid td { padding: 4px; border-right: 1px solid #eef2f0; text-transform: none; letter-spacing: 0; position: static; }
+.size-grid th:first-child { font-size: 11px; color: var(--muted); padding: 4px 8px; }
+.size-grid input { width: 64px; padding: 4px 6px; font-size: 12.5px; text-align: center; }
+.size-grid thead input { font-weight: 600; background: var(--surface-2); }
+.size-grid td.from-excel input { border-color: var(--accent-line); background: #f4fbf7; }
+.size-grid td.drop-ok { background: #eef8f2; outline: 1.5px dashed var(--accent); }
+
 /* ---------- orders ---------- */
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .toolbar .search { flex: 1; min-width: 200px; }

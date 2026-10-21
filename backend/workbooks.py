@@ -1,7 +1,7 @@
 """Read-only workbook ingestion. Workbook text is data, never executable instructions."""
 from __future__ import annotations
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from io import BytesIO
 import re
 from zipfile import ZipFile, BadZipFile
@@ -25,6 +25,8 @@ def scalar(cell):
     value = cell.value
     if isinstance(value, (datetime,date)):
         return value.isoformat()[:10]
+    if isinstance(value, (time,timedelta)):
+        return str(value)
     if isinstance(value, (int,float)) and re.fullmatch(r'0{2,}',cell.number_format):
         return str(int(value)).zfill(len(cell.number_format))
     return value.strip() if isinstance(value,str) else value
@@ -65,6 +67,9 @@ def inspect(content):
             for cell in row:
                 if cell.value is not None:
                     formula=cell.value if cell.data_type=='f' else None
+                    if formula is not None and not isinstance(formula,str):
+                        # Array / data-table formulas: keep their formula text, never the object.
+                        formula=str(getattr(formula,'text',None) or formula)
                     value=scalar(cached[ws.title][cell.coordinate]) if formula else scalar(cell)
                     cells.append(dict(cell=cell.coordinate,row=cell.row,col=cell.column,value=value,
                         formula=formula,format=cell.number_format if cell.number_format!='General' else None,hidden=bool(ws.row_dimensions[cell.row].hidden or ws.column_dimensions[cell.column_letter].hidden),
@@ -113,10 +118,19 @@ def parse(content):
                         sizes=[dict(size=text(v(header,c)),quantity=v(r,c),source=p(r,c),size_source=p(header,c)) for c in range(5,total_col)]))
                 return result
             o['order_lines']=lines('order'); o['sample_lines']=lines('sample')
-            o['lines']=deepcopy(o['sample_lines']); o['quantity_basis']='sample'; o['pieces_per_unit']=1
-            o['warnings']=['Sample section selected. Switch to order quantities if this is a bulk order. Summary repeats are excluded.',
-                'Fabric and accessory schedules remain reference-only in this sample-order import.',
-                'BOM date is not an order confirmation date. Confirm the order date below.']
+            # OCN (order confirmation number) sits under its label in the quantity header row.
+            if norm(v(8,2))=='ocn' and v(9,2) is not None:setval(o,'order_ref',9,2)
+            def total(ls):return sum(s['quantity'] for l in ls for s in l['sizes'] if isinstance(s['quantity'],(int,float)) and not isinstance(s['quantity'],bool))
+            # An all-zero sample section holds no sample quantities; the order section is then the only real source.
+            use_sample=bool(o['sample_lines']) and (total(o['sample_lines'])>0 or not o['order_lines'])
+            o['quantity_basis']='sample' if use_sample else 'order'
+            o['lines']=deepcopy(o['sample_lines'] if use_sample else o['order_lines']); o['pieces_per_unit']=1
+            o['warnings']=[('Sample section selected. Switch to order quantities if this is a bulk order.' if use_sample else
+                    'Order quantities selected (the sample section is empty). Switch to the sample section if needed.')+' Summary repeats are excluded.',
+                'Fabric and accessory schedules remain reference-only in this import.',
+                'BOM date is not an order confirmation date. Enter the order date if you have it.']
+            if norm(v(8,4))=='qty in pieces' and isinstance(v(9,4),(int,float)) and o['order_lines'] and total(o['order_lines'])!=v(9,4):
+                o['warnings'].append(f'The garment lines add up to {total(o["order_lines"])} pieces, but QTY(IN PIECES) in {p(9,4)["cell"]} says {v(9,4)}. Check the size quantities.')
             orders.append(o); formats.append('Merch BOM')
         elif any(norm(c['value'])=='contract confirmation report' for c in sheet['cells']):
             for cell in sheet['cells']:
