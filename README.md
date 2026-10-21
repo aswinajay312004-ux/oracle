@@ -4,6 +4,20 @@ A local, offline, admin-only application that turns a buyer's Excel order into O
 
 **Upload → Review → Approve.** Nothing is written to Oracle until the admin approves the exact preview.
 
+## Simple mode: one Oracle table (default)
+
+`python scripts/create_order_table.py` creates **one** table, `GARMENT_DEMO.EXCEL_ORDERS`. It holds one row per size, and the order details repeat on every row, like the client's own `ORDERENTRY`. It uses familiar column names: IONO, BUYERNAME, STYLENO, PONUM, SHIPDT, COMBO, SIZES, ORDERQTY and so on. Every column's Oracle comment lists the Excel labels it accepts (for example `FOB date|Ship date|Delivery date`). After upload, POPPYS reads those labels from Oracle and fills each column from the matching Excel cell automatically. A column added later is matched the same way. Existing Oracle tables are not changed or deleted; in this mode the app only shows and writes this table. Set `ORDER_TARGET=erp` in `.env.poppys` to use the ORDMAS/ORDSTYLE/ORDSIZE writer instead.
+
+## AI-ready data foundation
+
+A local metadata store beside Oracle (nothing is added to client business tables), ready for a future question-answering assistant:
+
+- **Catalog ID cards** (Database → Catalog). Structure and Oracle structure changes are read automatically. People write the business name, purpose, grain (what one row is), column meanings and synonyms. Status moves one checked step at a time: Discovered → Documented → Joins verified → Business approved → AI ready.
+- **Order identity and lineage**: every approved order gets a UUID linked to its Oracle rows. Every saved value records its Excel file (hash), sheet, cell, raw value, conversion, approver and read-back result. Original and current values are both kept after approved edits (order → *Data trail*).
+- **Blank meanings**: PROVIDED, NOT_PROVIDED (not in Excel), UNKNOWN (label present, value empty), NOT_APPLICABLE (marked N/A by the reviewer). An absent field is never turned into "no".
+- **Quality results** per approval. **Business metrics** are versioned and stay *proposed* until approved; the system never approves its own formulas.
+- **Future AI APIs**: `GET /api/catalog/search?q=`, `GET /api/catalog/tables/{name}`, `GET /api/orders/{id}/lineage?column=`, `GET /api/ai/context?q=`. The last one returns only AI-ready tables, verified joins, approved metrics and a read-only query policy.
+
 ## Sections
 
 | Section | What it does |
@@ -38,7 +52,8 @@ A local, offline, admin-only application that turns a buyer's Excel order into O
 1. Start Docker Desktop and confirm the existing `oracle26ai` container is healthy.
 2. Run `python scripts/bootstrap_local.py` once. It creates the limited `POPPYS_APP` account and the ignored `.env.poppys` file. It does not reset or delete `GARMENT_DEMO`.
 3. Run `python scripts/upgrade_local.py`. It is additive and re-runnable. It grants read access for the explorer and update access to `ORDMAS/ORDSTYLE/ORDSIZE` for approved edits. It also creates the change and schema audit tables and the guarded schema-change procedure.
-4. Run `start.bat` (Command Prompt, or double-click it) or `./start.ps1` (PowerShell), open `http://127.0.0.1:8008`, create the admin account and upload a workbook.
+4. Run `python scripts/create_order_table.py` (once; creates only `EXCEL_ORDERS`).
+5. Run `start.bat` (Command Prompt, or double-click it) or `./start.ps1` (PowerShell), open `http://127.0.0.1:8008`, create the admin account and upload a workbook.
 
 For a fresh development or CI container only, `python scripts/create_test_schema.py` builds a **synthetic** `GARMENT_DEMO` from `docs/live_schema_columns.json`. It refuses to run if `GARMENT_DEMO` exists.
 

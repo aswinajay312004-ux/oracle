@@ -8,14 +8,14 @@ import secrets
 import threading
 import time
 import uuid
-from fastapi import FastAPI, UploadFile, File, Request, Response, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Request, Response, HTTPException, Depends, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 import httpx
 import oracledb
-from . import local_store as store, oracle_store as oracle, workbooks, mapping, database, order_table
+from . import local_store as store, oracle_store as oracle, workbooks, mapping, database, order_table, foundation
 from .config import DATA, ROOT, setting
 
 LOCK=threading.RLock()
@@ -23,7 +23,7 @@ ATTEMPTS={}
 
 @asynccontextmanager
 async def lifespan(app):
-    store.init()
+    store.init();foundation.init()
     yield
 
 app=FastAPI(title='POPPYS AI — Excel to Oracle orders',lifespan=lifespan)
@@ -238,6 +238,9 @@ def accept(id:str,data:Approval,user=Depends(authenticated)):
         result=(order_table.commit if d['plan'].get('mode')=='table' else oracle.commit)(d,data.plan_hash,user)
         d['result']=result;d['version']+=1
         store.save(d,user,data.version)
+        # Oracle is committed; the lineage/identity record follows from the durable receipt and is repaired by reconcile().
+        try:foundation.record(d,result,user)
+        except Exception:store.log(user,'Lineage will be completed by the next catalog refresh',id)
         store.log(user,'Approved and saved to Oracle',', '.join(o['order_ref'] for o in result['orders']),dict(job=id,rows=len(result['rows'])))
         return result
 
@@ -618,6 +621,9 @@ def create_table(data:CreateTable,user=Depends(authenticated)):
         if data.confirm.strip().upper()!=result['table']:raise HTTPException(409,'Type the table name to confirm.')
         database.apply_ddl(conn,'CREATE_TABLE',result['table'],result['ddl'],user)
     store.log(user,'Created Oracle table',result['table'],dict(ddl=result['ddl']))
+    try:
+        with oracle.connect() as conn:foundation.sync(conn,user,known())  # the new table gets its ID card (DISCOVERED)
+    except Exception:pass
     return dict(created=result['table'],ddl=result['ddl'])
 
 class RelationshipSpec(BaseModel):
@@ -659,6 +665,101 @@ def schema_changes(user=Depends(authenticated)):
     with oracle.connect() as conn:
         try:return database.schema_log(conn)
         except oracledb.Error:return []
+
+# ------------------------------------------------------------------ AI-ready foundation
+
+GRAIN={'ORDMAS':'one order','ORDSTYLE':'one garment / colour line of an order','ORDSIZE':'one size of one order line','BUYMAS':'one buyer',
+    'STYLENUM':'one style number','STYLEMAS':'one garment description','SIZE_MAS':'one size name','COLORMAS':'one colour','UNITMAS':'one unit','MERCHMAS':'one merchandiser'}
+
+def known():
+    """Meaning POPPYS can state from its own writer; everything else stays undocumented until a person writes it."""
+    out={t:(name,purpose,GRAIN.get(t)) for t,(name,purpose) in oracle.TABLE_INFO.items()}
+    out[order_table.TABLE]=('Excel orders',order_table.PURPOSE,'one size of one order line; the order details repeat on every row')
+    return out
+
+def reconcile(user):
+    """Repair lineage for any committed import whose metadata write did not finish (for example after a crash)."""
+    done=0
+    with store.db() as c:have={r[0] for r in c.execute('SELECT DISTINCT job_id FROM order_registry')}
+    for record in oracle.history():
+        if record['job_id'] in have:continue
+        try:draft=store.get(record['job_id'])
+        except KeyError:
+            # Saved from another workspace: identity and saved values come from the Oracle receipt; the Excel source is unknown here.
+            draft=dict(plan={},orders=[],filehash=None,filename='(Excel not in this workspace)',version=None)
+        with oracle.connect() as conn:receipt=oracle.read_result(conn.cursor(),record['job_id'])
+        foundation.record(draft,receipt,record['approver']);done+=1
+    return done
+
+@app.get('/api/catalog')
+def catalog(user=Depends(authenticated)):
+    return dict(tables=foundation.tables(),changes=foundation.schema_changes(5),statuses=foundation.STATUSES)
+
+@app.post('/api/catalog/refresh')
+def catalog_refresh(user=Depends(authenticated)):
+    with oracle.connect() as conn:
+        result=foundation.sync(conn,user,known())
+        if order_table.exists(conn):foundation.seed_metrics(order_table.TABLE)
+    result['lineage_repaired']=reconcile(user)
+    store.log(user,'Refreshed the data catalog',f"{result['tables']} tables",dict(added=result['added'],removed=result['removed'],changed=result['changed']))
+    return result
+
+@app.get('/api/catalog/search')
+def catalog_search(q:str,ai_ready:bool=False,user=Depends(authenticated)):return foundation.search(q,30,ai_ready)
+
+@app.get('/api/catalog/changes')
+def catalog_changes(user=Depends(authenticated)):return foundation.schema_changes(50)
+
+@app.get('/api/catalog/tables/{name}')
+def catalog_card(name:str,user=Depends(authenticated)):
+    with oracle.connect() as conn:rels=relationships(conn)
+    return foundation.card(name.upper(),rels,foundation.metrics())
+
+class Documentation(BaseModel):
+    business_name:str|None=None;purpose:str|None=None;grain:str|None=None;domain:str|None=None;classification:str|None=None
+    status:str|None=None;columns:list[dict]=Field(default=[],max_length=500)
+
+@app.post('/api/catalog/tables/{name}')
+def catalog_document(name:str,data:Documentation,user=Depends(authenticated)):
+    foundation.document(name.upper(),data.model_dump(exclude_none=True),user)
+    store.log(user,'Documented table',name.upper(),dict(status=data.status))
+    return catalog_card(name,user)
+
+class MetricIn(BaseModel):
+    name:str;definition:str;formula:str|None=None;source_tables:list[str]=[];grain:str|None=None
+    filters:str|None=None;null_handling:str|None=None;duplicate_handling:str|None=None
+
+@app.get('/api/metrics')
+def list_metrics(user=Depends(authenticated)):return foundation.metrics()
+
+@app.post('/api/metrics')
+def add_metric(data:MetricIn,user=Depends(authenticated)):
+    v=foundation.propose_metric(data.model_dump(),user);store.log(user,'Proposed metric',f'{data.name} v{v}');return dict(version=v)
+
+@app.post('/api/metrics/{mid}/approve')
+def approve_metric(mid:int,user=Depends(authenticated)):
+    foundation.approve_metric(mid,user);store.log(user,'Approved metric',str(mid));return {'ok':True}
+
+@app.get('/api/orders/{ordmasid}/foundation')
+def order_foundation(ordmasid:int,user=Depends(authenticated)):
+    profile=foundation.order_profile(ordmasid)
+    if not profile:
+        reconcile(user);profile=foundation.order_profile(ordmasid)
+    if not profile:raise KeyError('No data trail for this order')
+    return profile
+
+@app.get('/api/orders/{ordmasid}/lineage')
+def order_lineage(ordmasid:int,column:str,row:int|None=None,user=Depends(authenticated)):
+    try:changes=oracle.change_history(ordmasid)
+    except oracledb.Error:changes=[]
+    return dict(lineage=foundation.lineage(ordmasid,column.upper(),row),history=foundation.value_history(ordmasid,column.upper(),
+        [c for c in changes if row is None or c['row_id']==row]))
+
+@app.get('/api/ai/context')
+def ai_context(q:str=Query(min_length=1,max_length=500),user=Depends(authenticated)):
+    """For a future question-answering agent: only AI-ready metadata, verified joins, approved metrics and the policy."""
+    with oracle.connect() as conn:rels=relationships(conn)
+    return foundation.context(q,rels)
 
 # ------------------------------------------------------------------ settings
 

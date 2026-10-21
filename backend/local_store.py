@@ -176,7 +176,8 @@ def merge_table_values(old,incoming):
     for col,item in (incoming or {}).items():
         value=item.get('value') if isinstance(item,dict) else item
         prev=old.get(col)
-        if prev and str(prev.get('value'))==str(value) and (value is None)==(prev.get('value') is None):result[col]=prev
+        if isinstance(item,dict) and item.get('na'):result[col]=dict(value=None,source={'origin':'Not applicable'})
+        elif prev and str(prev.get('value'))==str(value) and (value is None)==(prev.get('value') is None):result[col]=prev
         elif value in (None,''):result[col]=dict(value=None,source={'origin':'Left blank by you'})
         else:result[col]=dict(value=value,source={'origin':'Typed by you'})
     for col,prev in (old or {}).items():

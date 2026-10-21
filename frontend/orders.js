@@ -59,10 +59,11 @@ const orderCache = {};
 async function loadOrder(id, fresh = false) { if (fresh || !orderCache[id]) orderCache[id] = await api(`/api/orders/${id}`); return orderCache[id]; }
 
 function openOrder(id, tab = 'details') {
-  Drawer.open({ eyebrow: 'Order', title: `Order ${id}`, tabs: [['details', 'Details'], ['visual', 'Visualization'], ['history', 'Change history']], active: tab, wide: true,
-    render: async t => { const d = await loadOrder(id, true); $('#drawer-title').textContent = d.summary.order_ref || `Order ${id}`;
+  Drawer.open({ eyebrow: 'Order', title: `Order ${id}`, tabs: [['details', 'Details'], ['visual', 'Visualization'], ['history', 'Change history'], ['trail', 'Data trail']], active: tab, wide: true,
+    after: (body, t) => { if (t === 'trail') wireTrail(body, id); }, render: async t => { const d = await loadOrder(id, true); $('#drawer-title').textContent = d.summary.order_ref || `Order ${id}`;
       if (t === 'visual') return orderDashboard(d);
       if (t === 'history') return historyHtml(await api(`/api/orders/${id}/history`));
+      if (t === 'trail') return trailHtml(id, await api(`/api/orders/${id}/foundation`));
       return orderDetails(d); } });
 }
 
@@ -212,4 +213,25 @@ async function renderTableEdit(view, id, d) {
       toast(`${plural(p.changes.length, 'value')} updated in Oracle and verified. The change is in the order history.`); go(`#/orders/${id}/history`);
     });
   });
+}
+
+/* ---------------- data trail: identity, blank meanings, quality checks, value history ---------------- */
+const NULL_TEXT = { PROVIDED: ['Provided', 'green', 'A value from Excel or typed by you was saved.'], NOT_PROVIDED: ['Not in Excel', '', 'The Excel does not mention it. Left blank.'],
+  NOT_APPLICABLE: ['Not applicable', 'violet', 'You marked it as not applicable.'], UNKNOWN: ['Unknown', 'amber', 'The Excel has the label but the value is empty.'], INVALID: ['Invalid', 'red', 'The Excel value could not be used.'] };
+function trailHtml(id, f) {
+  return `<div class="callout">${icon('shield')}<div>Order identity <code>${esc(f.uuid)}</code> · saved from <strong>${esc(f.filename || '')}</strong> (sha256 ${esc(String(f.file_hash).slice(0, 12))}…) · approved by ${esc(f.approved_by)} on ${when(f.approved_at)} · ${f.links.map(l => `${esc(l.table_name)}: ${l.rows} rows`).join(', ')}</div></div>
+    <section class="card"><div class="card-head"><div><h3>Every field and what its value means</h3><span class="sub">Blank is not the same as “no”: click a field to see where its value came from and every change since</span></div></div>
+      ${f.fields.length ? '' : '<p class="muted card-pad">Field meanings are recorded for orders approved in this workspace.</p>'}
+      <div class="table-wrap"><table><tbody>${f.fields.map(x => `<tr class="clickable" data-trail="${esc(x.column_name)}"><td><span class="col-name">${esc(x.column_name)}</span><span class="col-label">${esc(COLUMN_LABELS[x.column_name] || '')}</span></td><td><span class="badge ${NULL_TEXT[x.status]?.[1] || ''}">${esc(NULL_TEXT[x.status]?.[0] || x.status)}</span></td><td class="muted">${esc(x.note || NULL_TEXT[x.status]?.[2] || '')}</td></tr>`).join('')}</tbody></table></div></section>
+    <section class="card"><div class="card-head"><h3>Checks that ran for this order</h3></div><div class="table-wrap"><table><tbody>${f.quality.map(q => `<tr><td><span class="badge ${q.outcome === 'PASS' ? 'green' : q.outcome === 'WARN' ? 'amber' : q.outcome === 'SKIP' ? '' : 'red'}">${esc(q.outcome.toLowerCase())}</span></td><td><strong>${esc(q.rule)}</strong><span class="sub">${esc(q.detail)}</span></td></tr>`).join('')}</tbody></table></div></section>
+    <div id="trail-detail"></div>`;
+}
+function wireTrail(body, id) {
+  $$('[data-trail]', body).forEach(r => r.onclick = () => busy('Reading the data trail…', async () => {
+    const col = r.dataset.trail; const t = await api(`/api/orders/${id}/lineage?column=${encodeURIComponent(col)}`); const first = t.lineage[0];
+    $('#trail-detail', body).innerHTML = `<section class="card"><div class="card-head"><h3>${esc(col)} · ${esc(COLUMN_LABELS[col] || '')}</h3><span class="sub">${plural(t.lineage.length, 'saved row')}</span></div><div class="card-pad stack" style="gap:8px">
+      ${first ? `<div>${first.cell ? `From Excel <span class="chip">${esc(first.sheet)}!${esc(first.cell)}</span> raw value <strong>${esc(first.raw_value ?? '—')}</strong>` : `Origin: <strong>${esc(first.via || first.origin || 'not from Excel')}</strong>`} → saved <strong>${esc(first.saved_value ?? 'blank')}</strong>${first.transformed ? ' <span class="badge violet">converted</span>' : ''} · approved by ${esc(first.approved_by)} · ${first.verified ? '<span class="badge green">read back OK</span>' : '<span class="badge amber">not verified</span>'}</div>` : '<div class="muted">No saved value: this field was blank when the order was approved.</div>'}
+      ${t.history.length > 1 ? `<div><strong>Versions</strong><ul class="timeline" style="padding:4px 0">${t.history.map(h => `<li><span class="dot"></span><span>v${h.version}: <strong>${esc(h.value ?? 'blank')}</strong>${h.previous != null ? ` <span class="muted">(was ${esc(h.previous)})</span>` : h.source ? ` <span class="muted">from ${esc(h.source)}</span>` : ''} · ${esc(h.by)}</span><time>${when(h.at)}</time></li>`).join('')}</ul></div>` : ''}</div></section>`;
+    $('#trail-detail', body).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }));
 }

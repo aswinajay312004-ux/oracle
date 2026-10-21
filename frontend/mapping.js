@@ -38,7 +38,7 @@ const Mapper = {
   },
   tableCols() { return this.M.tcols.columns.filter(c => c.level === 'order'); },
   // Status of every simple field: found in Excel / typed / optional blank / needed.
-  status(value, src, required) { const has = String(value ?? '').trim() !== ''; return src?.cell && has ? 'ok' : has ? 'typed' : required ? 'needed' : 'blank'; },
+  status(value, src, required) { const has = String(value ?? '').trim() !== ''; return src?.cell && has ? 'ok' : has ? 'typed' : src?.origin === 'Not applicable' ? 'na' : required ? 'needed' : 'blank'; },
   simpleTargets(o) {
     const prov = o.provenance || {};
     if (this.M.tcols) return [...this.tableCols().map(c => { const x = this.tableCell(o, c); return { target: x.target, label: c.label, st: this.status(x.value, x.src, false) }; }),
@@ -57,7 +57,7 @@ const Mapper = {
         <button class="btn small" id="m-suggest" type="button">${icon('sparkle')} Suggest mapping</button></div>
         <div class="row"><button class="icon-btn" id="m-undo" title="Undo" aria-label="Undo" ${M.undo.length ? '' : 'disabled'}>${icon('undo')}</button><button class="icon-btn" id="m-redo" title="Redo" aria-label="Redo" ${M.redo.length ? '' : 'disabled'}>${icon('redo')}</button>
         <button class="btn small" id="m-template" type="button">${icon('save')} Save as buyer template</button><button class="btn primary" id="m-done" type="button">${icon('check')} Done — show preview</button></div></div>
-      ${o ? `<div class="map-summary"><span class="ms ok">${icon('check')} ${count('ok')} found in Excel</span>${count('typed') ? `<span class="ms typed">${icon('edit')} ${count('typed')} typed</span>` : ''}<span class="ms blank">${icon('info')} ${count('blank')} optional, left blank</span>${count('needed') ? `<span class="ms needed">${icon('alert')} ${count('needed')} needed</span>` : ''}
+      ${o ? `<div class="map-summary"><span class="ms ok">${icon('check')} ${count('ok')} found in Excel</span>${count('typed') ? `<span class="ms typed">${icon('edit')} ${count('typed')} typed</span>` : ''}<span class="ms blank">${icon('info')} ${count('blank')} optional, left blank</span>${count('na') ? `<span class="ms typed">${icon('x')} ${count('na')} not applicable</span>` : ''}${count('needed') ? `<span class="ms needed">${icon('alert')} ${count('needed')} needed</span>` : ''}
         <span class="ms-help">Three easy ways: <b>click a field, then click the Excel cell</b> · drag a cell onto a field · or just type.</span>
         ${!M.guide && (count('needed') + count('blank')) ? `<button class="btn small soft" id="m-guide" type="button">${icon('arrow')} Fill missing fields one by one</button>` : ''}</div>` : ''}
       ${guide ? `<div class="callout success guide">${icon('arrow')}<div><strong>Step ${M.step + 1} of ${M.queue.length}:</strong> click the Excel cell that holds <strong>${esc(guide.label)}</strong> — or type it on the left.</div><button class="btn small" id="m-skip">Skip</button><button class="btn small ghost" id="m-stop">Stop</button></div>`
@@ -76,11 +76,12 @@ const Mapper = {
   fieldRow(target, col, label, value, src, opts = {}) {
     const st = this.status(value, src, opts.required); const line = opts.line != null ? `data-line="${opts.line}"` : '';
     const armed = this.M.armed === target + (opts.line != null ? '@' + opts.line : '');
-    const ic = { ok: 'check', typed: 'edit', blank: 'info', needed: 'alert' }[st];
+    const ic = { ok: 'check', typed: 'edit', blank: 'info', needed: 'alert', na: 'x' }[st];
+    const naBtn = this.M.tcols && target.startsWith('column:' + this.M.tcols.table) || (this.M.tcols && target.startsWith('field:')) ? `<button class="btn small ghost" type="button" data-na="${esc(col)}" title="This does not apply to this order (different from unknown)">${st === 'na' ? 'Undo N/A' : 'N/A'}</button>` : '';
     return `<div class="map-row st-${st} ${armed ? 'armed' : ''}" data-target="${esc(target)}" ${line} data-label="${esc(label)}">
       <button type="button" class="pick" data-arm="${esc(target)}" ${line} title="Click, then click the Excel cell"><span class="st">${icon(ic)}</span><span><span class="flabel">${esc(label)}${st === 'needed' ? ' <em>needed</em>' : ''}</span><span class="col-name">${esc(col)}${opts.note ? ' · ' + esc(opts.note) : ''}</span></span></button>
-      <input value="${esc(value ?? '')}" data-edit="${esc(target)}" ${line} placeholder="${st === 'needed' ? 'Needed — click a cell or type' : 'Blank is OK'}" aria-label="${esc(label)}">
-      <span class="src">${sourceChip(src)}${src?.cell ? `<button class="icon-btn" type="button" data-clear="${esc(target)}" ${line} title="Remove mapping" aria-label="Remove mapping">${icon('x')}</button>` : ''}</span></div>`;
+      <input value="${esc(value ?? '')}" data-edit="${esc(target)}" ${line} placeholder="${st === 'needed' ? 'Needed — click a cell or type' : st === 'na' ? 'Not applicable' : 'Blank is OK'}" aria-label="${esc(label)}">
+      <span class="src">${st === 'blank' || st === 'na' ? naBtn : ''}${sourceChip(src)}${src?.cell ? `<button class="icon-btn" type="button" data-clear="${esc(target)}" ${line} title="Remove mapping" aria-label="Remove mapping">${icon('x')}</button>` : ''}</span></div>`;
   },
   sizeGrid(l, li) {
     const sizes = l.sizes || []; const total = sizes.reduce((n, s) => n + num(s.quantity), 0);
@@ -177,6 +178,9 @@ const Mapper = {
     $$('[data-arm]', root).forEach(b => b.onclick = () => { const key = b.dataset.arm + (b.dataset.line != null ? '@' + b.dataset.line : '');
       if (M.selected) { this.bind(b.dataset.arm, M.sheet, M.selected, b.dataset.line == null ? null : Number(b.dataset.line)); return; }
       M.armed = key; M.armedLabel = b.closest('[data-label]')?.dataset.label || 'this field'; this.render(); });
+    $$('[data-na]', root).forEach(b => b.onclick = () => { const orders = structuredClone(M.draft.orders); const o = orders[M.order]; o.table_values ||= {};
+      const was = (o.table_values[b.dataset.na] || {}).source?.origin === 'Not applicable';
+      o.table_values[b.dataset.na] = was ? { value: null } : { value: null, na: true }; this.put(orders); });
     $$('[data-clear]', root).forEach(b => b.onclick = () => this.bind(b.dataset.clear, null, null, b.dataset.line == null ? null : Number(b.dataset.line)));
     $$('[data-edit]', root).forEach(inp => inp.addEventListener('change', () => this.edit(inp.dataset.edit, inp.value, inp.dataset.line == null ? null : Number(inp.dataset.line))));
     $$('[data-addcol]', root).forEach(inp => inp.addEventListener('change', () => { const col = inp.value.trim().toUpperCase(); const table = inp.dataset.addcol;

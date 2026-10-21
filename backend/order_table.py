@@ -98,7 +98,7 @@ def header_limit(sheet):
     return min(rows) if rows else 60
 
 
-def label_values(sheets, cols):
+def label_values(sheets, cols, empty=None):
     """{COLUMN: {value, source}} for order-level columns whose Excel label appears in the workbook header.
     The value is the cell right of the label; when that cell is itself a known label (a header row like
     'OCN | QTY(IN PACKS) | QTY(IN PIECES)') the value under the label is used. Nothing is guessed beyond that."""
@@ -122,8 +122,11 @@ def label_values(sheets, cols):
                     continue
                 right = next((cells[(c['row'], x)] for x in range(c['col'] + 1, c['col'] + 4) if (c['row'], x) in cells), None)
                 cell = right if right is not None and not (isinstance(right['value'], str) and norm(right['value']) in known) else cells.get((c['row'] + 1, c['col']))
-                if cell is not None and not blank(cell['value']):
-                    out[name] = dict(value=cell['value'], source=dict(source(sheet['name'], cell['cell'], cell['value'], cell['formula']), via=f'Excel label "{text.strip()}"'))
+                if cell is None or blank(cell['value']):
+                    if empty is not None:
+                        empty.add(name)  # the label is in Excel but its value cell is empty
+                    continue
+                out[name] = dict(value=cell['value'], source=dict(source(sheet['name'], cell['cell'], cell['value'], cell['formula']), via=f'Excel label "{text.strip()}"'))
     return out
 
 
@@ -132,7 +135,7 @@ def label_values(sheets, cols):
 def build_plan(cols, orders, sheets, filename='', existing_refs=frozenset(), committed_file=None):
     """Exact rows and column values one approval writes into the order table."""
     errors, warnings, info = [], [], []
-    ops = []; labels = label_values(sheets, cols)
+    ops = []; labelled_blank = set(); labels = label_values(sheets, cols, labelled_blank)
     totals = dict(orders=len(orders), lines=0, pieces=0)
     if not orders or len(orders) > 50:
         errors.append('Import must contain 1–50 orders.')
@@ -232,7 +235,7 @@ def build_plan(cols, orders, sheets, filename='', existing_refs=frozenset(), com
     if empty:
         info.append(f'Not in this Excel, left blank: {", ".join(cols[n]["label"] for n in empty)}.')
     plan = dict(mode='table', table=TABLE, operations=ops, errors=list(dict.fromkeys(errors)), warnings=list(dict.fromkeys(warnings)),
-                info=list(dict.fromkeys(info)), totals=totals,
+                info=list(dict.fromkeys(info)), totals=totals, labelled_blank=sorted(labelled_blank - set(labels)),
                 tables={TABLE: dict(label='Excel orders', purpose=PURPOSE, columns=[dict(name=n, type=m['type'], nullable=m['nullable'],
                         required=m['nullable'] == 'N', label=m['label'], level=m['level']) for n, m in cols.items()])},
                 schema_fingerprint=digest({n: {k: v for k, v in m.items() if k != 'synonyms'} for n, m in cols.items()}))

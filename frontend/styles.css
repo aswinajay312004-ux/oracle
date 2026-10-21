@@ -314,7 +314,7 @@ td .sub { display: block; font-size: 12px; color: var(--muted); }
 .st { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; flex: none; }
 .st .ico { width: 14px; height: 14px; }
 .st-ok .st { background: var(--accent-soft); color: var(--accent); } .st-typed .st { background: var(--violet-soft); color: var(--violet); }
-.st-blank .st { background: #f1f4f2; color: var(--faint); } .st-needed .st { background: var(--amber-soft); color: var(--amber); }
+.st-blank .st, .st-na .st { background: #f1f4f2; color: var(--faint); } .st-na .flabel { color: var(--muted); } .st-needed .st { background: var(--amber-soft); color: var(--amber); }
 .st-needed { background: #fffcf4; }
 .picking .xl td.has { cursor: crosshair; }
 .size-block { padding: 10px 14px; border-top: 1px solid #f0f4f2; display: flex; flex-direction: column; gap: 6px; }

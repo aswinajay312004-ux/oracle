@@ -2,7 +2,7 @@
 /* Database: flow diagram of real relationships, table explorer, guided table creation,
    relationship designer and the node-based Excel → Oracle mapping designer. */
 const DB = { tab: 'flow', graph: null, orders: null, order: null, detail: null, view: { x: 40, y: 30, k: 1 }, q: '' };
-const DB_TABS = [['flow', 'Flow diagram', 'flow'], ['tables', 'Tables', 'table'], ['links', 'Relationships', 'link'], ['designer', 'Mapping designer', 'sparkle']];
+const DB_TABS = [['flow', 'Flow diagram', 'flow'], ['tables', 'Tables', 'table'], ['links', 'Relationships', 'link'], ['designer', 'Mapping designer', 'sparkle'], ['catalog', 'Catalog', 'shield']];
 
 route('database', async (view, [tab, arg]) => {
   setTitle('Database', 'Your Oracle tables, how they connect, and what each order stored');
@@ -16,6 +16,7 @@ route('database', async (view, [tab, arg]) => {
   if (DB.tab === 'flow') return flowTab(body, arg ? Number(arg) : DB.order);
   if (DB.tab === 'tables') return tablesTab(body, arg);
   if (DB.tab === 'links') return linksTab(body, arg);
+  if (DB.tab === 'catalog') return catalogTab(body, arg);
   return designerTab(body, arg);
 });
 
@@ -288,4 +289,62 @@ function templatesHtml(templates) {
 }
 function wireTemplates(body) {
   $$('[data-activate],[data-deactivate]', body).forEach(b => b.onclick = () => busy('Updating template…', async () => { await api(`/api/templates/${b.dataset.activate || b.dataset.deactivate}/active`, { method: 'POST', body: { active: !!b.dataset.activate } }); navigate(); }));
+}
+
+/* ------------------------------------------------------------------ catalog: table and column ID cards */
+const STATUS_TEXT = { DISCOVERED: ['Discovered', ''], DOCUMENTED: ['Documented', 'blue'], RELATIONSHIPS_VERIFIED: ['Joins verified', 'violet'], BUSINESS_APPROVED: ['Business approved', 'amber'], AI_READY: ['AI ready', 'green'] };
+const statusBadge = st => `<span class="badge ${STATUS_TEXT[st]?.[1] || ''}">${esc(STATUS_TEXT[st]?.[0] || st)}</span>`;
+async function catalogTab(body, open) {
+  let cat = await api('/api/catalog'); let q = ''; let metrics = await api('/api/metrics');
+  const draw = () => {
+    const list = cat.tables.filter(t => !q || `${t.name} ${t.business_name || ''} ${t.purpose || ''}`.toLowerCase().includes(q.toLowerCase()));
+    const counts = Object.fromEntries(cat.statuses.map(st => [st, cat.tables.filter(t => t.status === st).length]));
+    body.innerHTML = `<div class="stack">
+      <div class="callout info">${icon('info')}<div><strong>The data catalog is the foundation for a future AI assistant.</strong> Every Oracle table gets an ID card. Structure is read from Oracle automatically; meaning (business name, purpose, what one row is) is written by you. Only <strong>AI ready</strong> tables, verified joins and approved metrics will ever be used to answer questions.</div></div>
+      <div class="row between"><div class="row">${cat.statuses.map(st => `${statusBadge(st)} <span class="muted">${counts[st]}</span>`).join(' &nbsp; ')}</div>
+        <button class="btn primary" id="c-refresh" type="button">${icon('database')} Refresh from Oracle</button></div>
+      ${cat.changes.length ? `<section class="card"><div class="card-head"><h3>Oracle structure changes</h3><span class="sub">Detected automatically on each refresh</span></div><ul class="timeline">${cat.changes.map(c => `<li><span class="dot"></span><span>${c.tables} tables · ${c.columns} columns${c.added.length ? ` · <strong>new:</strong> ${esc(c.added.slice(0, 8).join(', '))}${c.added.length > 8 ? ` +${c.added.length - 8}` : ''}` : ''}${c.removed.length ? ` · <strong>removed:</strong> ${esc(c.removed.join(', '))}` : ''}${c.changed.length ? ` · <strong>changed:</strong> ${esc(c.changed.join(', '))}` : ''}</span><time>${when(c.taken_at)}</time></li>`).join('')}</ul></section>` : ''}
+      <div class="split"><section class="card"><div class="toolbar"><label class="search">${icon('search')}<input id="c-q" placeholder="Search tables by name or meaning" value="${esc(q)}"></label></div>
+        ${list.length ? `<div class="table-wrap" style="max-height:620px"><table><thead><tr><th>Table</th><th>Business name</th><th>One row is</th><th>Status</th></tr></thead><tbody>${list.slice(0, 300).map(t => `<tr class="clickable" data-card="${esc(t.name)}"><td><span class="col-name">${esc(t.name)}</span><span class="col-label">${t.columns} columns${t.row_estimate != null ? ` · ≈${fmt(t.row_estimate)} rows` : ''}</span></td><td>${esc(t.business_name || '—')}</td><td class="muted">${esc(t.grain || '—')}</td><td>${statusBadge(t.status)}</td></tr>`).join('')}</tbody></table></div>${list.length > 300 ? `<p class="faint card-pad">Showing 300 of ${fmt(list.length)}. Search to narrow.</p>` : ''}`
+          : `<div class="empty">${cat.tables.length ? 'No table matches.' : 'The catalog is empty. Press “Refresh from Oracle”.'}</div>`}</section>
+      <section class="card"><div class="card-head"><div><h2>Business metrics</h2><span class="sub">Approved definitions a future AI must use</span></div></div>
+        ${metrics.length ? metrics.map(m => `<div class="list-row"><div class="grow"><strong>${esc(m.name)} <span class="badge">v${m.version}</span> <span class="badge ${m.status === 'APPROVED' ? 'green' : m.status === 'PROPOSED' ? 'amber' : ''}">${esc(m.status.toLowerCase())}</span></strong>
+          <small class="muted" style="display:block;white-space:normal">${esc(m.definition)}${m.formula ? ` · <code>${esc(m.formula)}</code>` : ''}${m.duplicate_handling ? `<br>⚠ ${esc(m.duplicate_handling)}` : ''}</small></div>${m.status === 'PROPOSED' ? `<button class="btn small" data-approve-metric="${m.id}">Approve</button>` : ''}</div>`).join('') : '<div class="empty">No metrics yet. Refresh the catalog to get the proposed starting definitions.</div>'}</section></div></div>`;
+    paintIcons(body);
+    $('#c-q', body).addEventListener('input', e => { q = e.target.value; const pos = e.target.selectionStart; draw(); const i = $('#c-q', body); i.focus(); i.setSelectionRange(pos, pos); });
+    $('#c-refresh', body).onclick = () => busy('Reading the Oracle structure…', async () => { const r = await api('/api/catalog/refresh', { method: 'POST' }); cat = await api('/api/catalog'); metrics = await api('/api/metrics');
+      toast(`Catalog refreshed: ${fmt(r.tables)} tables${r.added.length ? `, ${r.added.length} new` : ''}${r.changed.length ? `, ${r.changed.length} changed` : ''}.`); draw(); });
+    $$('[data-card]', body).forEach(r => r.onclick = () => openCard(r.dataset.card, async () => { cat = await api('/api/catalog'); draw(); }));
+    $$('[data-approve-metric]', body).forEach(b => b.onclick = async () => { if (await confirmDialog('Approve this metric?', 'A future AI will use exactly this definition when the metric is asked for.', 'Approve')) busy('Approving…', async () => { await api(`/api/metrics/${b.dataset.approveMetric}/approve`, { method: 'POST' }); metrics = await api('/api/metrics'); draw(); }); });
+  };
+  draw(); if (open) openCard(open.toUpperCase(), async () => { cat = await api('/api/catalog'); draw(); });
+}
+
+function openCard(name, onSaved) {
+  Drawer.open({ eyebrow: 'Table ID card', title: name, wide: true, render: async () => {
+    const c = await api(`/api/catalog/tables/${encodeURIComponent(name)}`); const next = STATUS_TEXT && ['DISCOVERED', 'DOCUMENTED', 'RELATIONSHIPS_VERIFIED', 'BUSINESS_APPROVED', 'AI_READY'];
+    const idx = next.indexOf(c.status); const nextStatus = next[idx + 1];
+    return `<div class="row">${next.map((st, i) => `<span class="badge ${i <= idx ? (STATUS_TEXT[st][1] || 'green') : ''}">${i < idx ? '✓ ' : ''}${esc(STATUS_TEXT[st][0])}</span>`).join('<span class="arrow">→</span>')}</div>
+      <section class="card card-pad stack" style="gap:10px"><div class="grid g2"><label class="field">Business name<input id="k-name" value="${esc(c.business_name || '')}" placeholder="e.g. Excel orders"></label>
+        <label class="field">Business domain<input id="k-domain" value="${esc(c.domain || '')}" placeholder="e.g. Merchandising"></label></div>
+        <label class="field">Purpose<textarea id="k-purpose" rows="2" placeholder="What this table is for">${esc(c.purpose || '')}</textarea></label>
+        <label class="field">One row is (grain)<input id="k-grain" value="${esc(c.grain || '')}" placeholder="e.g. one size of one order line"></label>
+        <div class="row"><span class="muted">Schema ${esc(c.schema)} · first seen ${when(c.first_seen)} · ${c.row_estimate != null ? `≈${fmt(c.row_estimate)} rows` : 'row count not gathered'}</span></div></section>
+      <section class="card"><div class="card-head"><h3>Ready for AI? Checklist</h3></div><div class="status-list">${c.checklist.map(x => `<div>${x.done ? `<span class="badge green">${icon('check')}</span>` : '<span class="badge">○</span>'} ${esc(x.step)}</div>`).join('')}</div></section>
+      <section class="card"><div class="card-head"><div><h3>Column ID cards</h3><span class="sub">Type, nullability and keys come from Oracle; names, synonyms and meaning from you</span></div></div>
+        <div class="table-wrap" style="max-height:420px"><table class="coledit"><thead><tr><th>Column</th><th>Business name</th><th>Synonyms (comma separated)</th><th>Meaning</th><th>Unit</th><th>Sensitive</th></tr></thead><tbody>
+        ${c.columns.map(col => `<tr data-col="${esc(col.column_name)}"><td><span class="col-name">${esc(col.column_name)}</span><span class="col-label">${esc(col.data_type)}${col.nullable === 'N' ? ' · required' : ''}${col.is_key ? ' · key' : ''}</span></td>
+          <td><input data-k="business_name" value="${esc(col.business_name || '')}"></td><td><input data-k="synonyms" value="${esc((col.synonyms || []).join(', '))}"></td>
+          <td><input data-k="description" value="${esc(col.description || '')}"></td><td><input data-k="unit" value="${esc(col.unit || '')}" style="width:80px"></td><td style="text-align:center"><input type="checkbox" data-k="sensitive" ${col.sensitive ? 'checked' : ''}></td></tr>`).join('')}</tbody></table></div></section>
+      ${c.relationships.length ? `<section class="card"><div class="card-head"><h3>Joins</h3></div><div class="table-wrap"><table><tbody>${c.relationships.map(r => `<tr><td class="mono">${esc(r.parent)}.${esc(r.parent_column)} → ${esc(r.child)}.${esc(r.child_column)}</td><td>${r.join_verified ? '<span class="badge green">verified</span>' : '<span class="badge amber">not verified</span>'}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
+      <div class="row"><button class="btn" id="k-save">${icon('save')} Save</button>${nextStatus ? `<button class="btn primary" id="k-next">${icon('arrow')} Save and mark “${esc(STATUS_TEXT[nextStatus][0])}”</button>` : '<span class="badge green">AI ready</span>'}</div>`;
+  }, after: body => {
+    const payload = status => ({ business_name: $('#k-name', body).value, domain: $('#k-domain', body).value, purpose: $('#k-purpose', body).value, grain: $('#k-grain', body).value,
+      ...(status ? { status } : {}), columns: $$('[data-col]', body).map(r => ({ column_name: r.dataset.col, business_name: $('[data-k=business_name]', r).value, synonyms: $('[data-k=synonyms]', r).value.split(',').map(x => x.trim()).filter(Boolean),
+        description: $('[data-k=description]', r).value, unit: $('[data-k=unit]', r).value, sensitive: $('[data-k=sensitive]', r).checked })) });
+    const save = status => busy('Saving the ID card…', async () => { await api(`/api/catalog/tables/${encodeURIComponent(name)}`, { method: 'POST', body: payload(status) }); toast('ID card saved.'); Drawer.show(null); onSaved?.(); });
+    $('#k-save', body)?.addEventListener('click', () => save(null));
+    $('#k-next', body)?.addEventListener('click', () => { const order = ['DISCOVERED', 'DOCUMENTED', 'RELATIONSHIPS_VERIFIED', 'BUSINESS_APPROVED', 'AI_READY']; save(null).then(async () => {
+      const c = await api(`/api/catalog/tables/${encodeURIComponent(name)}`); save(order[order.indexOf(c.status) + 1]); }); });
+  } });
 }
