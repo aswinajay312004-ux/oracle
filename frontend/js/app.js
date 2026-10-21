@@ -1,8 +1,9 @@
-// App shell: authentication, navigation, status lights, saved orders and global actions.
-import { $, $$, esc, plural, fmt, state, can, notify, busy, closeDrawer, setRail } from './util.js';
-import { api, id, onUnauthorized } from './api.js';
+// App shell: sign-in, navigation, the Oracle status light and actions any screen can start (open an order, a draft).
+import { $, $$, esc, state, notify, busy, closeDrawer, setRail } from './util.js';
+import { api, onUnauthorized } from './api.js';
 import * as ws from './workspace.js';
-import { loadExplorer, bindExplorer, exploreOrder } from './explorer.js';
+import { loadExplorer, bindExplorer, showTables } from './explorer.js';
+import { orderPanel } from './dborders.js';
 import { loadAdmin, bindAdmin } from './admin.js';
 import { loadChat, bindChat } from './chat.js';
 import { loadDashboard } from './dashboard.js';
@@ -11,28 +12,24 @@ async function session() {
   const s = await fetch('/api/session', { credentials: 'same-origin' }).then(r => r.json());
   state.user = s.authenticated ? s.username : null; state.permissions = s.permissions || []; state.setup = s.needs_setup;
   $('#auth').hidden = s.authenticated; $('#logout').hidden = !s.authenticated;
-  $('#auth-title').textContent = s.needs_setup ? 'Set up POPPYS AI' : 'Welcome back';
-  $('#auth-text').textContent = s.needs_setup ? 'Create the administrator account for this computer. You can add operators and approvers afterwards.' : 'Sign in to prepare and approve ERP entries.';
-  $('#auth-submit').textContent = s.needs_setup ? 'Create administrator →' : 'Sign in →';
+  $('#auth-title').textContent = s.needs_setup ? 'Set up POPPYS AI' : 'Sign in';
+  $('#auth-text').textContent = s.needs_setup ? 'Choose the one login everyone in the team will use.' : 'One login for everyone in the team.';
+  $('#auth-submit').textContent = s.needs_setup ? 'Create the login →' : 'Sign in →';
   $('#auth-pass').autocomplete = s.needs_setup ? 'new-password' : 'current-password';
   $('#auth-pass').minLength = s.needs_setup ? 12 : 1;   // new passwords: 12+ (the server also refuses common ones)
-  $('#username').textContent = s.username || '—'; $('#role').textContent = s.role || ''; $('#avatar').textContent = (s.username || 'P')[0].toUpperCase();
+  $('#username').textContent = s.username || '—'; $('#avatar').textContent = (s.username || 'P')[0].toUpperCase();
   return s.authenticated;
 }
 
 async function status() {
   try {
     const h = await api('/api/health'); state.health = h;
-    const db = h.database; const o = $('#oracle-status'); const a = $('#ai-status');
+    const db = h.database; const o = $('#oracle-status');
     o.className = `status ${db.connected ? 'ok' : 'off'}`;
     o.querySelector('span').textContent = db.connected ? 'Oracle connected' : 'Oracle offline';
     o.querySelector('small').textContent = db.connected ? 'saving enabled' : 'saving paused';
     // The fix for an administrator stays in the tooltip, not on everyone's screen.
     o.title = db.connected ? `Connected to ${db.owner} (${db.dsn || ''})` : `${db.error || 'Oracle is not reachable.'} Start the Oracle database (Docker Desktop → oracle26ai) and refresh.`;
-    const eb = $('#explorer-eyebrow'); if (eb) eb.textContent = db.connected ? 'Read-only' : 'Read-only · Oracle offline';
-    a.className = `status ${h.ollama.available ? 'ok' : 'idle'}`;
-    a.querySelector('span').textContent = h.ollama.available ? 'AI assistant on' : 'AI assistant off';
-    a.querySelector('small').textContent = h.ollama.available ? h.ollama.model : 'optional';
   } catch (_) { $('#oracle-status').className = 'status off'; }
 }
 
@@ -50,15 +47,14 @@ async function lists() {
   } catch (_) { state.mappingStatus = {}; }
 }
 
-const VIEWS = ['dashboard', 'workspace', 'history', 'chat', 'explorer', 'admin'];
+const VIEWS = ['dashboard', 'workspace', 'explorer', 'chat', 'admin'];
 
 function go(next, push = true) {
   $$('.nav [data-view]').forEach(t => t.classList.toggle('active', t.dataset.view === next));
   $$('.view').forEach(v => { v.hidden = v.id !== `view-${next}`; });
   closeDrawer();
-  if (next !== 'workspace' || !state.sourceView) setRail(null);   // the file view widens the page only on its own screen
+  setRail(null);
   if (next === 'dashboard') loadDashboard();
-  if (next === 'history') history();
   if (next === 'explorer') loadExplorer();
   if (next === 'admin') loadAdmin();
   if (next === 'chat') { loadChat(); setTimeout(() => $('#chat-input').focus(), 50); }
@@ -75,29 +71,6 @@ window.addEventListener('popstate', () => {
   go(view, false);
   if (view === 'workspace') ws.onHistory(sub);
 });
-
-async function history() {
-  $('#history-detail').hidden = true;
-  await busy('Reading saved imports from Oracle…', async () => {
-    let list;
-    try { list = await api('/api/history'); } catch (e) { $('#history').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
-    $('#history').innerHTML = list.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order</th><th>Approved by</th><th>Saved</th><th>Status</th><th></th></tr></thead><tbody>
-      ${list.map(r => `<tr class="clickable" data-receipt="${esc(r.job_id)}"><td><b>${esc(r.filename || r.job_id)}</b><div class="muted small-text">${esc(r.format || '')}</div></td>
-        <td>${esc((r.orders || []).join(', ') || '—')}<div class="muted small-text">${esc((r.styles || []).join(', '))}</div></td><td>${esc(r.approver)}</td>
-        <td class="nowrap">${esc(new Date(r.committed_at).toLocaleString())}</td>
-        <td><span class="pill ${({ 'Verified in Oracle': 'ok', 'Verified, with exceptions': 'warn', 'Saved, differences found': 'err' })[r.status] || 'info'}">${esc(r.status || 'Saved')}</span></td><td><button class="secondary small" data-receipt="${esc(r.job_id)}">View order</button></td></tr>`).join('')}
-      </tbody></table></div>` : '<p class="empty">No orders have been saved yet.</p>';
-  });
-}
-
-async function receipt(jobId) {
-  await busy('Reading the saved records…', async () => {
-    const result = await api(`/api/history/${id(jobId)}`);
-    const target = $('#history-detail'); target.hidden = false;
-    await ws.showSaved(result, target, true);
-    target.scrollIntoView({ behavior: 'smooth' });
-  });
-}
 
 function showPassword(visible) {
   $('#auth-pass').type = visible ? 'text' : 'password';
@@ -129,22 +102,17 @@ function bind() {
   ['dragenter', 'dragover'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.add('over'); }));
   ['dragleave', 'drop'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', e => { if (e.dataTransfer.files.length > 1) return notify('Drop one order file at a time.', 'warning'); ws.upload(e.dataTransfer.files[0]); });
-  $('#go-review').addEventListener('click', ws.goReview);
   $('#drawer-close').addEventListener('click', closeDrawer); $('#scrim').addEventListener('click', closeDrawer);
   $('#modal-close').addEventListener('click', () => $('#modal').close());
   $('#modal').addEventListener('click', e => { if (e.target === $('#modal')) $('#modal').close(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#drawer').hidden) closeDrawer(); });
   document.addEventListener('click', async e => {
-    const b = e.target.closest('[data-open-draft],[data-receipt],[data-receipt-go],[data-goto],[data-explore-order],[data-act2]'); if (!b || state.busy) return;
+    const b = e.target.closest('[data-open-draft],[data-goto],[data-order-panel]'); if (!b || state.busy) return;
     if (b.dataset.goto) return go(b.dataset.goto);
-    if (b.dataset.receiptGo) { go('history'); return receipt(b.dataset.receiptGo); }
     if (b.dataset.openDraft) { go('workspace'); return ws.openDraft(b.dataset.openDraft); }
-    if (b.dataset.receipt) return receipt(b.dataset.receipt);
-    if (b.dataset.exploreOrder) { closeDrawer(); go('explorer'); return exploreOrder(b.dataset.exploreOrder); }
-    if (b.dataset.act2 === 'approve') return ws.approve();
-    if (b.dataset.act2 === 'back-review') return ws.backToReview();
-    if (b.dataset.act2 === 'another') return ws.resetWorkspace();
+    if (b.dataset.orderPanel) return orderPanel(b.dataset.orderPanel);
   });
+  document.addEventListener('poppys:tables', () => { go('explorer'); showTables(); });
   window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
   keyboardReach();
   ws.bindWorkspace(); bindExplorer(); bindAdmin(); bindChat();
@@ -169,8 +137,6 @@ function keyboardReach() {
 }
 
 async function start() {
-  $$('[data-permission]').forEach(el => { el.hidden = !can(el.dataset.permission); });
-  $$('[data-permission-not]').forEach(el => { el.hidden = can(el.dataset.permissionNot); });
   await Promise.allSettled([status(), lists()]);
   const initial = (location.hash || '').slice(1);
   const first = initial.split('/')[0];
@@ -183,4 +149,3 @@ bind();
   try { if (await session()) await start(); }
   catch (e) { notify(`Unable to reach the POPPYS AI server: ${e.message}`, 'error'); }
 })();
-void plural; void fmt;

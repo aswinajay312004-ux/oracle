@@ -79,6 +79,7 @@ def _qty_column(mapping):
 def catalog(mapping, kb):
     """The Oracle side of the mapping screen: each target table with its columns, their type and what mapping them does."""
     out = []
+    masters = {role: m['table'] for role, m in mapping['masters'].items()}
     for table in TABLES:
         t = kb.table(table)
         if not t:
@@ -92,7 +93,8 @@ def catalog(mapping, kb):
                                       type=c['type'], length=c.get('length'), precision=c.get('precision'), scale=c.get('scale'),
                                       kind=k[n][0], field=k[n][1] if k[n][0] in ('field', 'line', 'size', 'qty') else None,
                                       note=k[n][1] if k[n][0] == 'auto' else None,
-                                      system=c['role'] == 'system', standard=n in (spec.get('columns') or {}))
+                                      system=c['role'] == 'system', standard=n in (spec.get('columns') or {}),
+                                      master=masters.get((spec.get('columns', {}).get(n) or {}).get('master')))
                                  for n, c in cols.items()]))
     return out
 
@@ -197,7 +199,8 @@ def validate(targets, table_meta):
 
 
 KEEP = ('sheet', 'fabrics', 'accessories', 'other_fields', 'qty_unit', 'pieces_per_unit', 'season', 'exporter', 'against',
-        'department', 'gender', 'packing_type', 'components', 'merch', 'sample_type', 'quantity_basis')
+        'department', 'gender', 'packing_type', 'components', 'merch', 'sample_type', 'quantity_basis',
+        'order_lines', 'sample_lines', 'packs')        # what the file itself says about its order (checks and trims scaling)
 
 
 def build(sheet, targets, typed, base, table_meta):

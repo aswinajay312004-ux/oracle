@@ -204,6 +204,8 @@ def commit(draft, expected_hash, approver, mapping=None):
                     if isinstance(v, str) and v.startswith('$'):
                         v = refs[v[1:]]
                     v = order_numbers.fill(v, assigned)
+                    if isinstance(v, str) and not v.strip():
+                        v = None                     # a blank field: Oracle keeps '' as NULL, so it is written (and read back) as NULL
                     if v is not None and registry_cols[table][col]['type'] == 'DATE':
                         v = datetime.strptime(v, '%Y-%m-%d')
                     elif isinstance(v, float):

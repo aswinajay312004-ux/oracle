@@ -1,47 +1,58 @@
-// Overview: the work queue (drafts not yet saved), recent Oracle saves read from the receipts, and the
-// connection lights. Every figure comes from /api/overview or /api/health; nothing is estimated.
+// Overview: one line of system status, the orders saved lately (by OC No and name, never a record ID), who did what,
+// and the uploads not saved yet. Every figure comes from /api/overview or /api/health; nothing is estimated.
 import { $, esc, fmt, state, timeAgo } from './util.js';
 import { api } from './api.js';
 
+const WHAT = {
+  login: () => 'signed in',
+  upload: a => `uploaded ${file(a)}`,
+  upload_unreadable: a => `uploaded ${file(a)}, which could not be read`,
+  oracle_mapping: a => `mapped ${file(a)} to Oracle`,
+  mapping_applied: a => `chose the layout of ${file(a)}`,
+  template_saved: () => 'saved a layout for next time',
+  edit: a => `changed ${file(a)}`,
+  approved_saved: a => `saved order ${orders(a)} in Oracle`,
+  approve_failed: a => `tried to save ${file(a)}; Oracle refused it`,
+  approve_outcome_unknown: a => `saved ${file(a)}; Oracle did not confirm yet`,
+  user_created: () => 'added a login',
+  user_changed: () => 'changed a login',
+};
+const file = a => `<b>${esc(a.filename || 'a file')}</b>`;
+const orders = a => `<b>${esc((a.orders || []).join(', ') || a.filename || '')}</b>`;
+const name = o => [o.style, o.description].filter(Boolean).join(' · ') || o.filename || '—';
 const STATUS_PILL = { 'Save outcome unknown': 'err', Saving: 'warn', 'Needs attention': 'err', 'Ready to approve': 'ok', 'Checked offline': 'warn', Draft: '' };
+const STATUS_TEXT = { 'Ready to approve': 'Ready to save', 'Needs attention': 'Needs a look', 'Checked offline': 'Checked without Oracle', Draft: 'Uploaded' };
 
 export async function loadDashboard() {
+  drawStatus();
   let o;
-  try { o = await api('/api/overview'); } catch (e) { $('#dash-queue').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
-  const s = o.saved;
-  const tiles = [
-    ['Needs attention', o.counts['Needs attention'], 'Orders with fields to correct'],
-    ['Ready to approve', o.counts['Ready to approve'], 'Checked against live Oracle'],
-    ['Drafts', o.counts['Draft'] + o.counts['Checked offline'], 'Uploaded, not yet checked'],
-    ['Saved in last 7 days', s.available ? s.last_7_days : '—', s.available ? 'Read from Oracle receipts' : 'Oracle offline'],
-  ];
-  $('#dash-kpis').innerHTML = tiles.map(([label, value, hint]) =>
-    `<div class="card kpi"><small>${esc(label)}</small><b>${esc(typeof value === 'number' ? fmt(value, 0) : value)}</b><span class="muted small-text">${esc(hint)}</span></div>`).join('');
-  $('#dash-queue').innerHTML = o.queue.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order / style</th><th class="num">Pieces</th><th>Status</th><th>Uploaded</th><th></th></tr></thead><tbody>
-    ${o.queue.map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><b>${esc(d.filename)}</b><div class="muted small-text">${esc(d.format || '')}</div></td>
-      <td>${esc((d.order_refs || []).filter(Boolean).join(', ') || '—')}<div class="muted small-text">${esc([...(d.buyers || []), ...(d.styles || [])].filter(Boolean).slice(0, 4).join(' · '))}</div></td>
+  try { o = await api('/api/overview'); } catch (e) { $('#dash-saved').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
+  $('#dash-saved').innerHTML = o.recent_orders.length ? `<div class="tbl-wrap flush"><table class="ov-orders"><thead><tr><th scope="col">Order ID</th><th scope="col">Order name</th>
+      <th scope="col" class="opt">Buyer</th><th scope="col" class="num">Pieces</th><th scope="col">Saved</th></tr></thead><tbody>
+    ${o.recent_orders.map(r => `<tr class="clickable" data-order-panel="${esc(r.ordmasid)}"><th scope="row"><button class="link" data-order-panel="${esc(r.ordmasid)}">${esc(r.order_ref || '—')}</button></th>
+      <td>${esc(name(r))}</td><td class="opt">${esc(r.buyer || '—')}</td><td class="num">${r.pieces == null ? '—' : esc(fmt(r.pieces, 0))}</td>
+      <td class="nowrap">${esc(timeAgo(r.saved_at))}<div class="muted small-text">${esc(r.saved_by || '')}</div></td></tr>`).join('')}</tbody></table></div>`
+    : '<p class="empty">No orders saved yet. Click <b>＋ New order</b> to upload an Excel file.</p>';
+  $('#dash-activity').innerHTML = o.activity.length ? o.activity.map(a => `<li><span class="act-who">${esc(a.who)}</span> ${(WHAT[a.action] || (() => esc(a.action)))(a)}
+      <time class="muted small-text" datetime="${esc(a.at)}" title="${esc(new Date(a.at).toLocaleString())}">${esc(timeAgo(a.at))}</time></li>`).join('')
+    : '<li class="muted">Nothing yet.</li>';
+  $('#dash-waiting-card').hidden = !o.queue.length;
+  $('#dash-queue').innerHTML = o.queue.length ? `<div class="tbl-wrap flush"><table><thead><tr><th scope="col">File</th><th scope="col">Order</th><th scope="col" class="num">Pieces</th><th scope="col">Status</th><th scope="col">Uploaded</th></tr></thead><tbody>
+    ${o.queue.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><b>${esc(d.filename)}</b></td>
+      <td>${esc([...(d.order_refs || []), ...(d.styles || [])].filter(Boolean).slice(0, 3).join(' · ') || '—')}</td>
       <td class="num">${d.pieces == null ? '—' : esc(fmt(d.pieces, 0))}</td>
-      <td><span class="pill ${STATUS_PILL[d.status] ?? ''}">${esc(d.status)}</span></td>
-      <td class="nowrap">${d.created_at ? esc(timeAgo(d.created_at)) : '—'}<div class="muted small-text">${esc(d.uploaded_by || '')}</div></td>
-      <td><button class="secondary small" data-open-draft="${esc(d.id)}">Open →</button></td></tr>`).join('')}</tbody></table></div>`
-    : '<p class="empty">Nothing waiting. Upload an Excel order to start.</p>';
-  $('#dash-saved').innerHTML = !s.available ? `<p class="empty">${esc(s.note || 'Oracle is offline.')}</p>`
-    : s.recent.length ? `<div class="tbl-wrap flush"><table><thead><tr><th>File</th><th>Order</th><th>Approved by</th><th>Saved</th><th></th></tr></thead><tbody>
-      ${s.recent.map(r => `<tr><td><b>${esc(r.filename || r.job_id)}</b></td><td>${esc((r.orders || []).filter(Boolean).join(', ') || '—')}</td><td>${esc(r.approver)}</td>
-        <td class="nowrap">${esc(new Date(r.committed_at).toLocaleString())}</td><td><button class="secondary small" data-receipt-go="${esc(r.job_id)}">View order</button></td></tr>`).join('')}</tbody></table></div>`
-      : '<p class="empty">No orders have been saved to Oracle yet.</p>';
-  drawStatus(o.accuracy);
+      <td><span class="pill ${STATUS_PILL[d.status] ?? ''}">${esc(STATUS_TEXT[d.status] || d.status)}</span></td>
+      <td class="nowrap">${d.created_at ? esc(timeAgo(d.created_at)) : '—'} <span class="muted small-text">${esc(d.uploaded_by || '')}</span></td></tr>`).join('')}</tbody></table></div>` : '';
 }
 
-function drawStatus(acc) {
+// One compact line: Oracle (saving), Ask AI (read-only account), local AI assistant.
+function drawStatus() {
   const h = state.health || {}; const db = h.database || {}; const ro = h.readonly || {}; const ai = h.ollama || {};
-  const row = (ok, title, detail, tip = '') => `<div class="dash-light ${ok === true ? 'ok' : ok === false ? 'off' : 'idle'}" ${tip ? `title="${esc(tip)}"` : ''}><i class="dot"></i><div><b>${esc(title)}</b><small>${esc(detail)}</small></div></div>`;
+  const item = (ok, title, tip = '') => `<span class="st ${ok === true ? 'ok' : ok === false ? 'off' : 'idle'}" ${tip ? `title="${esc(tip)}"` : ''}><i class="dot"></i>${esc(title)}</span>`;
   $('#dash-status').innerHTML = [
-    row(!!db.connected, db.connected ? 'Oracle connected' : 'Oracle offline', db.connected ? 'Saving enabled' : 'Saving is paused until Oracle is back',
-      db.connected ? `${db.owner} · ${db.tables} tables` : `${db.error || ''} Start the Oracle database (Docker Desktop → oracle26ai) and refresh.`),
-    row(db.connected ? !!ro.connected : null, ro.connected ? 'Ask AI ready' : 'Ask AI not ready', ro.connected ? 'Read-only access' : 'Needs Oracle', ro.error || ''),
-    row(ai.available ? true : null, ai.available ? 'AI assistant on' : 'AI assistant off', ai.available ? ai.model : 'Optional'),
-    row(acc ? acc.correct === acc.total : null, acc ? `Answer accuracy ${acc.correct}/${acc.total}` : 'Answer accuracy not checked',
-      acc ? `Checked ${timeAgo(acc.at)}` : 'Setup → Answer accuracy', acc ? `Compared with hand-written SQL${acc.live ? '' : ' (offline snapshot)'}` : ''),
+    item(!!db.connected, db.connected ? `Oracle connected · ${db.owner || ''}` : 'Oracle offline · saving paused',
+      db.connected ? `${db.tables || ''} tables · ${db.dsn || ''}` : `${db.error || ''} Start the Oracle database (Docker Desktop → oracle26ai) and refresh.`),
+    item(db.connected ? !!ro.connected : null, ro.connected ? 'Database view ready' : 'Database view needs Oracle', ro.error || ''),
+    item(ai.available ? true : null, ai.available ? `AI assistant on · ${ai.model}` : 'AI assistant off (optional)'),
   ].join('');
 }

@@ -365,8 +365,11 @@ def plan(catalog, orders, filehash, mapping, required=()):
         bom = dict(octx=octx, keys=keys, ops=ops, subnos=subnos, order_pieces=order_pieces, prefix=prefix, base=base,
                    orderkey=orderkey, ref=ref, tables=tables, writable=writable, issues=issues, evaluate=evaluate,
                    add=add, totals=totals, reference_only=reference_only, derived=derived)
-        _plan_fabrics(o, **bom)
-        _plan_accessories(o, **bom)
+        mapped = o.get('oracle_rows') or {}         # rows the person mapped replace the reference preview of that table
+        if not {'ORDFAB', 'ORDYARN'} & set(mapped):
+            _plan_fabrics(o, **bom)
+        if 'ORDACC' not in mapped:
+            _plan_accessories(o, **bom)
 
     _check_columns(operations, registry, issues, tables)
     totals['fabric_kg'] = plain(q(totals['fabric_kg']))

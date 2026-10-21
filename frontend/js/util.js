@@ -68,7 +68,7 @@ export function drawer(title, html) {
 }
 export function closeDrawer() {
   const open = !$('#drawer').hidden;
-  $('#drawer').hidden = true; $('#scrim').hidden = true;
+  $('#drawer').hidden = true; $('#scrim').hidden = true; $('#drawer').classList.remove('wide');
   if (open && drawerReturn?.isConnected) drawerReturn.focus();
   drawerReturn = null;
 }

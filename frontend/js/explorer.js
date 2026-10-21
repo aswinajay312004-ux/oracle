@@ -1,22 +1,22 @@
-// Read-only GARMENT_DEMO explorer. The Database screen opens on Orders (dborders.js: each order as people check it);
-// "All tables" is this table explorer: business names, records with decoded master labels, linked records (parents
-// and children through the relationship map), and an expandable relationship diagram.
-import { $, $$, esc, show, fmt, plural, busy, drawer, closeDrawer, notify, formView, state } from './util.js';
+// Database screen. Orders (dborders.js) lists the orders; "All tables" is the flowchart of every table and how they
+// link, with the rows of the table clicked shown underneath. A table a recent save wrote rows into blinks until it is
+// opened on this computer (remembered in this browser only).
+import { $, $$, esc, show, fmt, plural, busy, notify, state } from './util.js';
 import { api, id } from './api.js';
 import { renderGraph } from './graph.js';
-import { loadOrders, findOrder, openOrder } from './dborders.js';
+import { loadOrders, orderPanel } from './dborders.js';
 
 let tables = []; let tablesReady = null; let current = null; let tab = 'records';
 let mode = 'orders';   // 'orders' | 'tables'
-let trail = [];   // records opened one inside another in the drawer, for the Back button
+let updates = {};   // table -> newest POPPYS save that wrote rows into it
 const lastPage = new Map();   // table -> its last page that loaded, so a failed read can still draw the filter bar
 const view = { showSys: false, showEmpty: false };   // grid toggles, kept while the app is open
-const GROUPS = [['header', 'Order tables'], ['detail', 'Order tables'], ['master', 'Masters'], ['local', 'Local'], ['other', 'Other tables']];
 const RANK = { label: 1, reference: 2, measure: 3, date: 4 };
 const APPROX = 'Approximate count from Oracle statistics. Very large tables are not counted row by row, so pages stay fast. Filter the table to get an exact count.';
 const NOT_COUNTED = 'There are more linked rows than listed here. Counting them all took too long on this database, so no exact number is shown.';
 const blank = v => v == null || v === '';
 const confirmed = s => s === 'verified' || s === 'declared';
+const SEEN = 'poppys.seen-tables';
 const count = (n, approx) => approx ? `<span class="ex-approx" title="${esc(APPROX)}">≈ ${fmt(n, 0)}</span>` : fmt(n, 0);
 
 // busy() drops a second action while one runs; explorer reads are safe to overlap, so they still run.
@@ -38,38 +38,52 @@ export async function loadExplorer(force = false) {
   return mode === 'orders' ? loadOrders(force) : loadTables(force);
 }
 
-// "Oracle tables & IDs" of an order on the Orders view: the record with its linked rows, in All tables.
-export async function showRecord(table, pk) {
-  setMode('tables');
-  try { await fetchTables(); drawTables(); } catch (e) { return notify(e.message, 'error'); }
-  const key = tables.find(t => t.table === table)?.key;
-  if (key) await openTable(table, { column: key, value: String(pk), exact: true });
-  return openRecord(table, pk);
-}
-
 async function loadTables(force = false) {
-  if (tables.length && !force) { drawTables(); if (current) return load(); return; }
-  const ok = await run('Reading the table list from Oracle…', async () => {
+  if (tables.length && !force) { await drawFlow(); if (current) return load(); return; }
+  const ok = await run('Reading the tables from Oracle…', async () => {
     try { await fetchTables(force); }
-    catch (e) { $('#tables').innerHTML = `<p class="empty">${esc(e.message)}</p>`; $('#table-view').innerHTML = '<p class="empty">Connect Oracle to browse tables.</p>'; return false; }
-    drawTables(); return true;
+    catch (e) { $('#db-flow').innerHTML = `<p class="empty">${esc(e.message)}</p>`; $('#table-view').innerHTML = '<p class="empty">Connect Oracle to see the tables.</p>'; return false; }
+    await drawFlow(); return true;
   });
   if (ok && !current && tables.some(t => t.table === 'ORDMAS')) await openTable('ORDMAS');
 }
 
-function drawTables() {
-  const q = $('#table-filter').value.trim().toUpperCase();
-  const list = tables.filter(t => !q || t.table.includes(q) || (t.business || '').toUpperCase().includes(q));
-  const seen = new Set(); let html = '';
-  for (const [kind, title] of GROUPS) {
-    const items = list.filter(t => (t.kind === kind) || (kind === 'other' && !['header', 'detail', 'master', 'local'].includes(t.kind)));
-    if (!items.length) continue;
-    if (!seen.has(title)) { html += `<div class="tl-group">${title}</div>`; seen.add(title); }
-    html += items.sort((a, b) => a.table.localeCompare(b.table)).map(t => `<button class="tl-item ${current?.table === t.table ? 'active' : ''}" data-table="${esc(t.table)}" title="${esc(t.description || '')}">
-      <b>${esc(t.business || t.table)}</b><span class="n" title="${esc(t.approx ? APPROX : 'Exact row count')}">${t.rows == null ? '' : (t.approx ? '≈ ' : '') + fmt(t.rows, 0)}</span><code>${esc(t.table)}</code></button>`).join('');
+// ------------------------------------------------------------------ the flowchart
+function seen() { try { return JSON.parse(localStorage.getItem(SEEN) || '{}'); } catch (_) { return {}; } }
+function markSeen(table) {
+  if (!updates[table]) return;
+  const s = seen(); s[table] = updates[table].at;
+  try { localStorage.setItem(SEEN, JSON.stringify(s)); } catch (_) { /* this browser keeps nothing: it blinks again next time */ }
+  $(`#db-flow .gnode[data-id="${CSS.escape(table)}"]`)?.classList.remove('blink');
+  note();
+}
+const fresh = t => !!updates[t] && (seen()[t] || '') < updates[t].at;
+function note() {
+  const blinking = tables.filter(t => fresh(t.table)).map(t => t.table);
+  $('#flow-note').textContent = blinking.length ? `Blinking: tables a recent save wrote rows into (${blinking.join(', ')}). Open one to stop it blinking.`
+    : 'Click a table to see its rows below. Lines show which tables are linked.';
+}
+
+async function drawFlow() {
+  let joins = [];
+  try { [joins, updates] = await Promise.all([api('/api/knowledge/joins'), api('/api/tables/updates').catch(() => ({}))]); }
+  catch (e) { $('#db-flow').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
+  const shown = tables.filter(t => t.kind !== 'local');
+  const ids = new Set(shown.map(t => t.table));
+  const nodes = shown.map(t => ({ id: t.table, title: t.business || t.table, code: t.table, kind: t.kind === 'header' ? 'header' : t.kind === 'master' ? 'master' : 'detail',
+    line3: fresh(t.table) ? `New rows: ${updates[t.table].order_ref || 'saved'}` : '', cls: fresh(t.table) ? 'blink' : '',
+    status: { text: t.rows == null ? '' : `${t.approx ? '≈ ' : ''}${fmt(t.rows, 0)} rows`, cls: 'muted' } }));
+  const edges = [];
+  for (const j of joins) {
+    if (!ids.has(j.parent) || !ids.has(j.child) || j.parent === j.child || j.status === 'rejected') continue;
+    if (edges.some(e => e.from === j.parent && e.to === j.child)) continue;
+    edges.push({ from: j.parent, to: j.child, label: '', cls: confirmed(j.status) ? 'link' : 'proposed',
+      title: `${j.label || ''} · ${j.pairs.map(([c, p]) => `${j.child}.${c} = ${j.parent}.${p}`).join(' AND ')}` });
   }
-  const approx = list.some(t => t.approx && t.rows != null);
-  $('#tables').innerHTML = (html || '<p class="empty">No tables match.</p>') + (approx ? `<p class="ex-note"><b>≈</b> ${esc(APPROX)}</p>` : '');
+  note();
+  renderGraph($('#db-flow'), { nodes, edges }, { selected: current?.table, masterBand: true, bandTitle: 'NAMES (MASTER TABLES) — point at one to see what uses it',
+    treeTitle: 'ORDER TABLES', nodeW: 196, nodeH: 70, gapX: 70, label: 'Database tables and how they link',
+    onSelect: t => { markSeen(t); openTable(t); $('#table-view').scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
 }
 
 // params: column, value, exact (the filter), tab, and for screens that know better than the server's
@@ -77,7 +91,7 @@ function drawTables() {
 export async function openTable(table, params = {}) {
   current = { table, column: params.column || '', value: params.value || '', exact: !!params.exact, after: null, explain: params.explain, empty: params.empty };
   tab = params.tab || 'records';
-  drawTables(); await load();
+  await load();
 }
 
 // A fresh count from reading a table keeps the table list (read once per session) and the relationship
@@ -116,7 +130,7 @@ async function load(more = false) {
       cur.data = data; cur.after = data.next_after; cur.error = null;
       lastPage.set(cur.table, data);
       if (cur !== current) return;   // a newer table or filter was opened meanwhile
-      if (!filtered && !more && noteCount(cur.table, data.total, data.approx)) drawTables();
+      if (!filtered && !more) noteCount(cur.table, data.total, data.approx);
       draw();
     });
   } finally { cur.loading = false; }
@@ -173,7 +187,7 @@ function draw() {
   $('#table-view').innerHTML = `<div class="ex-head"><div style="flex:1;min-width:0"><div class="row wrap"><h2>${esc(d.business || d.table)}</h2><code class="muted">${esc(d.table)}</code>
       ${d.total == null ? '' : `<span class="pill" title="${esc(d.approx ? APPROX : 'Exact row count')}">${d.approx ? '≈ ' : ''}${plural(d.total, filtered ? 'matching row' : 'row', filtered ? 'matching rows' : 'rows')}</span>`}${meta.links ? `<span class="pill brand">${plural(meta.links, 'link')}</span>` : ''}</div>
       <p class="muted small-text" style="margin-top:2px">${esc(d.description || '')} · read-only${d.approx ? ` · <span class="ex-approx" title="${esc(APPROX)}">≈ approximate count (Oracle statistics)</span>` : ''}</p></div></div>
-    <nav class="ex-tabs tabs">${[['records', 'Records'], ['columns', d.columns.length ? `Columns (${d.columns.length})` : 'Columns'], ['links', 'Relationships']].map(([k, n]) => `<button class="${tab === k ? 'active' : ''}" data-xtab="${k}">${n}</button>`).join('')}</nav>
+    <nav class="ex-tabs tabs">${[['records', 'Rows'], ['columns', d.columns.length ? `Columns (${d.columns.length})` : 'Columns']].map(([k, n]) => `<button class="${tab === k ? 'active' : ''}" data-xtab="${k}">${n}</button>`).join('')}</nav>
     <div data-xbody></div>`;
   const body = $('[data-xbody]');
   if (tab === 'records' || (tab === 'columns' && !d.columns.length)) {
@@ -185,7 +199,7 @@ function draw() {
       ${d.rows.length ? `<div class="grid-scroll"><table><thead><tr>${shown.map(c => `<th title="${esc([c.type, c.role, c.references && 'links to ' + c.references].filter(Boolean).join(' · '))}">${esc(c.label || c.name)}<span class="code">${esc(c.name)}</span></th>`).join('')}</tr></thead><tbody>
         ${d.rows.map((r, i) => `<tr class="clickable" data-row="${i}">${shown.map(c => `<td>${cellHtml(d, c.name, r[c.name])}</td>`).join('')}</tr>`).join('')}
       </tbody></table></div>
-      <div class="pager"><span>${plural(d.rows.length, 'row')} shown${d.total != null ? ` of ${count(d.total, d.approx)}` : ''} · ${d.key ? 'newest first' : 'Oracle order'} · click a row to see linked records</span>
+      <div class="pager"><span>${plural(d.rows.length, 'row')} shown${d.total != null ? ` of ${count(d.total, d.approx)}` : ''} · ${d.key ? 'newest first' : 'Oracle order'} · ${orderLink(d) ? 'click a row to open its order' : 'read-only'}</span>
         ${cur.moreError ? `<span class="ex-more-err" role="alert">More rows could not be read: ${esc(cur.moreError)}</span>` : more ? '<button class="secondary small" id="more">Load more</button>' : ''}</div>` : emptyHtml(cur, d)}`;
     $('#filter-form')?.addEventListener('submit', e => { e.preventDefault(); openTable(cur.table, { column: $('#f-col').value, value: $('#f-val').value.trim(), exact: $('#f-op').value === 'exact' }); });
     $('#f-clear')?.addEventListener('click', () => openTable(cur.table));
@@ -196,148 +210,22 @@ function draw() {
       clear: () => openTable(cur.table), retry: () => openTable(cur.table),
       exact: () => openTable(cur.table, { column: cur.column, value: cur.value, exact: true }),
     })[b.dataset.x]()));
-    $$('#table-view tr[data-row]').forEach(tr => tr.onclick = () => { const r = d.rows[Number(tr.dataset.row)]; openRecord(cur.table, r[d.key || meta.key], { row: r, data: d }); });
+    const link = orderLink(d);
+    $$('#table-view tr[data-row]').forEach(tr => { if (!link) { tr.classList.remove('clickable'); return; } tr.onclick = () => { const v = d.rows[Number(tr.dataset.row)][link]; if (v != null) orderPanel(v); }; });
   } else if (tab === 'columns') {
     body.innerHTML = `<p class="muted small-text ex-cols-note">In business order: the columns shown first in Records, then names, master links, quantities and dates, then the rest.</p>
       <div class="grid-scroll"><table><thead><tr><th>Business name</th><th>Column</th><th>Type</th><th>Role</th></tr></thead><tbody>
       ${all.map(c => `<tr><td><b>${esc(c.label || '—')}</b>${(d.display || []).includes(c.name) ? ' <span class="pill brand">shown first</span>' : ''}</td><td class="mono">${esc(c.name)}</td><td class="muted">${esc(c.type)}</td><td>${c.role ? `<span class="pill ${c.role === 'system' ? '' : c.role === 'reference' ? 'master' : c.role === 'measure' ? 'brand' : 'info'}">${esc(c.role)}</span>` : ''}${c.references ? ` <span class="muted small-text">→ ${esc(c.references)}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
-  } else {
-    body.innerHTML = `<div class="flow-wrap" data-rel style="min-height:240px"></div><div class="legend"><span>Click a table to open it · ＋ adds its linked tables</span><span><i style="background:#d39a2c"></i>Unconfirmed link</span><span data-approx hidden title="${esc(APPROX)}">≈ approximate row count (Oracle statistics)</span></div>`;
-    relationshipMap(body.querySelector('[data-rel]'), current.table, body.querySelector('[data-approx]'));
   }
   $$('[data-xtab]').forEach(b => b.onclick = () => { tab = b.dataset.xtab; draw(); });
 }
 
-const rowsText = (n, approx) => n == null ? '' : `${approx ? '≈ ' : ''}${fmt(n, 0)} rows`;
+// A row of an order table opens its order in the panel (the order's record ID column).
+const orderLink = d => d.columns.some(c => c.name === 'ORDMASID') ? 'ORDMASID' : null;
 
-async function relationshipMap(el, focus, approxNote) {
-  const nodes = new Map(); const edges = [];
-  const add = async table => {
-    const n = await api(`/api/knowledge/neighbours/${id(table)}`);
-    // the open table shows the count in its header pill (read just now), not the session's table list
-    const page = table === focus && current?.table === focus && !(current.column && current.value) && current.data;
-    const own = page && page.total != null ? { rows: page.total, approx: page.approx } : tables.find(t => t.table === table) || {};
-    if (!nodes.has(table)) nodes.set(table, { id: table, title: n.business, code: table, kind: n.kind, base: table === focus, approx: own.approx, status: { text: rowsText(own.rows, own.approx), cls: 'muted' } });
-    n.neighbours.forEach(x => {
-      if (!nodes.has(x.table)) nodes.set(x.table, { id: x.table, title: x.business, code: x.table, kind: x.kind, line3: x.label, approx: x.approx, status: { text: rowsText(x.rows, x.approx), cls: 'muted' } });
-      const from = x.direction === 'up' ? x.table : table, to = x.direction === 'up' ? table : x.table;
-      if (!edges.some(e => e.from === from && e.to === to)) edges.push({ from, to, label: '', title: `${x.label} · ${x.on} (${x.status})`, cls: confirmed(x.status) ? 'link' : 'proposed' });
-    });
-    approxNote.hidden = ![...nodes.values()].some(x => x.approx && x.status.text);
-  };
-  const draw = () => renderGraph(el, { nodes: [...nodes.values()], edges }, { selected: focus, onSelect: t => { if (t !== current.table) openTable(t, { tab: 'links' }); },
-    onExpand: async t => { try { await add(t); draw(); } catch (e) { notify(e.message, 'error'); } }, nodeW: 200, nodeH: 72, gapX: 80 });
-  try { await add(focus); draw(); } catch (e) { el.innerHTML = `<p class="empty">${esc(e.message)}</p>`; }
-}
-
-// --- one record in the drawer: its fields, the masters it belongs to, and its child rows ------------------
-// A record's name: its label column (master name when decoded), else its record ID.
-function nameOf(data, row, pk) {
-  const label = data.label && row[data.label];
-  return blank(label) ? (pk == null ? '' : `#${pk}`) : String(data.decoded?.[data.label]?.[String(label)] ?? label);
-}
-const titleOf = (data, row, pk) => `${data.business || data.table} ${nameOf(data, row, pk) || 'record'}`;
-
-async function openRecord(table, pk, hint = {}, nested = false) {
-  const meta = tables.find(t => t.table === table) || {};
-  const base = { table, business: meta.business || table, key: meta.key, label: meta.label, display: [], decoded: {}, ...(hint.data || {}) };
-  const row = hint.row || {};
-  if (!nested) trail = [];
-  trail.push({ table, pk, title: titleOf(base, row, pk) });
-  const token = openRecord.token = {};
-  const body = drawer(trail.at(-1).title, recordHtml({ ...base, record: row, columns: base.columns || Object.keys(row).map(n => ({ name: n })), related: null }));
-  bindRecord(body, null);
-  if (pk == null) { body.querySelector('[data-related]').innerHTML = '<p class="muted">This table has no single record ID, so linked records cannot be listed.</p>'; return; }
-  let rel;
-  try { rel = await api(`/api/explorer/related/${id(table)}/${id(pk)}`); }
-  catch (e) { if (openRecord.token === token) body.querySelector('[data-related]').innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
-  if (openRecord.token !== token || $('#drawer').hidden) return;   // another record was opened, or the drawer closed
-  trail.at(-1).title = titleOf(rel, rel.record, pk);
-  $('#drawer-title').textContent = trail.at(-1).title;
-  body.innerHTML = recordHtml(rel); bindRecord(body, rel);
-}
-
-// Child tables in reading order: a table other rows hang under comes first, followed by those rows
-// (order lines, then their size rows), then any other child tables.
-function arrange(groups) {
-  const down = groups.filter(g => g.direction === 'down'); const present = new Set(down.map(g => g.table));
-  const parentOf = g => g.under && present.has(g.under.table) ? g.under.table : null;
-  const kids = t => down.filter(c => parentOf(c) === t).sort((a, b) => !confirmed(a.under.status) - !confirmed(b.under.status));
-  const out = []; const seen = new Set();
-  const visit = g => { if (seen.has(g.table)) return; seen.add(g.table); out.push(g); kids(g.table).forEach(visit); };
-  down.filter(g => !parentOf(g)).sort((a, b) => !kids(a.table).length - !kids(b.table).length).forEach(visit);
-  down.forEach(visit);   // anything left in a loop of links
-  return out;
-}
-
-function recordHtml(rel) {
-  const fields = ordered(rel).filter(c => !blank(rel.record[c.name]));
-  let facts = fields.filter(c => (rel.display || []).includes(c.name) || c.name === rel.key);
-  if (facts.length < 4) facts = fields;
-  const rest = fields.filter(c => !facts.includes(c));
-  const field = c => ({ label: c.label || c.name, code: c.name, html: cellHtml(rel, c.name, rel.record[c.name]) });
-  const back = trail.length > 1 ? `<button class="ghost small ex-back" data-back>← Back to ${esc(trail.at(-2).title)}</button>` : '';
-  if (!rel.related) return `${back}${formView(facts.map(field))}<div class="record-sections" data-related><p class="muted">Loading linked records…</p></div>`;
-  const downs = arrange(rel.related); const ups = rel.related.filter(g => g.direction === 'up');
-  const byTable = Object.fromEntries(downs.map(g => [g.table, g]));
-  return `${back}${formView(facts.map(field))}
-    ${rest.length ? `<details class="ex-more"><summary>All fields (${rest.length} more)</summary>${formView(rest.map(field))}</details>` : ''}
-    ${ups.length ? `<div class="ex-masters"><span class="ex-sub">Belongs to</span>${ups.map(g => g.rows.map((r, ri) => `<button class="ex-master ${confirmed(g.status) ? '' : 'unconfirmed'}" data-open="${rel.related.indexOf(g)}:${ri}" title="${esc(`${g.on}${confirmed(g.status) ? '' : ' · unconfirmed link'}`)}"><small>${esc(g.business)}</small><b>${esc(nameOf(g, r, r[g.key]) || '—')}</b></button>`).join('')).join('')}</div>` : ''}
-    ${downs.length ? `<nav class="ex-jump" aria-label="Linked records">${downs.map(g => `<button class="secondary small" data-jump="${esc(g.table)}">${esc(g.business)} <span class="count-badge" ${g.total == null ? `title="${esc(NOT_COUNTED)}"` : ''}>${g.total == null ? `${fmt(g.rows.length, 0)}+` : fmt(g.total, 0)}</span></button>`).join('')}</nav>` : ''}
-    <div class="record-sections" data-related>${downs.map(g => childHtml(rel, g, byTable)).join('') || (ups.length ? '' : '<p class="muted">No linked records found.</p>')}</div>`;
-}
-
-// Line number + name of each row of a table other rows hang under, keyed by the linking values.
-const linkKey = (r, cols) => cols.map(c => String(r[c])).join('|');
-const badge = n => `<span class="ex-line" title="Row ${n}">${n}</span>`;
-
-// One child table of the record. Rows that hang under another child table (sizes under order lines)
-// start with that line's number and name, sorted line by line; the line table numbers its rows to match.
-function childHtml(rel, g, byTable) {
-  const parent = g.under && byTable[g.under.table];
-  const lineAt = parent && new Map(parent.rows.map((r, i) => [linkKey(r, g.under.pairs.map(([, p]) => p)), { n: i + 1, name: nameOf(parent, r, null) }]));
-  const child = Object.values(byTable).find(c => c.under?.table === g.table);   // rows of another table hang under this one
-  const hide = new Set([g.key, ...(g.pairs || []).map(([c]) => c), ...(parent ? g.under.pairs.map(([c]) => c) : []), ...(child ? child.under.pairs.map(([, p]) => p) : [])]);
-  const cols = ordered(g).filter(c => !hide.has(c.name) && g.rows.some(r => !blank(r[c.name]))).slice(0, parent ? 7 : 8);
-  const rows = g.rows.map((r, i) => ({ r, i, line: lineAt?.get(linkKey(r, g.under.pairs.map(([c]) => c))) }));
-  if (parent) rows.sort((a, b) => (a.line?.n ?? 1e9) - (b.line?.n ?? 1e9) || a.i - b.i);
-  const measures = cols.filter(c => c.role === 'measure' && g.rows.every(r => blank(r[c.name]) || typeof r[c.name] === 'number'));
-  const lead = [parent && `<th>${esc(parent.business)}</th>`, child && '<th title="Row number">#</th>'].filter(Boolean);
-  const leadCells = (i, line, repeat) => (parent ? `<td class="nowrap">${line ? `${badge(line.n)} ${repeat ? '' : esc(line.name)}` : '<span class="muted" title="No matching row in the table above">—</span>'}</td>` : '') + (child ? `<td>${badge(i + 1)}</td>` : '');
-  const foot = !g.more && g.rows.length > 1 && measures.length ? `<tfoot><tr>${lead.map((_, i) => `<td>${i ? '' : 'Total'}</td>`).join('')}${cols.map((c, ci) =>
-    `<td>${measures.includes(c) ? fmt(g.rows.reduce((s, r) => s + (Number(r[c.name]) || 0), 0)) : !lead.length && !ci ? 'Total' : ''}</td>`).join('')}</tr></tfoot>` : '';
-  const counted = g.total != null;   // null: there are more rows than listed, but counting them ran out of time
-  const showing = counted ? `Showing the first ${fmt(g.rows.length, 0)} of ${fmt(g.total, 0)}` : `Showing the first ${fmt(g.rows.length, 0)}. There are more, but counting them all took too long`;
-  return `<section class="rel-section" id="rel-${esc(g.table)}"><h4>${esc(g.business)} <code class="muted">${esc(g.table)}</code>${counted ? `<span class="pill">${plural(g.total, 'row')}</span>` : `<span class="pill" title="${esc(NOT_COUNTED)}">more than ${plural(g.rows.length, 'row')}</span>`}
-      <span class="pill ${confirmed(g.status) ? 'ok' : 'warn'}">${confirmed(g.status) ? 'confirmed link' : 'unconfirmed link'}</span></h4>
-    <p class="muted small-text ex-on">${esc(g.on)}${parent ? ` · grouped by ${esc(parent.business.toLowerCase())}${confirmed(g.under.status) ? '' : ' (unconfirmed link)'}` : ''}</p>
-    <div class="tbl-wrap ex-rel-table"><table><thead><tr>${lead.join('')}${cols.map(c => `<th>${esc(c.label)}<span class="code">${esc(c.name)}</span></th>`).join('')}</tr></thead><tbody>
-    ${rows.map(({ r, i, line }, k) => `<tr class="clickable" data-open="${rel.related.indexOf(g)}:${i}">${leadCells(i, line, k > 0 && line && rows[k - 1].line === line)}${cols.map(c => `<td>${cellHtml(g, c.name, r[c.name], true)}</td>`).join('')}</tr>`).join('')}</tbody>${foot}</table></div>
-    ${g.more ? `<p class="muted small-text">${showing}${measures.length ? ', so no total is shown here' : ''}.${g.filter ? ` <button class="link" data-all="${esc(g.table)}">Show all${counted ? ` ${fmt(g.total, 0)}` : ''} in the table</button>` : ''}</p>` : ''}</section>`;
-}
-
-function bindRecord(body, rel) {
-  body.querySelector('[data-back]')?.addEventListener('click', () => { trail.pop(); const prev = trail.pop(); openRecord(prev.table, prev.pk, {}, true); });
-  if (!rel) return;
-  $$('[data-open]', body).forEach(el => el.onclick = () => {
-    const [gi, ri] = el.dataset.open.split(':').map(Number); const g = rel.related[gi]; const r = g.rows[ri];
-    openRecord(g.table, g.key ? r[g.key] : null, { row: r, data: g }, true);
-  });
-  $$('[data-jump]', body).forEach(b => b.onclick = () => body.querySelector(`#rel-${CSS.escape(b.dataset.jump)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-  $$('[data-all]', body).forEach(b => b.onclick = () => {
-    const g = rel.related.find(x => x.table === b.dataset.all); closeDrawer();
-    openTable(g.table, { column: g.filter.column, value: String(g.filter.value), exact: true });
-  });
-}
-
-// "Check against the Excel" / "Open in Database" on the Saved screen (an order record ID): that order on the Orders view.
-export async function exploreOrder(ref) {
-  setMode('orders');
-  return /^\d+$/.test(String(ref)) ? openOrder(ref) : findOrder(ref);
-}
+// "See the tables in the flowchart" after a save.
+export function showTables() { setMode('tables'); return loadExplorer(); }
 
 export function bindExplorer() {
-  $('#table-filter').addEventListener('input', drawTables);
-  $('#tables').addEventListener('click', e => { const b = e.target.closest('[data-table]'); if (b) openTable(b.dataset.table); });
   $$('[data-dbview]').forEach(b => b.addEventListener('click', () => { setMode(b.dataset.dbview); loadExplorer(); }));
 }

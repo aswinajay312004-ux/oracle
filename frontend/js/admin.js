@@ -1,4 +1,4 @@
-// Setup: write mapping, data dictionary (business meaning + relationships), order fields, templates, users, audit, settings.
+// Setup: write mapping, data dictionary (business meaning + relationships), order fields, templates, audit, the shared password.
 import { $, $$, esc, show, fmt, can, notify, busy, confirmDialog, passwordDialog, state } from './util.js';
 import { api, id, orderFields } from './api.js';
 
@@ -23,9 +23,9 @@ export function bindAdmin() {
 }
 
 export async function loadAdmin() {
-  $$('.subnav [data-admin]').forEach(b => { b.classList.toggle('active', b.dataset.admin === section); b.hidden = b.dataset.permission && !can(b.dataset.permission); });
+  $$('.subnav [data-admin]').forEach(b => { b.classList.toggle('active', b.dataset.admin === section); b.hidden = false; });
   const body = $('#admin-body'); body.innerHTML = ''; body.onclick = body.onchange = body.oninput = body.onkeydown = null;
-  await busy('Loading…', async () => ({ mapping, dictionary, fields, templates, accuracy, users, audit, settings })[section](body));
+  await busy('Loading…', async () => ({ mapping, dictionary, fields, templates, accuracy, audit, settings })[section](body));
 }
 
 function toggle(attrs, status, enabled) {
@@ -202,49 +202,6 @@ async function fields(body) {
   };
 }
 
-async function users(body) {
-  const list = await api('/api/users');
-  const roles = ['operator', 'approver', 'admin', 'viewer'];
-  body.innerHTML = `<section class="card"><div class="card-head"><div><h2>People</h2><div class="sub">Operators prepare entries · Approvers save to Oracle · Admins manage setup</div></div></div>
-    <div class="tbl-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>
-    ${list.map(u => `<tr><td><strong>${esc(u.username)}</strong></td><td><select data-role="${esc(u.username)}">${roles.map(r => `<option ${r === u.role ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
-      <td>${u.active ? '<span class="pill ok">active</span>' : '<span class="pill">disabled</span>'}</td>
-      <td><button class="ghost small" data-active-user="${esc(u.username)}" data-active="${!u.active}">${u.active ? 'Disable' : 'Enable'}</button> <button class="ghost small" data-reset="${esc(u.username)}">Reset password</button></td></tr>`).join('')}
-    </tbody></table></div>
-    <div class="card-body"><h3 style="margin-bottom:8px">Add a person</h3>
-    <form id="add-user" class="form-row"><label>Username<input name="username" required minlength="2" maxlength="50" pattern="[A-Za-z0-9._@\\-]+"></label>
-      <label>Temporary password<input name="password" type="password" required minlength="12" autocomplete="new-password"></label>
-      <label>Role<select name="role">${roles.map(r => `<option>${r}</option>`).join('')}</select></label><button class="primary">Add</button></form></div></section>`;
-  $('#add-user').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); busy('Adding…', async () => { await api('/api/users', { method: 'POST', body: Object.fromEntries(f) }); notify('Person added.', 'success'); await users(body); }); };
-  body.onchange = async e => {
-    const s = e.target.closest('[data-role]'); if (!s) return;
-    const was = list.find(u => u.username === s.dataset.role)?.role;
-    if (!await confirmDialog('Change this person’s role?', `<p><b>${esc(s.dataset.role)}</b>: ${esc(was)} → <b>${esc(s.value)}</b>. They are signed out and sign in again with the new rights.</p>`, 'Change role')) { s.value = was; return; }
-    busy('Saving…', async () => { await api(`/api/users/${id(s.dataset.role)}`, { method: 'PATCH', body: { role: s.value } }); notify('Role updated.', 'success'); await users(body); });
-  };
-  body.onclick = async e => {
-    const a = e.target.closest('[data-active-user]'); const r = e.target.closest('[data-reset]');
-    if (a) {
-      const on = a.dataset.active === 'true';
-      if (!on && !await confirmDialog('Disable this person?', `<p><b>${esc(a.dataset.activeUser)}</b> is signed out and cannot sign in until enabled again. Their earlier work stays in the audit history.</p>`, 'Disable')) return;
-      busy('Saving…', async () => { await api(`/api/users/${id(a.dataset.activeUser)}`, { method: 'PATCH', body: { active: on } }); await users(body); });
-    }
-    if (r) {
-      const pw = await passwordDialog(`New password for ${r.dataset.reset}`, 'They are signed out everywhere and choose their own password at the next sign-in.');
-      if (pw) busy('Saving…', async () => { await api(`/api/users/${id(r.dataset.reset)}`, { method: 'PATCH', body: { password: pw } }); notify('Password reset. Their sessions were signed out.', 'success'); });
-    }
-  };
-}
-
-const ACTIONS = { upload: 'Uploaded a file', edit: 'Corrected values', preview: 'Prepared the preview', approved_saved: 'Approved & saved to Oracle', approve_failed: 'Save failed (rolled back)',
-  mapping_applied: 'Applied a layout', template_saved: 'Saved a layout template', mapping_status: 'Changed column mapping', login: 'Signed in', login_failed: 'Failed sign-in',
-  user_created: 'Added a person', user_changed: 'Changed a person', settings_changed: 'Changed settings', setup: 'Created the workspace', template_active: 'Changed a template',
-  field_changed: 'Changed an order field', template_unit_learned: 'A layout template learned its quantity unit',
-  knowledge_edit: 'Edited the data dictionary', knowledge_refresh: 'Refreshed the data dictionary', chat_feedback: 'Rated an AI answer', example_deleted: 'Removed a confirmed answer' };
-
-// Ask AI accuracy: golden questions with hand-written SQL (backend/insight/benchmark.py), run on the live database.
-const BENCH_PILL = { correct: 'ok', wrong: 'err', refused: 'warn', 'not understood': 'warn', error: 'err', skipped: '' };
-
 async function accuracy(body) {
   const h = await api('/api/benchmark');
   const last = h.runs[0]; const rep = last?.report;
@@ -278,20 +235,18 @@ async function audit(body) {
     </tbody></table></div></section>`;
 }
 
+// One login for everyone (owner, 2026-10-21): this changes the shared password. Everyone signs in again with the new one.
 async function settings(body) {
-  const s = await api('/api/settings');
-  body.innerHTML = `<form class="card pad form-card" id="settings-form"><h2>Workspace settings</h2>
-    <label>Default exporter (pre-filled on every order)<input name="company_exporter" value="${esc(s.company_exporter)}" maxlength="100"></label>
-    <label>Default sample type<input name="default_sample_type" value="${esc(s.default_sample_type)}" maxlength="30"></label>
-    <label class="check"><input type="checkbox" name="allow_self_approval" ${s.allow_self_approval ? 'checked' : ''}> Allow the person who uploaded a file to approve it (turn off for a four-eyes rule)</label>
-    <button class="primary">Save settings</button></form>`;
-  $('#settings-form').onsubmit = e => { e.preventDefault(); const f = new FormData(e.target);
-    busy('Saving…', async () => { await api('/api/settings', { method: 'PUT', body: { company_exporter: f.get('company_exporter'), default_sample_type: f.get('default_sample_type'), allow_self_approval: f.get('allow_self_approval') === 'on' } }); notify('Settings saved.', 'success'); }); };
+  const me = state.user;
+  body.innerHTML = `<section class="card pad form-card"><h2>Shared password</h2>
+    <p class="muted">Everyone signs in as <b>${esc(me)}</b>. A new password signs everyone out; tell the team the new one.</p>
+    <button class="primary" id="new-pw">Change the password…</button></section>`;
+  $('#new-pw').onclick = async () => {
+    const pw = await passwordDialog('New shared password', `Everyone who uses POPPYS AI signs in as ${me} with this password.`);
+    if (pw) busy('Saving…', async () => { await api(`/api/users/${id(me)}`, { method: 'PATCH', body: { password: pw } }); notify('Password changed. Sign in again with the new password.', 'success'); setTimeout(() => location.reload(), 1500); });
+  };
 }
 
-
-// ---------------- data dictionary: business meaning of tables/columns + relationship verification
-let dictTable = null;
 
 async function dictionary(body) {
   const [k, joins, examples] = await Promise.all([api('/api/knowledge'), api('/api/knowledge/joins'), api('/api/chat/examples')]);

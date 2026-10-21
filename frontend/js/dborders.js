@@ -1,16 +1,17 @@
-// Database screen, Orders: the orders in Oracle by business name, newest first, and one order as people check it — the
-// order sheet read from Oracle now and, for an order POPPYS saved, each value compared with the Excel file it came from.
-import { $, $$, esc, fmt, plural, notify, state, busy } from './util.js';
+// Database → Orders: the orders in Oracle, newest first, by Order ID (OC No) and name. Clicking an Order ID opens the
+// panel on the right with everything Oracle holds for that order: its details and colour × size table, every row of
+// every order table (all columns that have a value), the Excel as uploaded and the SQL to check it in SQL Developer.
+import { $, $$, esc, fmt, plural, notify, state, busy, drawer } from './util.js';
 import { api, id } from './api.js';
-import { sheetHtml, niceValue, openFullView, LABELS } from './ordersheet.js';
-import { showRecord } from './explorer.js';
+import { sheetHtml, niceValue } from './ordersheet.js';
 
-const view = { q: '', list: [], next: null, loaded: false, error: null, order: null, seq: 0, tab: 'excel', hidden: false };   // seq: the newest read wins
+const view = { q: '', list: [], next: null, loaded: false, error: null, seq: 0 };   // seq: the newest read wins
+const panel = { order: null, tab: 'details', hidden: false, system: false };
 const run = (message, fn) => state.busy ? fn().catch(e => notify(e.message, 'error')) : busy(message, fn);
 const when = v => v ? new Date(v).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+const name = o => [niceValue(o.style), niceValue(o.description)].filter(x => x && x !== '—').join(' · ') || '—';
 
 export async function loadOrders(force = false) {
-  if (view.order && !force) return drawOrder();
   if (view.loaded && !force) return drawList();
   await search(view.q);
 }
@@ -26,53 +27,43 @@ async function search(q, more = false) {
       if (mine !== view.seq) return;
       view.list = more ? view.list.concat(page.orders) : page.orders; view.next = page.next_after; view.error = null;
     } catch (e) { if (mine !== view.seq) return; if (!more) view.list = []; view.error = e.message; }
-    view.q = q; view.loaded = true; view.order = null;
+    view.q = q; view.loaded = true;
     drawList();
   });
 }
 
 function drawList() {
-  const box = $('#db-orders');
-  const rows = view.list;
+  const box = $('#db-orders'); const rows = view.list;
   box.innerHTML = `<section class="card db-list">
     <form class="db-search" id="db-search" role="search">
-      <input id="db-q" type="search" maxlength="60" value="${esc(view.q)}" placeholder="Search OC No, buyer, style or PO" aria-label="Search orders">
+      <input id="db-q" type="search" maxlength="60" value="${esc(view.q)}" placeholder="Search Order ID, buyer, style or PO" aria-label="Search orders">
       <button class="primary">Search</button>${view.q ? '<button type="button" class="ghost" data-dbx="clear">Show all</button>' : ''}
     </form>
     ${view.error ? `<div class="ex-empty err" role="alert"><b>Orders could not be read.</b><p>${esc(view.error)}</p></div>`
-    : !rows.length ? `<div class="ex-empty"><b>${view.q ? `No order matches “${esc(view.q)}”.` : 'No orders in Oracle yet.'}</b>${view.q ? '<p>Try part of the OC No (for example 1321), the buyer or the style.</p>' : ''}</div>`
+    : !rows.length ? `<div class="ex-empty"><b>${view.q ? `No order matches “${esc(view.q)}”.` : 'No orders in Oracle yet.'}</b></div>`
     : `<div class="tbl-wrap"><table class="db-table"><caption class="sr-only">Orders in Oracle, newest first</caption>
-      <thead><tr><th scope="col">OC No</th><th scope="col">Date</th><th scope="col">Buyer</th><th scope="col">Style</th><th scope="col" class="opt">Description</th><th scope="col" class="opt">PO</th><th scope="col" class="num">Pieces</th><th scope="col">Saved by</th></tr></thead>
-      <tbody>${rows.map((o, i) => `<tr class="clickable" data-oid="${i}"><th scope="row"><button class="link" data-oid="${i}">${esc(o.order_ref || '—')}</button></th>
-        <td class="nowrap">${esc(niceValue(o.date))}</td><td>${esc(niceValue(o.buyer))}</td><td>${esc(niceValue(o.style))}</td><td class="opt">${esc(niceValue(o.description))}</td><td class="opt">${esc(niceValue(o.po))}</td>
+      <thead><tr><th scope="col">Order ID</th><th scope="col">Order name</th><th scope="col">Buyer</th><th scope="col" class="opt">PO</th><th scope="col">Order date</th><th scope="col" class="num">Pieces</th><th scope="col">Entered</th></tr></thead>
+      <tbody>${rows.map(o => `<tr class="clickable" data-order-panel="${esc(o.id)}"><th scope="row"><button class="link" data-order-panel="${esc(o.id)}">${esc(o.order_ref || '—')}</button></th>
+        <td>${esc(name(o))}</td><td>${esc(niceValue(o.buyer))}</td><td class="opt">${esc(niceValue(o.po))}</td><td class="nowrap">${esc(niceValue(o.date))}</td>
         <td class="num">${o.pieces == null ? '—' : esc(fmt(o.pieces))}</td>
-        <td>${o.poppys ? `<span class="pill ok" title="${esc(`From ${o.poppys.filename} · ${when(o.poppys.saved_at)}`)}">POPPYS</span>` : '<span class="pill" title="Not saved by POPPYS on this computer">Axpert</span>'}</td></tr>`).join('')}</tbody></table></div>
-      <div class="pager"><span>${plural(rows.length, 'order')} · newest first · click an order to check it</span>${view.next != null ? '<button class="secondary small" data-dbx="more">Load more</button>' : ''}</div>`}
+        <td class="nowrap">${o.poppys ? `${esc(when(o.poppys.saved_at))}<div class="muted small-text">POPPYS · ${esc(o.poppys.filename || '')}</div>` : '<span class="muted">in Axpert</span>'}</td></tr>`).join('')}</tbody></table></div>
+      <div class="pager"><span>${plural(rows.length, 'order')} · newest first · click an Order ID to see everything saved for it</span>${view.next != null ? '<button class="secondary small" data-dbx="more">Load more</button>' : ''}</div>`}
   </section>`;
   $('#db-search').addEventListener('submit', e => { e.preventDefault(); search($('#db-q').value.trim()); });
   box.querySelectorAll('[data-dbx]').forEach(b => b.addEventListener('click', () => b.dataset.dbx === 'clear' ? search('') : search(view.q, true)));
-  $$('tr[data-oid]', box).forEach(tr => tr.addEventListener('click', () => openOrder(rows[Number(tr.dataset.oid)].id)));
 }
 
-export async function openOrder(ordmasid) {
+// ------------------------------------------------------------------ the order panel (right side)
+export async function orderPanel(ordmasid) {
   const mine = ++view.seq;
   await run('Reading the order from Oracle…', async () => {
     let order;
     try { order = await api(`/api/orders/${id(ordmasid)}`); }
     catch (e) { if (mine === view.seq) notify(`The order could not be read. ${e.message}`, 'error'); return; }
     if (mine !== view.seq) return;
-    view.order = order; view.tab = order.saved?.grid ? 'excel' : 'oracle'; view.hidden = false;
-    drawOrder();
-    $('#view-explorer')?.scrollIntoView({ block: 'start' });
+    Object.assign(panel, { order, tab: 'details', hidden: false, system: false });
+    drawPanel(true);
   });
-}
-
-// "Open in Database" from the Saved screen: the order with that OC No, or the orders matching it.
-export async function findOrder(ref) {
-  ref = String(ref ?? '').trim().slice(0, 60);
-  await search(ref);
-  const same = view.list.filter(o => String(o.order_ref || '').toUpperCase() === ref.toUpperCase());
-  if (same.length === 1) await openOrder(same[0].id);
 }
 
 const tick = ok => `<span class="db-ic ${ok ? 'ok' : 'bad'}" aria-hidden="true">${ok ? '✓' : '!'}</span>`;
@@ -107,23 +98,6 @@ function checkHtml(d) {
   </section>`;
 }
 
-// Every value of the Excel file and where it is now: cell → value → Oracle, then what POPPYS filled in (not in the
-// file) and what is in the file but not in Oracle yet, so a person can tick the file off line by line.
-function mapHtml(x) {
-  if (!x) return '';
-  const name = l => LABELS[l] || l;
-  const cell = c => c ? `<span class="db-cell">${esc(c)}</span>` : '<span class="muted">—</span>';
-  const group = (title, note, rows) => rows.length ? `<tbody><tr class="rl-group"><th colspan="4" scope="colgroup">${esc(title)}${note ? ` <span class="muted">· ${esc(note)}</span>` : ''}</th></tr>${rows.join('')}</tbody>` : '';
-  return `<section class="card db-map" aria-labelledby="db-map-title">
-    <div class="card-head"><div><h2 id="db-map-title">Your Excel → Oracle</h2><p class="muted small-text">Each value with the Excel cell it was read from. Open the Excel file beside this to tick them off.</p></div></div>
-    <div class="tbl-wrap"><table class="db-maptable"><thead><tr><th scope="col">What</th><th scope="col">Excel cell</th><th scope="col">In the Excel</th><th scope="col">In Oracle now</th></tr></thead>
-    ${group('Saved in Oracle', '', x.from_file.map(r => `<tr><th scope="row">${r.state === 'changed' ? '<span class="db-ic info" aria-hidden="true">↔</span>' : tick(r.state === 'same')} ${esc(name(r.label))}</th><td data-label="Excel cell">${cell(r.cell)}</td><td data-label="In the Excel">${esc(niceValue(r.excel))}</td>
-      <td class="${r.state === 'different' ? 'db-bad' : ''}" data-label="In Oracle now"><b>${esc(niceValue(r.oracle))}</b>${r.state === 'changed' ? '<small class="db-note">changed before saving (edited, or matched to an existing name)</small>' : r.state === 'different' ? '<small class="db-note">changed in Oracle after saving</small>' : ''}</td></tr>`))}
-    ${group('Filled in by POPPYS', 'not in the Excel', x.filled.map(r => `<tr><th scope="row"><span class="db-ic" aria-hidden="true">+</span> ${esc(name(r.label))}</th><td data-label="Excel cell">${cell(null)}</td><td class="muted" data-label="In the Excel">${esc(r.why)}</td><td data-label="In Oracle now"><b>${esc(niceValue(r.value))}</b></td></tr>`))}
-    ${group('Not in Oracle yet', 'kept in POPPYS with this order', x.kept.map(r => `<tr class="db-kept"><th scope="row"><span class="db-ic" aria-hidden="true">–</span> ${esc(name(r.label.replace(/ (rows|split rows)$/i, '')))}</th><td data-label="Excel cell">${cell(r.cell)}</td><td data-label="In the Excel">${esc(r.excel)}</td><td class="muted" data-label="In Oracle now">${esc(r.why)}</td></tr>`))}
-    </table></div></section>`;
-}
-
 // The Excel sheet as uploaded, cell by cell, each cell coloured by where its value is now (Oracle, kept in POPPYS, not used).
 const GRID_KEYS = [['oracle', 'Saved in Oracle'], ['diff', 'Different in Oracle now'], ['kept', 'Not in Oracle yet · kept in POPPYS'],
   ['unused', 'Not used · calculation column'], ['none', 'Nothing to save · all 0 or a copy']];
@@ -132,7 +106,7 @@ const cellRef = a => { const m = /^([A-Z]{1,3})(\d+)$/.exec(a); if (!m) return n
 const show = v => typeof v === 'number' ? fmt(v) : typeof v === 'string' && /^\d{4}-\d{2}-\d{2}(T00:00(:00)?)?$/.test(v) ? niceValue(v) : String(v ?? '');
 
 function gridHtml(g) {
-  const hidR = new Set(view.hidden ? [] : g.hidden_rows), hidC = new Set(view.hidden ? [] : g.hidden_cols);
+  const hidR = new Set(panel.hidden ? [] : g.hidden_rows), hidC = new Set(panel.hidden ? [] : g.hidden_cols);
   const cells = new Map(g.cells.map(x => [`${x[0]},${x[1]}`, x]));
   const used = new Set(g.cells.map(x => x[0]));
   const cols = []; for (let c = 1; c <= g.cols; c++) if (!hidC.has(c)) cols.push(c);
@@ -174,7 +148,7 @@ function gridHtml(g) {
     <ul class="xg-legend">${GRID_KEYS.filter(([k]) => count[k] || k === 'oracle').map(([k, t]) => `<li><span class="xg-key xg-${k}" aria-hidden="true"></span>${esc(t)} <b>${fmt(count[k], 0)}</b></li>`).join('')}
       <li><span class="xg-key" aria-hidden="true"></span>Headings, labels and totals</li></ul>
     <p class="xg-info" id="xg-info" aria-live="polite">Click a cell to see where its value is.</p>
-    ${hiddenN ? `<p class="small-text muted">${view.hidden ? 'Showing' : 'Hidden in your Excel:'} ${g.hidden_rows.length ? `rows ${esc(g.hidden_rows.join(', '))}` : ''}${g.hidden_cols.length ? ` columns ${esc(g.hidden_cols.map(colName).join(', '))}` : ''} · <button class="link" data-dbx="hidden">${view.hidden ? 'Hide them again' : 'Show them'}</button></p>` : ''}
+    ${hiddenN ? `<p class="small-text muted">${panel.hidden ? 'Showing' : 'Hidden in your Excel:'} ${g.hidden_rows.length ? `rows ${esc(g.hidden_rows.join(', '))}` : ''}${g.hidden_cols.length ? ` columns ${esc(g.hidden_cols.map(colName).join(', '))}` : ''} · <button class="link" data-dbx="hidden">${panel.hidden ? 'Hide them again' : 'Show them'}</button></p>` : ''}
     <div class="xg-wrap" tabindex="0" aria-label="Excel sheet ${esc(g.name)}"><table class="xg"><thead><tr><th></th>${cols.map(c => `<th scope="col">${colName(c)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table></div>
     ${g.truncated ? '<p class="small-text muted">Only the first 2,000 rows and 60 columns are shown. Open the Excel file for the rest.</p>' : ''}
   </section>`;
@@ -210,36 +184,44 @@ async function copySql(button, text) {
   const was = button.textContent; button.textContent = 'Copied ✓'; setTimeout(() => { button.textContent = was; }, 1500);
 }
 
+
+function tablesHtml(d) {
+  const shown = t => t.columns.filter(c => panel.system || !c.system || c.name === t.key);
+  const hiddenN = d.tables.reduce((n, t) => n + t.columns.filter(c => c.system && c.name !== t.key).length, 0);
+  const val = (t, c, v) => {
+    if (v == null || v === '') return '';
+    const name = t.decoded?.[c]?.[String(v)];
+    return name != null ? `${esc(name)} <span class="chip label" title="Record ID in the master table">${esc(v)}</span>` : esc(v);   // exactly as Oracle holds it
+  };
+  return `<p class="muted small-text">Every row Oracle holds for this order, with every column that has a value. Names are shown for linked records.
+      ${hiddenN ? `<label class="check"><input type="checkbox" data-sys ${panel.system ? 'checked' : ''}> Show Axpert system columns (${hiddenN})</label>` : ''}</p>
+    ${d.tables.map(t => `<section class="op-table"><h3><code>${esc(t.table)}</code> ${esc(t.business)} <span class="pill">${plural(t.rows.length, 'row')}</span></h3>
+      <div class="tbl-wrap"><table class="pv-grid"><thead><tr>${shown(t).map(c => `<th scope="col" title="${esc(c.label)}"><code>${esc(c.name)}</code><small>${esc(c.label)}</small></th>`).join('')}</tr></thead>
+      <tbody>${t.rows.map(r => `<tr>${shown(t).map(c => `<td>${val(t, c.name, r[c.name])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`).join('') || '<p class="empty">No rows.</p>'}`;
+}
+
+function drawPanel(first = false) {
+  const d = panel.order; const s = d.sheet;
+  const head = Object.fromEntries(s.header.map(f => [f.label, f.value]));
+  const tabs = [['details', 'Details'], ['tables', `Oracle tables (${d.tables?.length || 0})`], ...(d.saved?.grid ? [['excel', 'Excel as uploaded']] : []), ...(d.sql?.length ? [['sql', 'Check in SQL Developer']] : [])];
+  const body = drawer(`Order ${s.order_ref || ''}`, `<div class="op-head">
+      <div><span class="op-id">${esc(s.order_ref || '—')}</span><span class="op-name">${esc(name({ style: head['Style number'], description: head['Garment description'] }))}</span>
+        <span class="muted small-text">${esc(niceValue(head.Buyer))} · ${esc(fmt(s.total))} pieces · ${d.saved ? `saved by POPPYS ${esc(when(d.saved.saved_at))}` : 'entered in Axpert'}</span></div>
+      ${badge(d)}</div>
+    <div class="subnav db-tabs" role="tablist" aria-label="Order views">${tabs.map(([k, t]) => `<button role="tab" aria-selected="${panel.tab === k}" class="${panel.tab === k ? 'active' : ''}" data-tab="${k}">${t}</button>`).join('')}</div>
+    <div class="op-body">${panel.tab === 'tables' ? tablesHtml(d) : panel.tab === 'excel' ? gridHtml(d.saved.grid) : panel.tab === 'sql' ? sqlHtml(d)
+      : `${checkHtml(d)}<div class="db-sheet">${sheetHtml(s)}</div><p class="muted small-text db-read">Read from Oracle ${esc(when(d.read_at))}</p>`}</div>`);
+  $('#drawer').classList.add('wide');
+  body.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { panel.tab = b.dataset.tab; drawPanel(); $(`#drawer [data-tab="${panel.tab}"]`)?.focus(); }));
+  body.querySelector('[data-sys]')?.addEventListener('change', e => { panel.system = e.target.checked; drawPanel(); });
+  body.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => copySql(b, b.dataset.copy === 'all'
+    ? d.sql.map(q => `-- ${q.title} (expect: ${q.expect})\n${q.sql}`).join('\n\n') : d.sql[Number(b.dataset.copy)].sql)));
+  body.querySelectorAll('td[data-xg]').forEach(td => { td.addEventListener('click', () => cellInfo(td)); td.addEventListener('focus', () => cellInfo(td)); });
+  body.querySelector('[data-dbx="hidden"]')?.addEventListener('click', () => { panel.hidden = !panel.hidden; drawPanel(); });
+  if (first) body.scrollTop = 0;
+}
+
 function badge(d) {
   if (!d.saved?.check) return '<span class="pill">Read from Oracle</span>';
   return d.saved.check.same ? '<span class="pill ok">✓ Same as the Excel</span>' : '<span class="pill err">⚠ Different from the Excel</span>';
-}
-
-function drawOrder() {
-  const d = view.order; const box = $('#db-orders');
-  const differs = new Map((d.saved?.check?.details.different || []).map(x => [x.label, x.excel]));
-  const sheet = { ...d.sheet, header: d.sheet.header.map(f => differs.has(f.label) ? { ...f, excel: differs.get(f.label) } : f) };
-  box.innerHTML = `<div class="db-order">
-    <div class="db-order-bar"><button class="ghost small" data-dbx="back">← All orders</button><span class="spacer"></span>
-      <button class="secondary small" data-dbx="full">Full screen · Print</button><button class="ghost small" data-dbx="tech" title="The Oracle tables, columns and record IDs behind this order">Oracle tables &amp; IDs</button></div>
-    ${checkHtml(d)}
-    <div class="subnav db-tabs" role="tablist" aria-label="How to show this order">${[
-      ...(d.saved?.grid ? [['excel', 'As in your Excel']] : []), ...(d.saved?.excel ? [['values', 'Value by value']] : []), ['oracle', 'As in Oracle'],
-      ...(d.sql?.length ? [['sql', 'Check in SQL Developer']] : [])].map(([k, t]) =>
-      `<button role="tab" aria-selected="${view.tab === k}" class="${view.tab === k ? 'active' : ''}" data-tab="${k}">${t}</button>`).join('')}</div>
-    ${view.tab === 'excel' && d.saved?.grid ? gridHtml(d.saved.grid) : view.tab === 'values' && d.saved?.excel ? mapHtml(d.saved.excel)
-      : view.tab === 'sql' && d.sql?.length ? sqlHtml(d)
-      : `<div class="card db-sheet">${sheetHtml(sheet, { badge: badge(d) })}<p class="muted small-text db-read">Read from Oracle ${esc(when(d.read_at))}</p></div>`}
-  </div>`;
-  box.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { view.tab = b.dataset.tab; drawOrder(); box.querySelector(`[data-tab="${view.tab}"]`)?.focus(); }));
-  box.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => copySql(b, b.dataset.copy === 'all'
-    ? d.sql.map(q => `-- ${q.title} (expect: ${q.expect})\n${q.sql}`).join('\n\n') : d.sql[Number(b.dataset.copy)].sql)));
-  box.querySelectorAll('td[data-xg]').forEach(td => { td.addEventListener('click', () => cellInfo(td)); td.addEventListener('focus', () => cellInfo(td)); });
-  box.querySelectorAll('[data-dbx]').forEach(b => b.addEventListener('click', () => ({
-    back: () => { view.order = null; drawList(); },
-    full: () => openFullView([sheet], { title: `Order ${d.sheet.order_ref || ''}`.trim(), readAt: d.read_at, badge: badge(d) }),
-    tech: () => showRecord('ORDMAS', d.sheet.ordmasid),
-    hidden: () => { view.hidden = !view.hidden; drawOrder(); box.querySelector('[data-dbx="hidden"]')?.focus(); },
-  })[b.dataset.dbx]()));
-  if (!box.contains(document.activeElement)) box.querySelector('[data-dbx="back"]').focus();
 }

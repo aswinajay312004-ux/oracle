@@ -18,19 +18,16 @@
       </a>
       <button class="icon-btn rail-toggle" id="rail-toggle" type="button" aria-pressed="false" aria-label="Hide the menu" title="Hide the menu"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
       <nav class="nav" aria-label="Main">
-        <div class="nav-label">Work</div>
         <button data-view="dashboard" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Overview</button>
         <button data-view="workspace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>New order</button>
-        <button data-view="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>Saved orders</button>
-        <button data-view="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9 11h.01M12 11h.01M15 11h.01"/></svg>Ask AI</button>
-        <div class="nav-label">Data</div>
         <button data-view="explorer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>Database</button>
-        <button data-view="admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Setup</button>
+        <div class="nav-label">More</div>
+        <button data-view="chat" class="nav-more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>Ask AI</button>
+        <button data-view="admin" class="nav-more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Setup</button>
       </nav>
       <div class="side-foot">
         <div class="status" id="oracle-status"><i class="dot"></i><div><span>Oracle</span><small>checking…</small></div></div>
-        <div class="status" id="ai-status"><i class="dot"></i><div><span>Local AI</span><small>checking…</small></div></div>
-        <div class="account"><span class="avatar" id="avatar">P</span><span class="who"><strong id="username">—</strong><small id="role"></small></span>
+        <div class="account"><span class="avatar" id="avatar">P</span><span class="who"><strong id="username">—</strong><small>Signed in</small></span>
           <button class="icon-btn" id="logout" title="Sign out" aria-label="Sign out" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button></div>
       </div>
     </aside>
@@ -39,74 +36,43 @@
       <main id="main" class="page">
         <!-- OVERVIEW -->
         <section id="view-dashboard" class="view">
-          <div class="page-head"><div><span class="eyebrow">Today</span><h1>Overview</h1><p class="lead">Orders waiting for you and recent saves.</p></div>
-            <button class="primary" data-goto="workspace" data-permission="upload">＋ Upload an Excel order</button></div>
-          <div class="kpis" id="dash-kpis"></div>
-          <div class="dash-grid">
-            <section class="card"><div class="card-head"><h2>Work queue</h2><span class="muted small-text">Orders not yet saved to Oracle</span></div><div id="dash-queue"></div></section>
-            <section class="card"><div class="card-head"><h2>System status</h2></div><div id="dash-status" class="dash-status"></div></section>
+          <div class="page-head"><div><h1>Overview</h1><p class="lead">What was saved lately and who did what.</p></div>
+            <button class="primary" data-goto="workspace">＋ New order</button></div>
+          <div class="status-strip card" id="dash-status" aria-label="System status"></div>
+          <div class="ov-grid">
+            <section class="card"><div class="card-head"><h2>Recently saved orders</h2><button class="ghost small" data-goto="explorer">All orders →</button></div><div id="dash-saved"></div></section>
+            <section class="card"><div class="card-head"><h2>Activity</h2></div><ol class="activity" id="dash-activity"></ol></section>
           </div>
-          <section class="card" style="margin-top:14px"><div class="card-head"><h2>Recently saved to Oracle</h2><button class="ghost small" data-goto="history">All saved orders →</button></div><div id="dash-saved"></div></section>
+          <section class="card" id="dash-waiting-card" style="margin-top:14px" hidden><div class="card-head"><h2>Not saved yet</h2><span class="muted small-text">Uploaded, waiting to be checked and saved</span></div><div id="dash-queue"></div></section>
         </section>
 
-        <!-- NEW ORDER -->
+        <!-- NEW ORDER: Upload → Map to Oracle → Preview → Saved -->
         <section id="view-workspace" class="view" hidden>
           <div class="page-head">
-            <div><span class="eyebrow">Order entry</span><h1 id="ws-title">New sample order</h1></div>
+            <div><h1 id="ws-title">New order</h1></div>
             <ol class="stepper" aria-label="Progress">
               <li data-step="1"><span class="n">1</span>Upload</li><li class="bar" aria-hidden="true"></li>
-              <li data-step="2"><span class="n">2</span>Review</li><li class="bar" aria-hidden="true"></li>
-              <li data-step="3"><span class="n">3</span>Check &amp; approve</li><li class="bar" aria-hidden="true"></li>
+              <li data-step="2"><span class="n">2</span>Map to Oracle</li><li class="bar" aria-hidden="true"></li>
+              <li data-step="3"><span class="n">3</span>Preview</li><li class="bar" aria-hidden="true"></li>
               <li data-step="4"><span class="n">4</span>Saved</li>
             </ol>
           </div>
-
           <section id="stage-upload" class="stage">
-            <div class="upload-hero">
-              <div class="card pad">
-                <span class="eyebrow">Buyer Excel → Axpert</span>
-                <h1>Drop the buyer file.<br>We fill the order entry.</h1>
-                <p class="lead">POPPYS AI reads the order, sizes, fabric and trims, fills the same fields as the Axpert Sample Order Entry screen, and saves only after you approve.</p>
-                <ul class="steps-list">
-                  <li><span class="i">1</span><div><b>Reads the whole file</b><span>Buyer, style, PO, colours, size quantities, fabric and trims — with the cell each value came from.</span></div></li>
-                  <li><span class="i">2</span><div><b>Shows it like Axpert</b><span>Header fields and a size table. Anything missing is outlined in red on the field itself.</span></div></li>
-                  <li><span class="i">3</span><div><b>Saves only after approval</b><span>One Oracle transaction, every row read back and shown in a table flowchart.</span></div></li>
-                </ul>
-              </div>
-              <div class="banner info" data-permission-not="upload" hidden><span class="b-ic">i</span><div>Your role can open and read orders. Uploading a file needs an operator, approver or administrator.</div></div>
-              <label class="dropzone" id="dropzone" for="file-input" tabindex="0" data-permission="upload">
-                <span class="drop-icon" aria-hidden="true"><svg viewBox="0 0 48 48" width="34" height="34"><path d="M24 31V11m0 0-8 8m8-8 8 8" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 29v6a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-6" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span>
-                <strong>Drag &amp; drop the order file</strong>
-                <span>or <u>choose a file</u> from this computer</span>
-                <small>Any Excel file — .xlsx .xls .xlsm .xlsb .ods, Excel XML/HTML exports, CSV — or JSON · up to 12 MB · stays on this computer</small>
-                <input type="file" id="file-input" accept=".xlsx,.xlsm,.xltx,.xltm,.xls,.xlsb,.ods,.xml,.htm,.html,.csv,.tsv,.txt,.json" class="visually-hidden">
-              </label>
-            </div>
+            <label class="dropzone" id="dropzone" for="file-input" tabindex="0">
+              <span class="drop-icon" aria-hidden="true"><svg viewBox="0 0 48 48" width="34" height="34"><path d="M24 31V11m0 0-8 8m8-8 8 8" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 29v6a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-6" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></svg></span>
+              <strong>Drop the order Excel here</strong>
+              <span>or <u>choose a file</u></span>
+              <small>.xlsx .xls .xlsm .xlsb .ods or CSV · up to 12 MB · stays on this computer</small>
+              <input type="file" id="file-input" accept=".xlsx,.xlsm,.xltx,.xltm,.xls,.xlsb,.ods,.xml,.htm,.html,.csv,.tsv,.txt,.json" class="visually-hidden">
+            </label>
             <section class="card" style="margin-top:16px">
-              <div class="card-head"><div><h2>Recent files</h2><div class="sub">Continue where you left off</div></div></div>
+              <div class="card-head"><h2>Not saved yet</h2><span class="muted small-text">Open one to continue</span></div>
               <div id="recent"><p class="empty">Your uploads will appear here.</p></div>
             </section>
           </section>
-
-          <section id="stage-read" class="stage" hidden>
-            <div class="card reading">
-              <div class="card-head plain"><h2 id="read-title">Reading your file…</h2></div>
-              <ol id="read-steps" class="read-steps"></ol>
-              <div class="card-head plain" style="justify-content:flex-end;border-top:1px solid var(--line)" id="read-actions" hidden>
-                <button class="primary" id="go-review">Open the order entry →</button></div>
-            </div>
-          </section>
-
-          <section id="stage-review" class="stage" hidden></section>
-          <section id="stage-approve" class="stage" hidden></section>
+          <section id="stage-map" class="stage" hidden></section>
+          <section id="stage-preview" class="stage" hidden></section>
           <section id="stage-saved" class="stage" hidden></section>
-        </section>
-
-        <!-- SAVED ORDERS -->
-        <section id="view-history" class="view" hidden>
-          <div class="page-head"><div><span class="eyebrow">Orders</span><h1>Saved orders</h1><p class="lead">Orders approved and saved to Oracle.</p></div></div>
-          <section class="card" id="history"></section>
-          <section id="history-detail" style="margin-top:16px" hidden></section>
         </section>
 
         <!-- ASK AI -->
@@ -130,34 +96,32 @@
           </div>
         </section>
 
-        <!-- DATABASE EXPLORER -->
+        <!-- DATABASE -->
         <section id="view-explorer" class="view" hidden>
-          <div class="page-head"><div><span class="eyebrow" id="explorer-eyebrow">Read-only</span><h1>Database</h1><p class="lead">Check what is saved in Oracle, order by order.</p></div></div>
+          <div class="page-head"><div><h1>Database</h1><p class="lead">What is saved in Oracle. Read-only.</p></div></div>
           <nav class="subnav" aria-label="Database views" role="tablist">
             <button class="active" data-dbview="orders" role="tab" aria-selected="true">Orders</button>
-            <button data-dbview="tables" role="tab" aria-selected="false" title="Every Oracle table, column and record ID">All tables</button>
+            <button data-dbview="tables" role="tab" aria-selected="false">All tables</button>
           </nav>
           <div id="db-orders"></div>
           <div id="db-tables" hidden>
-            <div class="explorer">
-              <aside class="card table-list"><div class="search"><input id="table-filter" placeholder="Search tables (e.g. buyer, size, ORDSIZE)" aria-label="Search tables"></div><div class="items" id="tables"></div></aside>
-              <section class="card" id="table-view"><p class="empty">Choose a table on the left.</p></section>
-            </div>
+            <section class="card flow-card"><div class="card-head"><div><h2>Tables and how they link</h2><p class="muted small-text" id="flow-note">Click a table to see its rows below.</p></div></div>
+              <div class="flow-wrap" id="db-flow"></div></section>
+            <section class="card" id="table-view" style="margin-top:14px"><p class="empty">Click a table in the flowchart.</p></section>
           </div>
         </section>
 
         <!-- SETUP -->
         <section id="view-admin" class="view" hidden>
-          <div class="page-head"><div><span class="eyebrow">Setup</span><h1>Mapping, data dictionary &amp; people</h1><p class="lead">What POPPYS AI writes, field names, saved layouts and users.</p></div></div>
+          <div class="page-head"><div><h1>Setup</h1><p class="lead">Write mapping, data dictionary, saved layouts and the shared password.</p></div></div>
           <nav class="subnav" aria-label="Setup sections">
             <button class="active" data-admin="mapping">Write mapping</button>
             <button data-admin="dictionary">Data dictionary</button>
             <button data-admin="fields">Order fields</button>
             <button data-admin="templates">Layout templates</button>
             <button data-admin="accuracy">Answer accuracy</button>
-            <button data-admin="users" data-permission="users">Users &amp; roles</button>
             <button data-admin="audit" data-permission="audit">Audit history</button>
-            <button data-admin="settings" data-permission="settings">Settings</button>
+            <button data-admin="settings">Password</button>
           </nav>
           <div id="admin-body"></div>
         </section>
@@ -182,20 +146,19 @@
   <div id="auth" class="auth" hidden>
     <div class="auth-art">
       <div class="brand"><span class="brand-mark big">P</span><span class="brand-text"><strong style="font-size:18px">POPPYS <em>AI</em></strong><small>Order automation · Axpert ERP</small></span></div>
-      <div><h2>From buyer file to Oracle order — checked, approved, proven.</h2>
-        <ul><li>Reads every buyer’s Excel layout automatically</li><li>Fills the Axpert order entry and highlights only what is missing</li><li>Saves in one transaction after approval, then reads it back</li><li>Answers questions about orders in plain words</li></ul></div>
+      <div><h2>Excel order → Oracle, in four steps.</h2>
+        <ul><li>Upload the Excel file</li><li>Check which Excel cells go to which Oracle column</li><li>Preview the Oracle tables, then save</li><li>See every saved order in the Database</li></ul></div>
       <small>Runs entirely on this computer · local Oracle · local AI</small>
     </div>
     <div class="auth-side">
       <form id="auth-form" class="auth-card">
-        <span class="eyebrow">Workspace</span>
-        <h1 id="auth-title">Welcome back</h1>
-        <p id="auth-text" class="muted">Sign in to prepare and approve ERP entries.</p>
+        <h1 id="auth-title">Sign in</h1>
+        <p id="auth-text" class="muted">One login for everyone in the team.</p>
         <label>Username<input id="auth-user" autocomplete="username" required minlength="2" maxlength="50" pattern="[A-Za-z0-9._@\-]+"></label>
         <label>Password<span class="pw-field"><input id="auth-pass" type="password" autocomplete="current-password" required maxlength="200"><button type="button" id="auth-pass-show" class="pw-toggle" aria-controls="auth-pass" aria-pressed="false" aria-label="Show password">Show</button></span></label>
         <p id="auth-error" class="field-error" role="alert" hidden></p>
         <button type="submit" class="primary big full" id="auth-submit">Sign in</button>
-        <small class="muted">Accounts are stored only in this local workspace.</small>
+        <small class="muted">The login is kept only on the computer that runs POPPYS AI.</small>
       </form>
     </div>
   </div>

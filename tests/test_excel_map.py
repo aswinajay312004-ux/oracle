@@ -1,10 +1,14 @@
 """The person's own Excel → Oracle mapping (backend/erp/excel_map.py, New order → Map to Oracle): the cells an order was
 read from as targets, blank fields left blank, extra ORDMAS columns, one Oracle row per Excel row, typed values."""
+import io
+import secrets
 import pytest
+from openpyxl import load_workbook
 from fastapi.testclient import TestClient
 from backend import local_store, main
 from fake_oracle import FakeOracle
 from fixtures import merch_bom, SIZES
+from test_acceptance import real, REAL  # noqa: F401  (fixtures)
 
 PW = 'test-password-123'
 
@@ -103,3 +107,30 @@ def test_one_access_level_everyone_can_approve_their_own_upload(env):
     assert c.post('/api/users', json={'username': 'team', 'password': 'stitch-rate-plan-7', 'role': 'viewer'}).status_code == 200
     c.post('/api/logout'); assert c.post('/api/login', json={'username': 'team', 'password': 'stitch-rate-plan-7'}).status_code == 200
     assert 'approve' in c.get('/api/session').json()['permissions']
+
+
+@REAL
+def test_real_oracle_saves_the_persons_mapping_with_extra_columns_and_trims_rows(real):  # noqa: F811
+    """On the Oracle replica: a mapped extra ORDMAS column, a typed OC No, blank fields left NULL and one ORDACC row per
+    Excel row are saved, read back verified, and shown in the order's stored tables."""
+    c = real; ref = f'TEST-XM-{secrets.token_hex(4).upper()}'
+    wb = load_workbook(io.BytesIO(merch_bom(sample=(1, 2, 3, 4)))); wb.active['B1'] = f'TESTBUYER - BOM {ref}'   # a new file each run
+    content = io.BytesIO(); wb.save(content)
+    d = c.post('/api/uploads', files={'file': (f'{ref}.xlsx', content.getvalue())}).json()
+    t = c.get(f'/api/drafts/{d["id"]}/oracle-map').json()['targets']
+    t.update({'ORDMAS.REMARKS': ['E6'], 'ORDACC.ACCDESC': ['D32', 'D33', 'D34', 'D35'], 'ORDACC.APOQTY': ['H32', 'H33', 'H34', 'H35']})
+    d = c.post(f'/api/drafts/{d["id"]}/oracle-map', json={'version': d['version'], 'sheet': 'D99001', 'targets': t,
+                                                           'typed': {'ORDMAS.DOCID': ref}}).json()
+    o = d['orders'][0]; o.update(qty_unit='PCS', pieces_per_unit=1)
+    d = c.put(f'/api/drafts/{d["id"]}', json={'version': d['version'], 'orders': [o]}).json()
+    p = c.post(f'/api/drafts/{d["id"]}/preview', json={'version': d['version']}).json()
+    assert p['plan']['live'] and not p['plan']['errors'], p['plan']['errors']
+    r = c.post(f'/api/drafts/{d["id"]}/accept', json={'version': p['version'], 'plan_hash': p['plan']['hash'],
+                                                      'exceptions_seen': (p['plan'].get('exceptions') or {}).get('digest')})
+    assert r.status_code == 200, r.text
+    assert c.get(f'/api/history/{d["id"]}/graph').json()['verified'] is True
+    ordmasid = r.json()['orders'][0]['ordmasid']
+    stored = {x['table']: x for x in c.get(f'/api/orders/{ordmasid}').json()['tables']}
+    head = stored['ORDMAS']['rows'][0]
+    assert head['DOCID'] == ref and head['REMARKS'] == 'SEA' and 'ODATE' not in head and 'SAMPLETYPE' not in head   # blank = NULL
+    assert [x['ACCDESC'] for x in stored['ORDACC']['rows']] == ['0-3 Mths', '3-6 Mths', '6-12 Mths', '12-18 Mths']

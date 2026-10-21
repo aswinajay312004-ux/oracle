@@ -112,7 +112,7 @@ export function renderGraph(el, model, opts = {}) {
 
   const node = n => {
     const p = pos[n.id]; const small = bandIds.has(n.id);
-    const classes = ['gnode', n.kind || 'detail', n.dashed ? 'dashed' : '', n.base ? 'base' : '', n.dim ? 'dim' : '', n.id === opts.selected ? 'sel' : ''].join(' ');
+    const classes = ['gnode', n.kind || 'detail', n.dashed ? 'dashed' : '', n.base ? 'base' : '', n.dim ? 'dim' : '', n.cls || '', n.id === opts.selected ? 'sel' : ''].join(' ');
     const st = n.status || {};
     return `<g class="${classes}" tabindex="0" role="button" data-id="${esc(n.id)}" transform="translate(${p.x},${p.y})" aria-label="${esc(`${n.title} (${n.code || n.id}) ${n.line3 || ''} ${st.text || ''}`)}">
       <rect class="box" width="${p.w}" height="${p.h}" rx="10"/><rect class="band" width="5" height="${p.h}" rx="2.5"/>

@@ -1,7 +1,7 @@
 ================================================================================
   POPPYS AI - FULL USER MANUAL (Thanglish)
   Buyer Excel -> Axpert / Oracle order entry + Ask AI + Database explorer
-  Version: branch claude/fervent-babbage-jqo8r4, 2026-10-18
+  Version: branch claude/fervent-babbage-jqo8r4, 2026-10-21 (PART 0 = puthu simple flow)
 ================================================================================
 
 Indha file la POPPYS AI pathi ellame irukku: enna pannum, enna pannaadhu,
@@ -14,6 +14,84 @@ Mukkiyamaana 3 vishayam mudhalla:
   2. Browser la open panna vendiya link: http://127.0.0.1:8008
   3. Docker Desktop um "oracle26ai" container um odanum. Illana Oracle ku
      save aagaadhu, Ask AI um Oracle ah padikkaadhu.
+
+
+--------------------------------------------------------------------------------
+PART 0. PUTHU SIMPLE FLOW (2026-10-21) - IDHA MUDHALLA PADINGA
+--------------------------------------------------------------------------------
+
+Product ah simple aakkiyaachu. Keezha irukura flow dhaan ippo. Pazhaya
+"Review", "Check & approve", "Saved orders", "Users & roles" screens ini
+illa (keezha PARTs la avanga pathi irundhaa, adhu pazhaya version).
+
+  Login -> Overview -> New order (Upload -> Map to Oracle -> Preview ->
+  Saved) -> Database (Orders + order panel, All tables flowchart)
+
+LOGIN
+  - Ellarukkum ore login, ore password (admin). Roles illa, "second
+    approver" rule illa: upload pannavare save pannalaam.
+  - Password maatha: Setup -> Password. Maathinaa ellarum sign out aaguvaanga;
+    team ku puthu password ah sollunga.
+
+OVERVIEW
+  - Mela oru line la status: Oracle connected aa, Database view ready aa,
+    AI assistant on aa.
+  - "Recently saved orders": Order ID (OC No), Order name (style ·
+    description), buyer, pieces, yaar save pannaanga, eppo. Order ID click
+    panna andha order oda full details valadhu pakkam open aagum.
+  - "Activity": yaar sign in pannaanga, endha file upload, map, save
+    pannaanga.
+  - "Not saved yet": upload panni innum save pannaadha files.
+
+NEW ORDER
+  1. Upload: Excel ah drop pannunga.
+  2. Map to Oracle:
+     - Idadhu pakkam unga Excel appadiye (same rows, columns, merged cells).
+     - Valadhu pakkam Oracle tables: ORDMAS (order), ORDSTYLE (colour
+       lines), ORDSIZE (size quantities), ORDACC (trims), ORDFAB (fabric),
+       ORDYARN (yarn) - ovvonnoda columns um.
+     - POPPYS mudhalla automatic aa map pannum (Excel la colour kaattum: endha
+       cell endha table ku poghudhu).
+     - Maatha: Excel la cells select pannunga (drag, Shift+click, Ctrl+click,
+       column letter / row number click, illa "E12:P20" maadhiri type), apram
+       Oracle column la "Use selection".
+     - Pala columns ore nerathula (udharanam 20 size columns): Excel la
+       andha columns ah select pannunga, valadhu pakkam Oracle columns ah
+       tick pannunga, "Map in order" - mudhal Excel column mudhal tick ku,
+       rendaavadhu rendaavadhu ku...
+     - ORDSIZE size (GSIZE) ku size header cells, quantity (RQTY) ku
+       quantities block, ORDSTYLE colour (COMBO) ku colour cells.
+     - ORDACC / ORDFAB / ORDYARN: select panna ovvoru Excel row um oru Oracle
+       row aagum.
+     - Vera endha ORDMAS column venum naalum (197 columns) mela search box la
+       thedunga (remarks, season, ...).
+  3. Preview: Oracle tables appadiye - table name, columns, ovvoru row la
+     enna value poghudhu. Excel la blank aa irundhaa blank (NULL) dhaan;
+     POPPYS edhuvum podaadhu. Dashed cell click panni neengale type
+     pannalaam. Red box la irukuradha sari pannunga. Apram "Confirm and save
+     to Oracle".
+     - Excel la OC No illana, company series la adutha number save pannum
+       bodhu kudukkum ("given on save"). Unga number venum na adha click
+       panni type pannunga.
+  4. Saved: endha tables la ethana rows poachu nu kaattum. "Open order" /
+     "See the tables in the flowchart".
+
+DATABASE
+  - Orders: puthusaa irundhu pazhasu varaikkum, Order ID + Order name oda.
+    Order ID click -> valadhu pakkam panel: Details, Oracle tables (andha
+    order ku Oracle la irukura ella rows, ella columns), Excel as uploaded,
+    Check in SQL Developer.
+  - All tables: mela flowchart (ella tables um, edhu edhoda link nu). Table
+    ah click panna keezha andha table oda rows. Puthu order save pannina
+    tables blink aagum; andha table ah open panna blink nikkum (indha
+    computer la mattum nyabagam).
+
+GAVANIKKA VENDIYADHU
+  - ORDACC / ORDFAB / ORDYARN la Axpert enna meaning la vekkudhu nu innum
+    Axpert la check pannala. Avanga name columns (ACCNAME, FABRIC, COUNTS)
+    vera master tables ku number link; andha masters GARMENT_DEMO la illa.
+    So text / number columns (ACCDESC, APOQTY maadhiri) ku mattum dhaan Excel
+    values poghum.
 
 
 --------------------------------------------------------------------------------
