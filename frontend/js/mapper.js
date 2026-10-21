@@ -15,6 +15,8 @@ const KIND_HELP = {
 const M = { draft: null, order: 0, orders: 1, sheet: null, tables: [], targets: {}, typed: {}, automatic: true, dirty: false,
   sel: new Set(), anchor: null, drag: null, checked: [], q: '', more: new Set(), showHidden: false, tds: new Map() };
 let hooks = {};
+const svgI = d => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const ICON = { user: svgI('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'), doc: svgI('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>'), tag: svgI('<path d="M20 12 12 20 3 11V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'), cal: svgI('<rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/>'), box: svgI('<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>'), layers: svgI('<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>'), target: svgI('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>'), sheet: svgI('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/>'), link: svgI('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>') };
 
 export const catalog = () => M.tables;
 const colName = c => { let s = ''; while (c) { const r = (c - 1) % 26; s = String.fromCharCode(65 + r) + s; c = (c - 1 - r) / 26; } return s; };
@@ -53,30 +55,41 @@ export async function saveMapping() {
 // ------------------------------------------------------------------ the screen
 function draw(root) {
   const d = M.draft; const sheets = d.sheets.filter(s => !s.hidden || s.name === M.sheet);
-  root.innerHTML = `<div class="map-bar card">
+  const g = sheetOf(); const o = d.orders?.[M.order] || {};
+  const pieces = o.workbook_pieces ?? (o.lines || []).reduce((n, l) => n + (l.sizes || []).reduce((q, z) => q + (Number(z.quantity) || 0), 0), 0);
+  const ext = (d.filename.match(/\.([a-z0-9]+)$/i)?.[1] || '').toUpperCase();
+  const fact = (icon, label, value) => `<div class="mf"><span class="mf-i" aria-hidden="true">${ICON[icon]}</span><span><small>${esc(label)}</small><b>${esc(value == null || value === '' ? '—' : value)}</b></span></div>`;
+  root.innerHTML = `<div class="map-top">
+    <div class="map-bar card">
+      <span class="map-xl" aria-hidden="true">${/^(XLSX|XLSM|XLS|XLSB|ODS|CSV)$/.test(ext) ? '<b>X</b>' : ICON.doc}</span>
       <div class="map-file"><b>${esc(d.filename)}</b>
-        ${sheets.length > 1 ? `<label class="small-text">Sheet <select id="map-sheet">${sheets.map(s => `<option ${s.name === M.sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : `<span class="muted small-text">sheet “${esc(M.sheet)}”</span>`}
-        ${M.orders > 1 ? `<label class="small-text">Order <select id="map-order">${d.orders.map((o, i) => `<option value="${i}" ${i === M.order ? 'selected' : ''}>${i + 1}. ${esc(o.style || o.order_ref || 'order')}</option>`).join('')}</select></label>` : ''}
-        <span class="pill ${M.automatic ? 'brand' : 'info'}" id="map-state">${M.automatic ? 'Mapped automatically' : 'Your mapping'}</span></div>
+        <span class="map-meta">${sheets.length > 1 ? `<label class="small-text">Sheet <select id="map-sheet">${sheets.map(s => `<option ${s.name === M.sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : `<span>Sheet: ${esc(M.sheet)}</span>`}
+          <span>${fmt(g.rows || 0, 0)} rows</span><span>${fmt(g.cols || 0, 0)} columns</span>
+          ${M.orders > 1 ? `<label class="small-text">Order <select id="map-order">${d.orders.map((x, i) => `<option value="${i}" ${i === M.order ? 'selected' : ''}>${i + 1}. ${esc(x.style || x.order_ref || 'order')}</option>`).join('')}</select></label>` : ''}</span></div>
       <span class="spacer"></span>
-      <button class="ghost small" data-m="new">New upload</button>
-      <button class="primary" data-m="continue">Continue to preview →</button></div>
-    <p class="map-help">Select cells in the Excel on the left — drag, <kbd>Shift</kbd>+click, <kbd>Ctrl</kbd>+click, or click a column letter / row number — then press <b>Use selection</b> on an Oracle column on the right. A blank cell stays blank.</p>
+      <span class="pill ${M.automatic ? 'brand' : 'info'}" id="map-state">${M.automatic ? 'Mapped automatically' : 'Your mapping'}</span></div>
+    <section class="card map-facts" aria-labelledby="mf-title"><div class="map-card-head"><span class="mh-i" aria-hidden="true">${ICON.target}</span><div><h2 id="mf-title">Detected order details</h2><p class="muted small-text">As POPPYS read them from the file</p></div></div>
+      <div class="mf-grid">${fact('user', 'Buyer', o.buyer)}${fact('doc', 'Order ID', o.order_ref)}${fact('tag', 'Style', o.style)}${fact('cal', 'Season', o.season)}${fact('box', 'Total pieces', pieces ? fmt(pieces, 0) : '')}${fact('layers', 'Total packs', o.packs)}</div></section>
+    </div>
     <div class="map-panes">
       <section class="card map-excel" aria-label="The Excel file">
+        <div class="map-card-head"><span class="mh-i" aria-hidden="true">${ICON.sheet}</span><div><h2>Excel</h2><p class="muted small-text">Sheet ${esc(M.sheet)}</p></div></div>
         <div class="sel-bar"><span id="sel-info" aria-live="polite">Nothing selected</span>
           <form id="sel-form" class="sel-form"><label class="visually-hidden" for="sel-range">Cells</label><input id="sel-range" placeholder="Type cells, e.g. E12:P20" maxlength="200"><button class="secondary small">Select</button></form>
           <button class="ghost small" data-m="clear-sel">Clear</button>
           <label class="check small-text"><input type="checkbox" id="map-hidden" ${M.showHidden ? 'checked' : ''}> Hidden rows</label></div>
         <div class="xg-wrap map-grid" id="map-grid"></div>
         <ul class="map-legend">${M.tables.map(t => `<li><span class="tone ${TABLE_TONE[t.table]}"></span>${esc(t.business)} <code>${esc(t.table)}</code></li>`).join('')}</ul>
+        <p class="map-help">Select cells in the Excel on the left — drag, <kbd>Shift</kbd>+click, <kbd>Ctrl</kbd>+click, or click a column letter / row number — then press <b>Use selection</b> on an Oracle column on the right. A blank cell stays blank.</p>
       </section>
       <section class="card map-oracle" aria-label="Oracle tables">
+        <div class="map-card-head"><span class="mh-i" aria-hidden="true">${ICON.link}</span><div><h2>Oracle columns</h2><p class="muted small-text">Give each one its Excel cells</p></div></div>
         <div class="oc-search"><input id="oc-q" type="search" placeholder="Find an Oracle column (e.g. remarks, season, DIA)" value="${esc(M.q)}" aria-label="Find an Oracle column"></div>
         <div id="oc-multi" class="oc-multi" hidden></div>
         <div id="oc-tables"></div>
       </section>
-    </div>`;
+    </div>
+    <div class="map-foot"><button class="ghost" data-m="new">← New upload</button><button class="primary" data-m="continue">Continue to preview →</button></div>`;
   drawGrid(); drawOracle(); paint(); bind(root);
 }
 
@@ -185,6 +198,7 @@ function drawOracle() {
           <label class="oc-tick" title="Tick to map several Excel columns at once"><input type="checkbox" data-tick="${esc(target(c))}" ${M.checked.includes(target(c)) ? 'checked' : ''} aria-label="Tick ${esc(c.name)}"></label>
           <button class="oc-name" data-show="${esc(target(c))}" title="${esc(`${c.name}: ${c.label}. ${KIND_HELP[c.kind] || ''}`)}"><span><code>${esc(c.name)}</code> ${esc(c.label)}</span><small>${esc(typeText(c))}</small></button>
           <div class="oc-val">${summary(target(c))}</div>
+          <span class="oc-status ${M.typed[target(c)] ? 'typed' : (M.targets[target(c)] || []).length ? 'on' : ''}">${M.typed[target(c)] ? 'Typed' : (M.targets[target(c)] || []).length ? 'Mapped' : 'Blank'}</span>
           <div class="oc-act"><button class="secondary tiny" data-use="${esc(target(c))}" disabled>Use selection</button>${mapped(c) ? `<button class="ghost tiny" data-clear="${esc(target(c))}" aria-label="Clear ${esc(c.name)}" title="Clear">✕</button>` : ''}</div></li>`).join('')}</ul>
       ${!q && rest.length ? `<button class="link small-text ot-more" data-more="${esc(t.table)}">${M.more.has(t.table) ? 'Show fewer columns' : `Show ${rest.length} more columns`}</button>` : ''}
       ${!q && auto.length ? `<details class="ot-auto"><summary>${auto.length} set by POPPYS</summary><ul>${auto.map(c => `<li><code>${esc(c.name)}</code> ${esc(c.note || '')}</li>`).join('')}</ul></details>` : ''}
@@ -284,7 +298,7 @@ function bind(root) {
       M.tds.get([...M.sel][0])?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
     }
   });
-  root.querySelector('.map-bar').addEventListener('click', e => {
+  root.querySelector('.map-foot').addEventListener('click', e => {
     const b = e.target.closest('[data-m]'); if (b) action(b.dataset.m);
   });
   $('#oc-multi').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) action(b.dataset.m); });

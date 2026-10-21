@@ -1580,3 +1580,45 @@ th.num .q-sort { justify-content: flex-start; }
 @media (max-width: 920px) { #view-workspace .stepper li[data-step] { padding: 10px 10px 10px 24px; font-size: 12.5px; } #view-workspace .stepper li[data-step]:first-child { padding-left: 10px; } #stage-upload .dropzone { min-height: 280px; } }
 @media (max-width: 560px) { #view-workspace .stepper li[data-step] { font-size: 0; justify-content: center; } #view-workspace .stepper li .n { font-size: 12.5px; } }
 @media (prefers-reduced-motion: reduce) { #stage-upload .drop-icon { animation: none !important; } }
+
+/* ---------- map to Oracle: file card, detected details, Excel and Oracle cards, footer actions ---------- */
+.map-top { display: grid; gap: 14px; margin-bottom: 14px; }
+.map-top .map-bar { position: static; margin: 0; gap: 16px; padding: 16px 20px; border-radius: 18px; }
+.map-xl { display: grid; place-items: center; flex: none; width: 52px; height: 52px; border-radius: 14px; background: #e3f4ee; color: var(--brand); }
+.map-xl b { display: grid; place-items: center; width: 34px; height: 38px; border-radius: 6px; background: linear-gradient(160deg, #22b06b, #138a4f); color: #fff; font-size: 19px; font-weight: 800; box-shadow: 0 4px 10px rgba(19,138,79,.25); }
+.map-top .map-file { display: grid; gap: 4px; }
+.map-top .map-file > b { font-size: 16.5px; overflow-wrap: anywhere; }
+.map-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; color: var(--muted); font-size: 13px; }
+.map-meta > span + span::before, .map-meta > label::before { content: "·"; margin-right: 14px; color: var(--faint); }
+.map-top .pill.brand { padding: 6px 12px; border-radius: 99px; background: #dcf7ea; color: #127a4d; font-weight: 650; }
+.map-top .pill.brand::before { content: "✓ "; }
+.map-card-head { display: flex; align-items: center; gap: 12px; padding: 4px 4px 12px; }
+.map-card-head h2 { font-size: 16px; }
+.mh-i { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: 11px; background: var(--brand-soft); color: var(--brand-ink); }
+.map-facts { padding: 16px 18px; border-radius: 18px; }
+.mf-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+.mf { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--line-2); border-radius: 14px; background: #f8fbfa; transition: transform .15s, box-shadow .15s; }
+.mf:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(9,30,28,.06); }
+.mf-i { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: 10px; background: #fff; color: var(--brand); box-shadow: 0 1px 4px rgba(9,30,28,.08); }
+.mf > span:last-child { display: grid; min-width: 0; line-height: 1.3; }
+.mf small { color: var(--muted); font-size: 12px; }
+.mf b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-excel, .map-oracle { padding: 16px; border-radius: 18px; }
+.map-excel .sel-bar { padding: 8px 10px; border-radius: 12px; background: #f6faf9; margin-bottom: 10px; }
+.map-excel .map-grid { border-radius: 12px; }
+.map-excel .map-help { margin: 12px 0 0; padding: 10px 14px; border-radius: 12px; background: #eef8f4; color: var(--ink-2); font-size: 12.5px; }
+.map-oracle { top: 16px; max-height: calc(100vh - 32px); }
+.map-oracle .oc-search input { height: 40px; border-radius: 10px; padding-left: 12px; }
+.map-oracle .ot { border-radius: 14px; overflow: hidden; }
+.map-oracle .oc { grid-template-columns: auto minmax(0, 1.1fr) minmax(0, 1fr) auto auto; padding: 8px 10px; }
+.oc-status { justify-self: end; padding: 3px 10px; border-radius: 99px; background: #f1f4f3; color: var(--muted); font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+.oc-status::before { content: "○ "; }
+.oc-status.on { background: #dcf7ea; color: #127a4d; }
+.oc-status.on::before { content: "✓ "; }
+.oc-status.typed { background: var(--info-soft); color: var(--info); }
+.oc-status.typed::before { content: "✎ "; }
+.map-foot { position: sticky; bottom: 0; z-index: 20; display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 16px; padding: 12px 0; background: linear-gradient(180deg, transparent, var(--bg) 35%); }
+.map-foot .ghost { padding: 10px 16px; font-size: 14px; color: var(--ink-2); }
+.map-foot .primary { padding: 12px 22px; font-size: 15px; border-radius: 12px; background: linear-gradient(180deg, var(--brand-2), var(--brand)); box-shadow: 0 6px 16px rgba(15,107,98,.25); }
+@media (max-width: 1300px) { .mf-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .mf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .map-oracle .oc { grid-template-columns: auto minmax(0, 1fr) auto; } .map-oracle .oc-val { grid-column: 2 / -1; } }
