@@ -136,7 +136,7 @@ def size_table(sheet, cells):
 
 # ---------------------------------------------------------------- bindings
 
-TARGET = re.compile(r'^(field:(?P<field>\w+)|column:(?P<table>ORDMAS|ORDSTYLE)\.(?P<column>[A-Z][A-Z0-9_$#]{0,127})'
+TARGET = re.compile(r'^(field:(?P<field>\w+)|column:(?P<table>[A-Z][A-Z0-9_$#]{0,127})\.(?P<column>[A-Z][A-Z0-9_$#]{0,127})'
                     r'|line:(?P<line>\d+):(?P<lfield>color|label)|size:(?P<sline>\d+):(?P<size>\d+):(?P<sfield>size|quantity))$')
 
 
@@ -164,6 +164,13 @@ def apply_binding(order, target, sheet, cell, line_column=None, via='Excel cell'
         order[m['field']] = '' if shown is None else text(shown)
         if src: order['provenance'][m['field']] = src
         else: order['provenance'].pop(m['field'], None)
+    elif m['table'] and m['table'] not in EXTRA_TABLES:
+        from .order_table import TABLE
+        if m['table'] != TABLE:
+            raise ValueError('Unknown mapping target.')
+        # Single-table mode. A removed mapping is kept as an explicit blank, so an Excel label match
+        # cannot silently fill the column again.
+        order.setdefault('table_values', {})[m['column']] = dict(value=shown, source=src) if cell else dict(value=None, source={'origin': 'Left blank by you'})
     elif m['table']:
         extras = order.setdefault('extras', {}) if m['table'] == 'ORDMAS' else None
         if m['table'] == 'ORDSTYLE':

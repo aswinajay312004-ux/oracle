@@ -134,6 +134,7 @@ def edited_orders(old_orders, incoming):
                     new['provenance'][field]=dict(new['provenance'][field],via='Manual correction',excel_value=new['provenance'][field].get('value'))
                 new[field]=o[field]
         new['extras']=merge_extras(original.get('extras',{}),o.get('extras',{}))
+        new['table_values']=merge_table_values(original.get('table_values',{}),o.get('table_values',{}))
         existing_lines={l['id']:l for key in ('lines','order_lines','sample_lines') for l in original.get(key,[])}
         new['lines']=[]
         for line in o.get('lines',[]):
@@ -166,4 +167,18 @@ def merge_extras(old,incoming):
         prev=old.get(col)
         if prev and str(prev.get('value'))==str(value):result[col]=prev
         elif value not in (None,''):result[col]=dict(value=value,source={'origin':'Manual correction'})
+    return result
+
+def merge_table_values(old,incoming):
+    """Single-table mode values. Unchanged values keep their server-held Excel source; a typed value is a
+    manual entry; an emptied value is an explicit blank (an Excel label match must not refill it)."""
+    result={}
+    for col,item in (incoming or {}).items():
+        value=item.get('value') if isinstance(item,dict) else item
+        prev=old.get(col)
+        if prev and str(prev.get('value'))==str(value) and (value is None)==(prev.get('value') is None):result[col]=prev
+        elif value in (None,''):result[col]=dict(value=None,source={'origin':'Left blank by you'})
+        else:result[col]=dict(value=value,source={'origin':'Typed by you'})
+    for col,prev in (old or {}).items():
+        result.setdefault(col,prev)
     return result

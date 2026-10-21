@@ -15,6 +15,7 @@ pytestmark = pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE') != '1', reason='
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(local_store, 'DATA', tmp_path)
     monkeypatch.setattr(main, 'DATA', tmp_path)
+    monkeypatch.setenv('POPPYS_ORDER_TARGET', 'erp')  # these tests cover the ORDMAS/ORDSTYLE/ORDSIZE writer
     with TestClient(main.app) as c:
         c.post('/api/setup', json={'username': 'admin', 'password': 'test-password-123'})
         yield c

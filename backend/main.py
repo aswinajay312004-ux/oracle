@@ -15,7 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, ConfigDict
 import httpx
 import oracledb
-from . import local_store as store, oracle_store as oracle, workbooks, mapping, database
+from . import local_store as store, oracle_store as oracle, workbooks, mapping, database, order_table
 from .config import DATA, ROOT, setting
 
 LOCK=threading.RLock()
@@ -210,11 +210,18 @@ def column_mapping(id:str,data:Mapping,user=Depends(authenticated)):
 class Version(BaseModel):version:int
 class Approval(Version):plan_hash:str=Field(min_length=64,max_length=64)
 
+def table_mode(conn):
+    """Single-table mode (default when the order table exists): every order goes into ONE Oracle table.
+    ORDER_TARGET=erp keeps the ORDMAS/ORDSTYLE/ORDSIZE writer."""
+    target=setting('ORDER_TARGET','auto').lower()
+    return target=='table' or (target=='auto' and order_table.exists(conn))
+
 @app.post('/api/drafts/{id}/preview')
 def preview(id:str,data:Version,user=Depends(authenticated)):
     with LOCK:
         d=editable(id,data.version)
-        with oracle.connect() as conn:d['plan']=oracle.plan(conn,d['orders'],d['filehash'])
+        with oracle.connect() as conn:
+            d['plan']=order_table.plan(conn,d['orders'],d['filehash'],d['sheets'],d['filename']) if table_mode(conn) else oracle.plan(conn,d['orders'],d['filehash'])
         # Preview itself is a revision, preventing an earlier accept from approving a replaced preview.
         old=d['version'];d['version']+=1;store.save(d,user,old);return d
 
@@ -228,7 +235,7 @@ def accept(id:str,data:Approval,user=Depends(authenticated)):
         if d['version']!=data.version or not d.get('plan') or d['plan']['hash']!=data.plan_hash:
             raise HTTPException(409,'Accept requires the exact current preview. Generate a new preview.')
         if d['plan']['errors']:raise HTTPException(409,'Resolve all validation issues before accepting.')
-        result=oracle.commit(d,data.plan_hash,user)
+        result=(order_table.commit if d['plan'].get('mode')=='table' else oracle.commit)(d,data.plan_hash,user)
         d['result']=result;d['version']+=1
         store.save(d,user,data.version)
         store.log(user,'Approved and saved to Oracle',', '.join(o['order_ref'] for o in result['orders']),dict(job=id,rows=len(result['rows'])))
@@ -369,7 +376,12 @@ def restore(id:str,data:Restore,user=Depends(authenticated)):
 @app.get('/api/schema/order-columns')
 def order_columns(user=Depends(authenticated)):
     """Oracle columns a reviewer can map, with the business fields the engine fills itself."""
-    with oracle.connect() as conn:registry=oracle.schema(conn);fks={(f['child'],f['child_column']) for f in oracle.constraints(conn)['foreign_keys']}
+    with oracle.connect() as conn:
+        if table_mode(conn):
+            cols=order_table.columns(conn)
+            return dict(mode='table',table=order_table.TABLE,columns=[dict(name=n,type=m['type'],length=m['length'],nullable=m['nullable'],label=m['label'],
+                level=m['level'],field=order_table.FIELD.get(n),labels=sorted(m['synonyms'])) for n,m in cols.items()])
+        registry=oracle.schema(conn);fks={(f['child'],f['child_column']) for f in oracle.constraints(conn)['foreign_keys']}
     out={}
     for table in ('ORDMAS','ORDSTYLE','ORDSIZE'):
         name,purpose=oracle.TABLE_INFO[table]
@@ -453,9 +465,9 @@ def relationships(conn=None):
     physical=oracle.constraints(conn)['foreign_keys'] if conn else []
     return oracle.VERIFIED_RELATIONSHIPS+physical+store.app_relationships()
 
-def order_sources(ordmasid):
+def order_sources(ordmasid,imports=None):
     """Excel sheet/cell behind each saved column, from the approved plan of the import."""
-    for record in oracle.history():
+    for record in imports if imports is not None else oracle.history():
         if any(o['ordmasid']==ordmasid for o in record['orders']):
             try:draft=store.get(record['job_id'])
             except KeyError:return record,None,{}
@@ -467,10 +479,17 @@ def order_sources(ordmasid):
 @app.get('/api/orders')
 def orders(user=Depends(authenticated)):
     items=[];imports=oracle.history()
-    ids=[o['ordmasid'] for i in imports for o in i['orders']][:1000]
+    ids=[o['ordmasid'] for i in imports if i['mode']!='table' for o in i['orders']][:1000]
+    keys=[o['ordmasid'] for i in imports if i['mode']=='table' for o in i['orders']][:1000]
     current={};changes={}
     with oracle.connect() as conn:
         c=conn.cursor()
+        for n in range(0,len(keys),500):
+            binds={f'i{k}':v for k,v in enumerate(keys[n:n+500])}
+            c.execute(f"""SELECT ORDER_KEY,max(IONO),max(OQTY),sum(ORDERQTY),max(ORDERDATE),max(BUYERNAME),max(STYLENO) FROM {oracle.OWNER}.{order_table.TABLE}
+                WHERE ORDER_KEY IN ({",".join(":"+k for k in binds)}) GROUP BY ORDER_KEY""",binds)
+            for key,ref,oqty,sizes,odate,buyer,style in c:
+                current[key]=dict(order_ref=ref or '(no OC number)',quantity=oracle.plain(oqty if oqty is not None else sizes),order_date=oracle.plain(odate),buyer=buyer,style=style)
         for n in range(0,len(ids),500):
             binds={f'i{k}':v for k,v in enumerate(ids[n:n+500])}
             c.execute(f"""SELECT m.ORDMASID,m.DOCID,m.OQTY,m.ODATE,b.BUYERNAME,s.STYLENUMBER FROM {oracle.OWNER}.ORDMAS m
@@ -492,21 +511,29 @@ def orders(user=Depends(authenticated)):
 
 @app.get('/api/orders/{ordmasid}')
 def order_detail(ordmasid:int,user=Depends(authenticated)):
-    with oracle.connect() as conn:order=oracle.read_order(conn,ordmasid)
     record,draft,sources=order_sources(ordmasid)
-    order['summary']=oracle.summarize(order);order['sources']=sources
+    if record and record['mode']=='table':
+        with oracle.connect() as conn:rows=order_table.order_rows(conn,ordmasid)
+        order=dict(ordmasid=ordmasid,mode='table',table=order_table.TABLE,rows={order_table.TABLE:rows},labels={},summary=order_table.summarize(rows))
+    else:
+        with oracle.connect() as conn:order=oracle.read_order(conn,ordmasid)
+        order['summary']=oracle.summarize(order);order['mode']='erp'
+    order['sources']=sources
     order['import']=dict(job_id=record['job_id'],committed_at=record['committed_at'],approver=record['approver'],
         filename=draft['filename'] if draft else None) if record else None
     order['excel']=next((o for o in (draft or {}).get('orders',[]) if oracle.normalize(o.get('order_ref'))==oracle.normalize(order['summary']['order_ref'])),None)
     return order
 
 @app.get('/api/orders/{ordmasid}/tables/{table}')
-def order_table(ordmasid:int,table:str,user=Depends(authenticated)):
+def order_table_rows(ordmasid:int,table:str,user=Depends(authenticated)):
     with oracle.connect() as conn:
         registry=oracle.schema(conn)
         if table not in registry:raise KeyError('Table not found')
-        data=oracle.related_rows(conn,ordmasid,table,relationships(conn))
-    name,purpose=oracle.TABLE_INFO.get(table,(table,''))
+        if table==order_table.TABLE:
+            try:data=dict(rows=order_table.order_rows(conn,ordmasid),via='ORDER_KEY',truncated=False)
+            except KeyError:data=dict(rows=[],via=None,truncated=False)
+        else:data=oracle.related_rows(conn,ordmasid,table,relationships(conn))
+    name,purpose=oracle.TABLE_INFO.get(table,('Excel orders',order_table.PURPOSE) if table==order_table.TABLE else (table,''))
     return dict(data,table=table,label=name,purpose=purpose,columns=[dict(name=c,**m) for c,m in registry[table].items()])
 
 class Changes(BaseModel):changes:list[dict]=Field(max_length=500)
@@ -514,7 +541,9 @@ class Changes(BaseModel):changes:list[dict]=Field(max_length=500)
 @app.post('/api/orders/{ordmasid}/changes')
 def propose_changes(ordmasid:int,data:Changes,user=Depends(authenticated)):
     """Preview only: Oracle is not changed until the change set is approved."""
-    with oracle.connect() as conn:preview=oracle.preview_changes(conn,ordmasid,data.changes)
+    record,_,_=order_sources(ordmasid)
+    with oracle.connect() as conn:
+        preview=(order_table.preview_changes if record and record['mode']=='table' else oracle.preview_changes)(conn,ordmasid,data.changes)
     cs=uuid.uuid4().hex;store.save_change_set(cs,ordmasid,preview,user)
     return dict(preview,id=cs)
 
@@ -544,9 +573,17 @@ def order_history(ordmasid:int,user=Depends(authenticated)):
 def graph(user=Depends(authenticated)):
     with oracle.connect() as conn:
         registry=oracle.schema(conn);keys=oracle.constraints(conn)['keys'];edges=relationships(conn)
-        tables=database.explorer(conn,registry,keys)
-    return dict(tables=[dict(t,label=oracle.TABLE_INFO.get(t['name'],(t['name'],''))[0],purpose=oracle.TABLE_INFO.get(t['name'],('',''))[1]) for t in tables],
-        relationships=edges)
+        tables=database.explorer(conn,registry,keys);simple=table_mode(conn)
+        if simple:
+            # Single-table mode shows only the order table and tables created here; the ERP tables stay untouched in Oracle.
+            try:created={x['object'] for x in database.schema_log(conn)}
+            except oracledb.Error:created=set()
+            keep={order_table.TABLE}|created
+            keep|={e['child'] for e in edges if e['parent'] in keep}|{e['parent'] for e in edges if e['child'] in keep and e['kind']!='verified'}
+            tables=[t for t in tables if t['name'] in keep];edges=[e for e in edges if e['parent'] in keep and e['child'] in keep]
+    info=dict(oracle.TABLE_INFO,**{order_table.TABLE:('Excel orders',order_table.PURPOSE)})
+    return dict(tables=[dict(t,label=info.get(t['name'],(t['name'],''))[0],purpose=info.get(t['name'],('',''))[1]) for t in tables],
+        relationships=edges,mode='table' if simple else 'erp',order_table=order_table.TABLE)
 
 @app.get('/api/db/tables/{table}')
 def table_detail(table:str,offset:int=0,user=Depends(authenticated)):

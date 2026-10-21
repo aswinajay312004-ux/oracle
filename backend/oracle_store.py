@@ -393,7 +393,7 @@ def history():
         out=[]
         for j,h,a,d,payload in c:
             result=json.loads(payload.read() if hasattr(payload,'read') else payload)
-            out.append(dict(job_id=j,plan_hash=h,approver=a,committed_at=d.isoformat(),orders=result.get('orders',[]),rows=len(result.get('rows',[]))))
+            out.append(dict(job_id=j,plan_hash=h,approver=a,committed_at=d.isoformat(),orders=result.get('orders',[]),rows=len(result.get('rows',[])),mode=result.get('mode','erp')))
         return out
 
 # ------------------------------------------------------------ saved orders
@@ -541,14 +541,16 @@ def apply_changes(changeset_id,preview,approver):
         try:
             for (table,rid),items in grouped.items():
                 cols=[i['column'] for i in items];quoted=','.join(f'"{x}"' for x in cols)
-                c.execute(f'SELECT {quoted} FROM {OWNER}.{table} WHERE {PK[table]}=:id AND ORDMASID=:o FOR UPDATE WAIT 10',id=rid,o=preview['ordmasid'])
+                # pk / group come from this server's own preview (single-table mode uses ENTRY_ID / ORDER_KEY).
+                pk=items[0].get('pk') or PK[table];group=items[0].get('group') or 'ORDMASID'
+                c.execute(f'SELECT {quoted} FROM {OWNER}.{table} WHERE "{pk}"=:id AND "{group}"=:o FOR UPDATE WAIT 10',id=rid,o=preview['ordmasid'])
                 got=c.fetchone()
                 if not got or any(plain(g)!=i['old'] for g,i in zip(got,items)):
                     raise ValueError('This order was changed in Oracle after your preview. Reload the order and review again.')
                 binds={f'v{n}':bind_value(registry[table][i['column']],i['new']) for n,i in enumerate(items)}
                 assignments=','.join('"%s"=:v%d'%(i['column'],n) for n,i in enumerate(items))
-                c.execute(f'UPDATE {OWNER}.{table} SET {assignments} WHERE {PK[table]}=:pk',dict(binds,pk=rid))
-                c.execute(f'SELECT {quoted} FROM {OWNER}.{table} WHERE {PK[table]}=:id',id=rid)
+                c.execute(f'UPDATE {OWNER}.{table} SET {assignments} WHERE "{pk}"=:pk',dict(binds,pk=rid))
+                c.execute(f'SELECT {quoted} FROM {OWNER}.{table} WHERE "{pk}"=:id',id=rid)
                 back=c.fetchone()
                 if any(plain(g)!=i['new'] for g,i in zip(back,items)):raise ValueError(f'{table}: updated values did not match read-back.')
                 for i in items:
