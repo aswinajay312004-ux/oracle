@@ -46,15 +46,24 @@ export async function loadDashboard() {
       <td class="nowrap">${d.created_at ? esc(timeAgo(d.created_at)) : '—'} <span class="muted small-text">${esc(d.uploaded_by || '')}</span></td></tr>`).join('')}</tbody></table></div>` : '';
 }
 
-// One compact line: Oracle (saving), Ask AI (read-only account), local AI assistant.
+// Oracle (saving), database view (Ask AI's read-only account) and the local AI assistant, as three status cards.
+const SICON = {
+  db: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
+  view: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4M9 13h.01M15 13h.01M9 17h6"/>',
+};
 function drawStatus() {
   const h = state.health || {}; const db = h.database || {}; const ro = h.readonly || {}; const ai = h.ollama || {};
-  const item = (ok, title, tip = '') => `<span class="st ${ok === true ? 'ok' : ok === false ? 'off' : 'idle'}" ${tip ? `title="${esc(tip)}"` : ''}><i class="dot"></i>${esc(title)}</span>`;
+  const card = (i, ok, icon, title, sub, pill, tip = '') => `<div class="scard ${ok === true ? 'ok' : ok === false ? 'off' : 'idle'}" style="--i:${i}" ${tip ? `title="${esc(tip)}"` : ''}>
+      <span class="scard-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SICON[icon]}</svg></span>
+      <span class="scard-text"><strong>${esc(title)}</strong><small>${esc(sub)}</small></span>
+      <span class="scard-pill"><i class="dot" aria-hidden="true"></i>${esc(pill)}</span></div>`;
   $('#dash-status').innerHTML = [
-    item(!!db.connected, db.connected ? `Oracle connected · ${db.owner || ''}` : 'Oracle offline · saving paused',
-      db.connected ? `${db.tables || ''} tables · ${db.dsn || ''}` : `${db.error || ''} Start the Oracle database (Docker Desktop → oracle26ai) and refresh.`),
-    item(db.connected ? !!ro.connected : null, ro.connected ? 'Database view ready' : 'Database view needs Oracle', ro.error || ''),
-    item(ai.available ? true : null, ai.available ? `AI assistant on · ${ai.model}` : 'AI assistant off (optional)'),
+    card(0, !!db.connected, 'db', db.connected ? 'Oracle connected' : 'Oracle offline', db.connected ? `Saving enabled · ${db.owner || ''}` : 'Saving paused',
+      db.connected ? 'Connected' : 'Offline', db.connected ? `${db.tables || ''} tables · ${db.dsn || ''}` : `${db.error || ''} Start the Oracle database (Docker Desktop → oracle26ai) and refresh.`),
+    card(1, db.connected ? !!ro.connected : null, 'view', ro.connected ? 'Database view ready' : 'Database view needs Oracle', ro.connected ? 'Read-only access' : 'Starts when Oracle is connected',
+      ro.connected ? 'Ready' : 'Waiting', ro.error || ''),
+    card(2, ai.available ? true : null, 'bot', ai.available ? 'AI assistant on' : 'AI assistant off', ai.available ? ai.model || 'Local model' : 'Optional', ai.available ? 'Active' : 'Off'),
   ].join('');
 }
 
