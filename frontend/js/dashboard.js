@@ -34,9 +34,12 @@ export async function loadDashboard() {
       <td>${esc(name(r))}</td><td class="opt">${esc(r.buyer || '—')}</td><td class="num">${r.pieces == null ? '—' : esc(fmt(r.pieces, 0))}</td>
       <td class="nowrap">${esc(timeAgo(r.saved_at))}<div class="muted small-text">${esc(r.saved_by || '')}</div></td></tr>`).join('')}</tbody></table></div>`
     : '<p class="empty">No orders saved yet. Click <b>＋ New order</b> to upload an Excel file.</p>';
-  $('#dash-activity').innerHTML = o.activity.length ? o.activity.map(a => `<li><span class="act-who">${esc(a.who)}</span> ${(WHAT[a.action] || (() => esc(a.action)))(a)}
-      <time class="muted small-text" datetime="${esc(a.at)}" title="${esc(new Date(a.at).toLocaleString())}">${esc(timeAgo(a.at))}</time></li>`).join('')
-    : '<li class="muted">Nothing yet.</li>';
+  $('#dash-activity').innerHTML = o.activity.length ? o.activity.map((a, i) => `<li class="act-row${i === 0 ? ' latest' : ''}" style="--i:${Math.min(i, 10)}">
+      <span class="act-icon ${ACT_TONE[a.action] || ''}" aria-hidden="true">${actIcon(a.action)}</span><span class="act-line" aria-hidden="true"><i></i></span>
+      <span class="act-body"><span class="act-who">${esc(a.who)}</span><span class="act-what">${(WHAT[a.action] || (() => esc(a.action)))(a)}</span></span>
+      <time class="act-time" datetime="${esc(a.at)}" title="${esc(new Date(a.at).toLocaleString())}">${i === 0 ? '<i class="act-live" aria-hidden="true"></i>' : CLOCK}${esc(timeAgo(a.at))}</time></li>`).join('')
+    : '<li class="act-empty muted">Nothing yet.</li>';
+  const setupNav = document.querySelector('.nav button[data-view="admin"]'); $('#dash-activity-all').hidden = !setupNav || setupNav.hidden;
   $('#dash-waiting-card').hidden = !o.queue.length;
   $('#dash-queue').innerHTML = o.queue.length ? `<div class="tbl-wrap flush"><table><thead><tr><th scope="col">File</th><th scope="col">Order</th><th scope="col" class="num">Pieces</th><th scope="col">Status</th><th scope="col">Uploaded</th></tr></thead><tbody>
     ${o.queue.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><b>${esc(d.filename)}</b></td>
@@ -81,4 +84,29 @@ function drawCards(o) {
     card('', 'Needs a look', n(o ? counts['Needs attention'] || 0 : null), 'Files with something to fix', 'workspace'),
     card('', 'Ready to save', n(o ? counts['Ready to approve'] || 0 : null), 'Checked, waiting for approval', 'workspace'),
   ].join('');
+}
+
+// Activity rows: an icon per kind of action, a timeline dot, who and what, and when.
+const svg = d => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const CLOCK = `<svg class="act-clock" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
+const ICONS = {
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  map: '<path d="M4 6h6M4 12h6M4 18h6M14 6h6M14 12h6M14 18h6"/>',
+  check: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+  alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+};
+const ACT_ICON = { login: 'user', user_created: 'user', user_changed: 'user', upload: 'upload', upload_unreadable: 'alert', edit: 'edit', oracle_mapping: 'map', mapping_applied: 'map', template_saved: 'map', approved_saved: 'check', approve_failed: 'alert', approve_outcome_unknown: 'alert' };
+const ACT_TONE = { approved_saved: 'ok', approve_failed: 'bad', upload_unreadable: 'bad', approve_outcome_unknown: 'warn' };
+const actIcon = action => svg(ICONS[ACT_ICON[action] || 'user']);
+
+// "View all" opens the full audit history in Setup (only shown when Setup is available to this login).
+export function bindActivity() {
+  const all = $('#dash-activity-all'); if (!all) return;
+  all.addEventListener('click', async () => {
+    document.querySelector('.nav button[data-view="admin"]')?.click();
+    for (let n = 0; n < 50 && state.busy; n++) await new Promise(r => setTimeout(r, 50));
+    document.querySelector('.subnav [data-admin="audit"]')?.click();
+  });
 }
