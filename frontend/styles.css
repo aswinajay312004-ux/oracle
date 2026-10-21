@@ -1308,3 +1308,32 @@ body.popup-open { overflow: hidden; }
   .auth-side { padding: 32px 20px 48px; }
 }
 @media (min-width: 901px) { .auth-art { display: flex; flex-direction: column; justify-content: space-between; } }
+
+/* ---------- overview: figure cards and pill buttons (reference: dashboard card row) ---------- */
+#view-dashboard .page-head { align-items: center; }
+#view-dashboard .page-head h1 { font-size: 30px; font-weight: 600; }
+.head-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+#view-dashboard .head-actions button, #view-dashboard .card-head .ghost { border-radius: 99px; }
+#view-dashboard .head-actions .primary { padding: 10px 20px; font-size: 14px; background: linear-gradient(180deg, var(--brand-2), var(--brand)); box-shadow: 0 4px 12px rgba(15,107,98,.22); }
+#view-dashboard .head-actions .primary:hover:not(:disabled) { background: var(--brand-ink); }
+#view-dashboard .head-actions .secondary { padding: 9px 20px; font-size: 14px; background: #fff; color: var(--brand); border: 1.5px solid var(--brand); }
+#view-dashboard .head-actions .secondary:hover:not(:disabled) { background: var(--brand-soft); }
+#view-dashboard .card-head .ghost { border: 1.5px solid var(--brand); color: var(--brand); padding: 4px 14px; background: #fff; }
+#view-dashboard .card-head .ghost:hover { background: var(--brand-soft); }
+.dash-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
+.dcard { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 18px 20px; background: #fff; border: 1px solid var(--line); border-radius: 18px; }
+.dcard-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dcard h3 { font-size: 15.5px; font-weight: 600; }
+.dcard-go { display: grid; place-items: center; flex: none; width: 34px; height: 34px; padding: 0; border: 1.5px solid var(--ink); border-radius: 50%; background: #fff; color: var(--ink); }
+.dcard-go:hover { background: var(--ink); color: #fff; }
+.dcard-value { margin-top: 8px; font-size: 44px; line-height: 1.05; font-weight: 500; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.dcard-note { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.dcard-badge { display: inline-grid; place-items: center; min-width: 22px; height: 18px; padding: 0 5px; border: 1px solid currentColor; border-radius: 5px; font-size: 11px; font-weight: 700; }
+.dcard.hero { border: 0; color: #fff; background: radial-gradient(90% 120% at 100% 0%, rgba(94,234,212,.25) 0, transparent 60%), linear-gradient(150deg, #0c2a27, var(--brand-2)); box-shadow: 0 10px 24px rgba(12,42,39,.22); }
+.dcard.hero h3 { color: #fff; }
+.dcard.hero .dcard-go { background: #fff; border-color: #fff; color: var(--brand-ink); }
+.dcard.hero .dcard-go:hover { background: rgba(255,255,255,.85); }
+.dcard.hero .dcard-note { color: #b9ece2; }
+#view-dashboard .ov-grid > .card, #view-dashboard #dash-waiting-card, #view-dashboard .status-strip { border-radius: 18px; }
+@media (max-width: 1100px) { .dash-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .dash-cards { gap: 10px; } .dcard { padding: 14px; } .dcard-value { font-size: 32px; } .dcard h3 { font-size: 14px; } .head-actions { width: 100%; } .head-actions button { flex: 1; } }

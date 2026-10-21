@@ -38,8 +38,9 @@
         <!-- OVERVIEW -->
         <section id="view-dashboard" class="view">
           <div class="page-head"><div><h1>Overview</h1><p class="lead">What was saved lately and who did what.</p></div>
-            <button class="primary" data-goto="workspace">＋ New order</button></div>
+            <div class="head-actions"><button class="primary" data-goto="workspace">＋ New order</button><button class="secondary" data-goto="explorer">All orders</button></div></div>
           <div class="status-strip card" id="dash-status" aria-label="System status"></div>
+          <div class="dash-cards" id="dash-cards" aria-label="Order figures"></div>
           <div class="ov-grid">
             <section class="card"><div class="card-head"><h2>Recently saved orders</h2><button class="ghost small" data-goto="explorer">All orders →</button></div><div id="dash-saved"></div></section>
             <section class="card"><div class="card-head"><h2>Activity</h2></div><ol class="activity" id="dash-activity"></ol></section>

@@ -26,7 +26,8 @@ const STATUS_TEXT = { 'Ready to approve': 'Ready to save', 'Needs attention': 'N
 export async function loadDashboard() {
   drawStatus();
   let o;
-  try { o = await api('/api/overview'); } catch (e) { $('#dash-saved').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
+  try { o = await api('/api/overview'); } catch (e) { drawCards(null); $('#dash-saved').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
+  drawCards(o);
   $('#dash-saved').innerHTML = o.recent_orders.length ? `<div class="tbl-wrap flush"><table class="ov-orders"><thead><tr><th scope="col">Order ID</th><th scope="col">Order name</th>
       <th scope="col" class="opt">Buyer</th><th scope="col" class="num">Pieces</th><th scope="col">Saved</th></tr></thead><tbody>
     ${o.recent_orders.map(r => `<tr class="clickable" data-order-panel="${esc(r.ordmasid)}"><th scope="row"><button class="link" data-order-panel="${esc(r.ordmasid)}">${esc(r.order_ref || '—')}</button></th>
@@ -54,5 +55,21 @@ function drawStatus() {
       db.connected ? `${db.tables || ''} tables · ${db.dsn || ''}` : `${db.error || ''} Start the Oracle database (Docker Desktop → oracle26ai) and refresh.`),
     item(db.connected ? !!ro.connected : null, ro.connected ? 'Database view ready' : 'Database view needs Oracle', ro.error || ''),
     item(ai.available ? true : null, ai.available ? `AI assistant on · ${ai.model}` : 'AI assistant off (optional)'),
+  ].join('');
+}
+
+// Four figure cards, all from /api/overview: saved orders (Oracle), files not saved yet, and two queue counts.
+const ARROW = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>';
+function drawCards(o) {
+  const saved = o?.saved || {}; const counts = o?.counts || {}; const n = v => v == null ? '—' : fmt(v, 0);
+  const card = (cls, title, value, note, goto, badge = '') => `<article class="dcard ${cls}"><div class="dcard-top"><h3>${esc(title)}</h3>
+      <button class="dcard-go" data-goto="${goto}" aria-label="Open ${esc(title)}">${ARROW}</button></div>
+    <strong class="dcard-value">${esc(value)}</strong><p class="dcard-note">${badge}${esc(note)}</p></article>`;
+  const week = saved.available ? `<span class="dcard-badge">${esc(n(saved.last_7_days))}</span>` : '';
+  $('#dash-cards').innerHTML = [
+    card('hero', 'Saved orders', saved.available ? n(saved.total) + (saved.capped ? '+' : '') : '—', saved.available ? 'saved in the last 7 days' : 'Oracle is offline', 'explorer', week),
+    card('', 'Not saved yet', n(o?.open), 'Uploaded, waiting to be checked and saved', 'workspace'),
+    card('', 'Needs a look', n(o ? counts['Needs attention'] || 0 : null), 'Files with something to fix', 'workspace'),
+    card('', 'Ready to save', n(o ? counts['Ready to approve'] || 0 : null), 'Checked, waiting for approval', 'workspace'),
   ].join('');
 }
