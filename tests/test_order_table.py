@@ -71,3 +71,15 @@ def test_single_table_upload_preview_approve_edit(tmp_path, monkeypatch):
         again = c.post('/api/uploads', files={'file': ('bom.xlsx', factory.merch_bom(ocn=ref))}).json()
         dup = c.post(f"/api/drafts/{again['id']}/preview", json={'version': again['version']}).json()['plan']
         assert any('already saved' in e for e in dup['errors'])
+
+
+@pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE') != '1', reason='Set POPPYS_TEST_ORACLE=1 for local Oracle tests')
+def test_ask_ai_answers_from_fixed_queries(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_store, 'DATA', tmp_path); monkeypatch.setattr(main, 'DATA', tmp_path)
+    monkeypatch.setattr(main.agent, 'available', lambda model=None: (None, []))   # keyword reader; no model in CI
+    with TestClient(main.app) as c:
+        c.post('/api/setup', json={'username': 'admin', 'password': 'test-password-123'})
+        r = c.post('/api/ai/ask', json={'question': 'how many pieces for TEST BUYER?'}).json()
+        assert r['intent'] == 'total_pieces' and 'TEST BUYER' in r['text'] and 'SUM(ORDERQTY)' in r['sql']
+        sizes = c.post('/api/ai/ask', json={'question': 'size wise pieces'}).json()
+        assert sizes['intent'] == 'by_size' and sizes['rows']

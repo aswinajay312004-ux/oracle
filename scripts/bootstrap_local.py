@@ -27,7 +27,7 @@ def main():
     password = 'Pp' + secrets.token_hex(24)
     # Save before DDL so a partial setup never loses the generated credential.
     CONFIG.write_text('ORACLE_USER=POPPYS_APP\nORACLE_PASSWORD='+password+
-        '\nORACLE_DSN=127.0.0.1:1521/FREEPDB1\nORACLE_OWNER=GARMENT_DEMO\nOLLAMA_MODEL=qwen2.5:7b\n', encoding='utf-8')
+        '\nORACLE_DSN=127.0.0.1:1521/FREEPDB1\nORACLE_OWNER=GARMENT_DEMO\nOLLAMA_MODEL=qwen2.5:7b-instruct\n', encoding='utf-8')
     grants = '\n'.join(f'grant select, insert on GARMENT_DEMO.{t} to POPPYS_APP;' for t in TABLES)
     sqlplus(f'''create user POPPYS_APP identified by "{password}" default tablespace USERS quota 50M on USERS;
 grant create session to POPPYS_APP;

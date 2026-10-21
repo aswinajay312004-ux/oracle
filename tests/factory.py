@@ -42,7 +42,7 @@ def moved_layout():
     return save(wb)
 
 
-def merch_bom(ocn='TEST-OC-1', sample_qty=0):
+def merch_bom(ocn='TEST-OC-1', sample_qty=0, extra_header=False):
     """Merch BOM layout: header block, OCN under its label, order / sample / summary size blocks."""
     from openpyxl.worksheet.formula import ArrayFormula
     wb = Workbook(); ws = wb.active; ws.title = 'ST1'
@@ -64,4 +64,14 @@ def merch_bom(ocn='TEST-OC-1', sample_qty=0):
         ws.cell(header + 1, 8, sum(qty))
         ws.cell(header + 2, 2, 'Total')
     ws['J20'] = ArrayFormula('J20', '=E18')
+    if extra_header:
+        ws['G2'] = 'SHIP MODE'; ws['H2'] = 'SEA'; ws['G3'] = 'Payment Terms'; ws['H3'] = 'LC 60 DAYS'
+    ws['B29'] = 'FABRIC REQUIREMENT'
+    for i, h in enumerate(['Garment', 'Colour', 'Fabric', 'Gsm'], 2):
+        ws.cell(30, i, h)
+    ws['B31'] = 'GARMENT-1'; ws['C31'] = 'NAVY'; ws['D31'] = 'Interlock'; ws['E31'] = 190
+    ws['B34'] = 'CARE LABEL'
+    for i, h in enumerate(['Garment', 'Code', 'Size', 'Supplier'], 2):
+        ws.cell(35, i, h)
+    ws['B36'] = 'ALL'; ws['C36'] = 'CARE-1'
     return save(wb)
