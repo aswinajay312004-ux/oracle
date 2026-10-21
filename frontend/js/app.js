@@ -12,7 +12,7 @@ async function session() {
   const s = await fetch('/api/session', { credentials: 'same-origin' }).then(r => r.json());
   state.user = s.authenticated ? s.username : null; state.permissions = s.permissions || []; state.setup = s.needs_setup;
   $('#auth').hidden = s.authenticated; $('#logout').hidden = !s.authenticated;
-  $('#auth-title').textContent = s.needs_setup ? 'Set up POPPYS AI' : 'Sign in';
+  $('#auth-title').textContent = s.needs_setup ? 'Set up POPPYS AI' : 'Welcome back';
   $('#auth-text').textContent = s.needs_setup ? 'Choose the one login everyone in the team will use.' : 'One login for everyone in the team.';
   $('#auth-submit').textContent = s.needs_setup ? 'Create the login →' : 'Sign in →';
   $('#auth-pass').autocomplete = s.needs_setup ? 'new-password' : 'current-password';

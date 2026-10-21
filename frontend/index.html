@@ -14,6 +14,7 @@
     <aside class="sidebar" aria-label="Navigation">
       <a class="brand" href="/" aria-label="POPPYS AI home">
         <span class="brand-mark">P</span>
+        <img class="brand-logo" src="/static/img/poppys-logo.png" alt="" width="150" height="39">
         <span class="brand-text"><strong>POPPYS <em>AI</em></strong><small>Garments · Axpert ERP</small></span>
       </a>
       <button class="icon-btn rail-toggle" id="rail-toggle" type="button" aria-pressed="false" aria-label="Hide the menu" title="Hide the menu"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
@@ -144,18 +145,22 @@
     <div class="confirm-actions"><button value="cancel" class="secondary" formnovalidate>Go back</button><button value="ok" class="primary" id="confirm-ok">Confirm</button></div></form></dialog>
 
   <div id="auth" class="auth" hidden>
-    <div class="auth-art">
-      <div class="brand"><span class="brand-mark big">P</span><span class="brand-text"><strong style="font-size:18px">POPPYS <em>AI</em></strong><small>Order automation · Axpert ERP</small></span></div>
-      <div><h2>Excel order → Oracle, in four steps.</h2>
-        <ul><li>Upload the Excel file</li><li>Check which Excel cells go to which Oracle column</li><li>Preview the Oracle tables, then save</li><li>See every saved order in the Database</li></ul></div>
-      <small>Runs entirely on this computer · local Oracle · local AI</small>
-    </div>
+    <aside class="auth-art" aria-label="POPPYS">
+      <img class="auth-logo" src="/static/img/poppys-logo.png" alt="POPPYS" width="268" height="70">
+      <div class="auth-copy">
+        <h2>From Buyer File to<br>Oracle Order.</h2>
+        <p class="auth-tagline">Accurate. Approved. Automated.</p>
+        <p>Automate order entry with AI. Validate details, identify missing fields, and save approved entries to Oracle.</p>
+      </div>
+    </aside>
     <div class="auth-side">
       <form id="auth-form" class="auth-card">
         <h1 id="auth-title">Sign in</h1>
         <p id="auth-text" class="muted">One login for everyone in the team.</p>
-        <label>Username<input id="auth-user" autocomplete="username" required minlength="2" maxlength="50" pattern="[A-Za-z0-9._@\-]+"></label>
-        <label>Password<span class="pw-field"><input id="auth-pass" type="password" autocomplete="current-password" required maxlength="200"><button type="button" id="auth-pass-show" class="pw-toggle" aria-controls="auth-pass" aria-pressed="false" aria-label="Show password">Show</button></span></label>
+        <label for="auth-user">Username</label>
+        <span class="auth-input"><svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg><input id="auth-user" autocomplete="username" required minlength="2" maxlength="50" pattern="[A-Za-z0-9._@\-]+" placeholder="abc@gmail.com"></span>
+        <label for="auth-pass">Password</label>
+        <span class="pw-field auth-input"><svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/><circle cx="12" cy="16" r="1.2" fill="currentColor"/></svg><input id="auth-pass" type="password" autocomplete="current-password" required maxlength="200"><button type="button" id="auth-pass-show" class="pw-toggle" aria-controls="auth-pass" aria-pressed="false" aria-label="Show password">Show</button></span>
         <p id="auth-error" class="field-error" role="alert" hidden></p>
         <button type="submit" class="primary big full" id="auth-submit">Sign in</button>
         <small class="muted">The login is kept only on the computer that runs POPPYS AI.</small>
