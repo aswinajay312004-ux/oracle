@@ -37,7 +37,7 @@ def source(sheet, address, value, formula=None):
 
 def base_order():
     return dict(buyer='', style='', description='', po_number='', order_ref='', ship_date='',
-        order_date='', season='', merch='', sample_type='DEVELOPMENT SAMPLE',
+        order_date='', season='', merch='', sample_type='',
         pieces_per_unit=None, quantity_basis='unconfirmed', lines=[], provenance={},
         warnings=[], order_lines=[], sample_lines=[])
 
@@ -67,7 +67,7 @@ def inspect(content):
                     formula=cell.value if cell.data_type=='f' else None
                     value=scalar(cached[ws.title][cell.coordinate]) if formula else scalar(cell)
                     cells.append(dict(cell=cell.coordinate,row=cell.row,col=cell.column,value=value,
-                        formula=formula,hidden=bool(ws.row_dimensions[cell.row].hidden or ws.column_dimensions[cell.column_letter].hidden),
+                        formula=formula,format=cell.number_format if cell.number_format!='General' else None,hidden=bool(ws.row_dimensions[cell.row].hidden or ws.column_dimensions[cell.column_letter].hidden),
                         error=cell.data_type=='e'))
         sheets.append(dict(name=ws.title,hidden=ws.sheet_state!='visible',rows=ws.max_row,cols=ws.max_column,
                            merged=[str(r) for r in ws.merged_cells.ranges],cells=cells))
@@ -114,7 +114,7 @@ def parse(content):
                 return result
             o['order_lines']=lines('order'); o['sample_lines']=lines('sample')
             o['lines']=deepcopy(o['sample_lines']); o['quantity_basis']='sample'; o['pieces_per_unit']=1
-            o['warnings']=['Sample section selected. Order and summary repeats are excluded.',
+            o['warnings']=['Sample section selected. Switch to order quantities if this is a bulk order. Summary repeats are excluded.',
                 'Fabric and accessory schedules remain reference-only in this sample-order import.',
                 'BOM date is not an order confirmation date. Confirm the order date below.']
             orders.append(o); formats.append('Merch BOM')
@@ -137,9 +137,9 @@ def parse(content):
                     raise ValueError(f'{sheet["name"]}: multiple deliveries for {o["style"]} require explicit separate orders.')
                 line=dict(label=o['style'],color='',declared_total=v(data,9),provenance={},
                     sizes=[dict(size=text(v(header,col)),quantity=v(data,col),source=p(data,col),size_source=p(header,col)) for col in size_columns])
-                o['order_lines']=[line];o['lines']=deepcopy(o['order_lines'])
-                o['warnings']=['Buyer contract quantities are not identified as sample quantities. Confirm the quantity basis and pieces per source unit.',
-                    'Buyer, colour and order confirmation date require review; destination is not assumed to be buyer.']
+                o['order_lines']=[line];o['lines']=deepcopy(o['order_lines']);o['quantity_basis']='order'
+                o['warnings']=['Quantities are the buyer contract (order) quantities, saved exactly as in Excel unless you enter pieces per unit.',
+                    'Buyer, colour and order date are not in this layout; they stay blank unless you add them. Destination is not assumed to be buyer.']
                 orders.append(o)
             formats.append('Buyer contract')
         else:
@@ -151,6 +151,11 @@ def parse(content):
                     mapping={'sheet':sheet['name'],'header_row':row,'columns':found};break
             if mapping:
                 orders.extend(parse_mapping(sheets,mapping));formats.append('Tabular orders')
+    if not orders:
+        from .mapping import detect_generic
+        found=detect_generic(sheets)
+        if found:
+            orders.append(found);formats.append('Detected labels')
     return dict(sheets=sheets,orders=orders,format=', '.join(dict.fromkeys(formats)) or 'Needs column mapping')
 
 def parse_mapping(sheets,mapping):
@@ -184,6 +189,6 @@ def parse_mapping(sheets,mapping):
         line['sizes'].append(dict(size=text(fields.get('size')),quantity=fields.get('quantity'),
                                  source=source(sheet['name'],qc.get('cell',''),fields.get('quantity'),qc.get('formula'))))
     for o in groups.values():
-        o['warnings']=['Confirm whether the source quantities represent pieces or packs, and whether they are sample quantities.']
-        o['order_lines']=deepcopy(o['lines'])
+        o['warnings']=['Quantities are saved exactly as in Excel unless you enter pieces per unit.']
+        o['order_lines']=deepcopy(o['lines']);o['quantity_basis']='order'
     return list(groups.values())

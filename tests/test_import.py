@@ -29,7 +29,7 @@ def test_buyer_two_orders_no_assumed_buyer_or_units():
     for o in data['orders']:
         assert sum(s['quantity'] for s in o['lines'][0]['sizes'])==500
         assert o['pieces_per_unit'] is None and not o['buyer']
-        assert o['quantity_basis']=='unconfirmed'
+        assert o['quantity_basis']=='order' # only order quantities exist in a buyer contract
 
 def test_mapping_preserves_leading_zero_text_and_provenance():
     sheets=[dict(name='Orders',rows=2,cols=3,cells=[
