@@ -35,6 +35,12 @@ def test_saved_order_is_compared_with_the_excel_value_by_value(world):  # noqa: 
     assert d['saved']['filename'] == 'zen-po.xlsx'
     assert [q['title'][:1] for q in d['sql']] == ['1', '2', '3', '4'] and all(f'= {ordmasid}' in q['sql'] for q in d['sql'])
     assert all(q['sql'].lstrip().startswith('SELECT') and q['sql'].count(';') == 1 for q in d['sql'])
+    stored = {t['table']: t for t in d['tables']}                  # every row Oracle holds for the order, all columns
+    assert len(stored['ORDMAS']['rows']) == 1 and len(stored['ORDSTYLE']['rows']) == 3 and len(stored['ORDSIZE']['rows']) == 12
+    head = stored['ORDMAS']['rows'][0]
+    assert head['DOCID'] == 'TEST/OV/2' and stored['ORDMAS']['decoded']['BUYER'][str(head['BUYER'])] == 'ZEN KIDS'
+    assert sum(r['RQTY'] for r in stored['ORDSIZE']['rows']) == SECOND_PIECES
+    assert all(any(r.get(c['name']) not in (None, '') for r in t['rows']) for t in d['tables'] for c in t['columns'])
     excel = d['saved']['excel']                                    # each Excel value with its cell, for ticking off
     rows = {r['label']: r for r in excel['from_file']}
     assert rows['Buyer']['excel'] == rows['Buyer']['oracle'] == 'ZEN KIDS' and rows['Buyer']['cell']
@@ -131,3 +137,19 @@ def test_a_value_changed_before_saving_is_not_shown_as_the_excel_value():
     check = dict(details=dict(different=[]), cells=dict(count=0, different=[]), pieces=dict(excel=0, oracle=0), missing_lines=[], extra_lines=[])
     rows = {r['label']: r['state'] for r in order_view.excel_map(mapping.effective(), order, sheet, {}, check)['from_file']}
     assert rows == {'Buyer': 'changed', 'Style number': 'same'}      # case and spaces are not a change
+
+
+def test_overview_names_saved_orders_and_says_who_did_what(world):  # noqa: F811
+    c = world
+    _, receipt = approved_zen_order(c, 'TEST/OV/9')
+    o = c.get('/api/overview').json()
+    [first] = o['recent_orders'][:1]
+    assert first['order_ref'] == 'TEST/OV/9' and first['buyer'] == 'ZEN KIDS' and first['pieces'] == SECOND_PIECES
+    assert first['ordmasid'] == receipt['orders'][0]['ordmasid'] and first['saved_by'] == 'admin'
+    assert {'ORDMAS', 'ORDSTYLE', 'ORDSIZE'} <= set(first['tables'])
+    actions = [a['action'] for a in o['activity']]
+    assert actions[0] == 'approved_saved' and 'upload' in actions and 'login' not in actions[:1]
+    saved = o['activity'][0]
+    assert saved['who'] == 'admin' and saved['orders'] == ['TEST/OV/9'] and saved['filename'] == 'zen-po.xlsx'
+    updates = c.get('/api/tables/updates').json()
+    assert updates['ORDSIZE']['order_ref'] == 'TEST/OV/9' and updates['ORDMAS']['at'] == first['saved_at']

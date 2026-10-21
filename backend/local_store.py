@@ -351,6 +351,41 @@ def saved_orders():
     return out
 
 
+def _saved_payloads(limit=None):
+    with db() as c:
+        sql = ("SELECT payload FROM drafts WHERE json_extract(payload,'$.result') IS NOT NULL "
+               "ORDER BY json_extract(payload,'$.result.committed_at') DESC" + (' LIMIT ?' if limit else ''))
+        return [json.loads(r[0]) for r in c.execute(sql, (limit,) if limit else ())]
+
+
+def recent_saved(limit=10):
+    """The latest orders this installation saved in Oracle, newest first, as people name them: OC No, style and
+    description, buyer, pieces, who saved it and when, and the Oracle tables the save wrote rows into."""
+    out = []
+    for d in _saved_payloads(limit):
+        res = d['result']; tables = sorted({r['table'] for r in res.get('rows') or []})
+        for i, saved in enumerate(res.get('orders') or []):
+            o = d['orders'][i] if i < len(d['orders']) else {}
+            out.append(dict(ordmasid=saved.get('ordmasid'), order_ref=saved.get('order_ref') or o.get('order_ref') or '',
+                            style=o.get('style') or '', description=o.get('description') or '', buyer=o.get('buyer') or '',
+                            pieces=_pieces([o]) if o else None, saved_at=res.get('committed_at'), saved_by=res.get('approver'),
+                            job_id=d['id'], filename=d.get('filename'), tables=tables))
+    return out[:limit]
+
+
+def table_updates():
+    """{Oracle table: the newest save that wrote a row into it} — the Database flowchart marks these tables as new."""
+    out = {}
+    for d in _saved_payloads():
+        res = d['result']
+        for r in res.get('rows') or []:
+            at = res.get('committed_at') or ''
+            if r['table'] not in out or at > out[r['table']]['at']:
+                refs = [o.get('order_ref') for o in res.get('orders') or [] if o.get('order_ref')]
+                out[r['table']] = dict(at=at, order_ref=', '.join(refs), job_id=d['id'])
+    return out
+
+
 def _merge_rows(old_rows, incoming, fields, child=None):
     """Keep server-owned provenance for known rows; accept only whitelisted business fields."""
     by_id = {r['id']: r for r in old_rows if 'id' in r}; out = []

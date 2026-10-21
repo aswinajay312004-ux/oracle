@@ -92,7 +92,7 @@ def test_fields_api_lists_changes_and_audits(env):
     assert r.status_code == 200 and r.json()['required'] is True
     c.post('/api/users', json={'username': 'op', 'password': PW, 'role': 'operator'})
     c.post('/api/logout'); c.post('/api/login', json={'username': 'op', 'password': PW})
-    assert c.put('/api/fields/season', json={'required': True}).status_code == 403
+    assert c.put('/api/fields/season', json={'required': True}).status_code == 200    # one access level for everyone
     assert c.get('/api/fields').status_code == 200
 
 

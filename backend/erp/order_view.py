@@ -81,6 +81,31 @@ def read(mapping, present, fetch, ordmasid):
     return found[0], lines, sizes
 
 
+def all_tables(mapping, kb, fetch, names, ordmasid):
+    """Every row Oracle holds for this order in each table of the write mapping (the order, its colour lines, size rows,
+    fabric, yarn and trims rows), with every column that has a value and master names decoded: the complete record."""
+    head = tables(mapping)[0]
+    out = []
+    for table, spec in mapping['tables'].items():
+        t = kb.table(table)
+        link = spec['key'] if table == head else column(mapping, table, parent=head)
+        if not t or not link or link not in t['columns']:
+            continue
+        cols = list(t['columns'])
+        rows = fetch(table, cols, link, ordmasid, MAX_SIZES)
+        if not rows:
+            continue
+        rows.sort(key=lambda r: r.get(spec['key']) or 0)
+        labels = decode(mapping, {table: rows}, names)[table]
+        filled = [c for c in cols if any(r.get(c) not in (None, '') for r in rows)]
+        out.append(dict(table=table, business=spec.get('business') or t['business'], key=spec['key'],
+                        columns=[dict(name=c, label=(spec['columns'].get(c) or {}).get('label') or t['columns'][c]['business'],
+                                      type=t['columns'][c]['type'], system=t['columns'][c]['role'] == 'system') for c in filled],
+                        rows=[{c: _value(r.get(c)) for c in filled} for r in rows],
+                        decoded={c: {str(k): v for k, v in m.items()} for c, m in labels.items() if m}))
+    return out
+
+
 def receipt_rows(mapping, receipt, ordmasid):
     """The rows a POPPYS save wrote for this order (header, its lines and its size rows), from the save receipt."""
     head, line, size = tables(mapping)

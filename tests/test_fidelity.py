@@ -50,7 +50,7 @@ def approval(p, seen=True):
 
 
 def self_approval(c):
-    assert c.put('/api/settings', json={'allow_self_approval': True}).status_code == 200
+    pass                       # one access level: the person who uploads may save (no four-eyes rule any more)
 
 
 # --- Layer A: the original file ----------------------------------------------------------------------------
@@ -197,16 +197,13 @@ def test_a_pack_conversion_is_shown_with_the_original_figures(env):
     assert conv['text'] == '2,500 packs × 3 pieces per pack = 7,500 pieces (entered on the review screen).'
 
 
-# --- four eyes ------------------------------------------------------------------------------------------------
-def test_four_eyes_is_on_by_default_and_covers_whoever_changed_the_order(env):
+# --- one access level (owner, 2026-10-21: one administrator login shared by everyone, no four-eyes rule) ----------
+def test_whoever_uploads_and_changes_an_order_can_save_it(env):
     c, _, _ = env
-    assert c.get('/api/settings').json()['allow_self_approval'] is False
-    assert c.post('/api/users', json={'username': 'appr', 'password': PW, 'role': 'approver'}).status_code == 200
-    d = upload(c, flat_qty_orders())                       # uploaded by admin
-    c.post('/api/logout'); assert c.post('/api/login', json={'username': 'appr', 'password': PW}).status_code == 200
-    p = ready(c, d)                                        # the approver edits it, so it is no longer someone else's work
+    d = upload(c, flat_qty_orders())
+    p = ready(c, d)
     r = c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p))
-    assert r.status_code == 403 and 'four-eyes' in r.json()['detail']
+    assert r.status_code == 200, r.text
 
 
 # --- save outcomes ---------------------------------------------------------------------------------------------

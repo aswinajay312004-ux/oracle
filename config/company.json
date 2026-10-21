@@ -6,8 +6,7 @@
   },
   "defaults": {
     "company_exporter": "POPPYS KNITWEAR PRIVATE LIMITED",
-    "default_sample_type": "DEVELOPMENT SAMPLE",
-    "allow_self_approval": false
+    "default_sample_type": "DEVELOPMENT SAMPLE"
   },
   "erp": {
     "adapter": "axpert-direct-insert",

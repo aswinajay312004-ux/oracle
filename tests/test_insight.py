@@ -299,8 +299,9 @@ def test_a_low_confidence_reading_asks_before_showing_any_number(world, api, mon
     assert yes['kind'] == 'answer' and yes['rows']
 
 
-def test_only_approvers_can_turn_an_answer_into_a_remembered_example(api):
+def test_anyone_signed_in_can_turn_an_answer_into_a_remembered_example(api):
+    # one access level (owner, 2026-10-21): an account made with an older role has every permission
     assert api.post('/api/users', json={'username': 'op', 'password': PW, 'role': 'operator'}).status_code == 200
     api.post('/api/logout'); assert api.post('/api/login', json={'username': 'op', 'password': PW}).status_code == 200
     r = api.post('/api/chat/ask', json={'question': 'size wise quantity for order PK/26-27/S/9001'}).json()
-    assert api.post(f'/api/chat/{r["id"]}/feedback', json={'correct': True}).json()['example'] is None
+    assert api.post(f'/api/chat/{r["id"]}/feedback', json={'correct': True}).json()['example'] is not None

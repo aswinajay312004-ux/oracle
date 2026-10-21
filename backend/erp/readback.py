@@ -233,6 +233,8 @@ def planned(plan, mapping):
                           inserted=sum(r['kind'] == 'written' for r in records), reused=sum(r['kind'] == 'reused' for r in records),
                           verified=True, planned=True, records=records, labels=_labels(mapping, table)))
     for r in plan.get('reference_only', []):
+        if r['table'] in groups:          # the person mapped rows of this table themselves: those are the ones saved
+            continue
         spec = mapping['tables'].get(r['table'], {})
         nodes.append(dict(table=r['table'], business=r['business'], screen=spec.get('screen'), kind='detail', key=spec.get('key'),
                           inserted=0, reused=0, verified=True, planned=True, reference_only=True, reference_rows=r['rows'],

@@ -46,8 +46,6 @@ def offline_ai(monkeypatch):
 
 def signed_in(client):
     assert client.post('/api/setup', json={'username': 'admin', 'password': PW}).status_code == 200
-    # One person plays every role in these tests; the four-eyes rule (on by default) has its own tests in test_workflow.py.
-    assert client.put('/api/settings', json={'allow_self_approval': True}).status_code == 200
     return client
 
 

@@ -108,4 +108,3 @@ def test_the_company_profile_supplies_the_starting_settings():
     from backend import config
     assert config.COMPANY['erp']['owner'] == 'GARMENT_DEMO'
     assert main.DEFAULT_SETTINGS['company_exporter'] == config.COMPANY['defaults']['company_exporter']
-    assert main.DEFAULT_SETTINGS['allow_self_approval'] is False

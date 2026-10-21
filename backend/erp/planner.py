@@ -256,8 +256,8 @@ def plan(catalog, orders, filehash, mapping, required=()):
             else:
                 value = c['value'] if 'value' in c else _template(ctx, c['template']) if 'template' in c else _field(ctx, c['field'])
                 if c.get('master'):
-                    if c.get('optional') and (value is None or str(value).strip() == ''):
-                        continue
+                    if value is None or str(value).strip() == '':
+                        continue                   # blank in the file: no master record, the column stays NULL
                     name = c.get('field', '').partition('.')[2]
                     src = (provenance or {}).get(name) if provenance else None
                     value = master(c['master'], value, where, src, path, c.get('required', True), f'{path}.{name}' if name else path)
@@ -287,38 +287,34 @@ def plan(catalog, orders, filehash, mapping, required=()):
         seen.add(normalize(ref))
         if ref and not order_numbers.is_marker(ref) and catalog.order_ref_exists(normalize(ref)):
             issues.error(f'{prefix}: order reference {ref} already exists. Existing orders are not overwritten.', base + '.order_ref')
-        if o.get('quantity_basis') not in ('sample', 'order_demo'):
-            issues.error(f'{prefix}: confirm sample quantities or explicitly use order quantities for this demo.', base + '.quantity_basis')
-        if o.get('quantity_basis') == 'order_demo':
-            issues.warn(f'{prefix}: source order quantities will be imported as a DEMO SAMPLE order.', base + '.quantity_basis')
         factor = _unit_factor(o, prefix, base, issues)
         for key in required or ():
             value = o.get(key)
             if value is None or str(value).strip() == '':
                 issues.error(f'{prefix}: {business_fields.DEFAULT.label(key)} is required for every order — enter it.', f'{base}.{key}')
+        # A field that is blank in the file stays blank (NULL in Oracle): nothing is filled in for the person. Only a value
+        # that is there must make sense.
         dates = {}
         for key in ('ship_date', 'order_date'):
+            if not FILLED(o.get(key)):
+                continue
             try:
-                dates[key] = datetime.strptime(str(o.get(key, '')), '%Y-%m-%d').strftime('%Y-%m-%d')
+                dates[key] = datetime.strptime(str(o.get(key)).strip()[:10], '%Y-%m-%d').strftime('%Y-%m-%d')
             except ValueError:
-                issues.error(f'{prefix}: {key.replace("_", " ")} is required in YYYY-MM-DD format.', f'{base}.{key}')
+                issues.error(f'{prefix}: {key.replace("_", " ")} “{o.get(key)}” is not a date (YYYY-MM-DD).', f'{base}.{key}')
         if len(dates) == 2 and dates['ship_date'] < dates['order_date']:
-            issues.error(f'{prefix}: ship date cannot precede order confirmation date.', base + '.ship_date')
-        if not str(o.get('po_number', '')).strip():
-            issues.error(f'{prefix}: PO / contract number is required.', base + '.po_number')
-        if not str(o.get('sample_type', '')).strip():
-            issues.error(f'{prefix}: sample type is required.', base + '.sample_type')
+            issues.warn(f'{prefix}: the ship date is before the order confirmation date.', base + '.ship_date')
 
         # Quantities first, so header totals are known before any row is planned.
         lines = o.get('lines', [])
-        if not lines or len(lines) > LIMITS['lines']:
-            issues.error(f'{prefix}: provide 1–100 garment lines.', base + '.lines')
+        if len(lines) > LIMITS['lines']:
+            issues.error(f'{prefix}: at most {LIMITS["lines"]} colour lines can be saved in one order.', base + '.lines')
         prepared = []
         for li, line in enumerate(lines):
             where = f'{prefix}, line {li + 1}'; lpath = f'{base}.lines.{li}'
             sizes = line.get('sizes', []); names = set(); sizedata = []; total = 0
-            if not sizes or len(sizes) > LIMITS['sizes']:
-                issues.error(f'{where}: provide 1–100 sizes.', lpath + '.sizes')
+            if len(sizes) > LIMITS['sizes']:
+                issues.error(f'{where}: at most {LIMITS["sizes"]} sizes can be saved in one line.', lpath + '.sizes')
             blank = [s for s in sizes if s.get('blank') and (s.get('quantity') is None or str(s.get('quantity')).strip() == '')]
             if blank and len(blank) < len(sizes):
                 issues.warn(f'{where}: size{"s" if len(blank) > 1 else ""} {", ".join(str(x.get("size")) for x in blank)} '
@@ -338,8 +334,6 @@ def plan(catalog, orders, filehash, mapping, required=()):
                 declared = count(line['declared_total'], where + ' source total', issues.sink(lpath))
                 if declared != total:
                     issues.error(f'{where}: size total {total} differs from source total {declared}.', lpath + '.sizes')
-            if total == 0:
-                issues.error(f'{where}: sample quantities total zero; enter sample quantities or select the order quantities explicitly for the demo.', lpath + '.sizes')
             prepared.append((li, line, where, lpath, total * factor, sizedata))
         order_pieces = sum(p[4] for p in prepared)
         _check_packs(o, prepared, factor, prefix, base, issues)
@@ -348,6 +342,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
         octx = dict(order=dict(o, order_ref=ref, **{k: dates.get(k) for k in ('ship_date', 'order_date')}),
                     calc=dict(pieces=order_pieces), self=orderkey, keys={}, ops={})
         head = evaluate('ORDMAS', octx, prefix, base, o.get('provenance', {}))
+        head.update(_mapped_values('ORDMAS', (o.get('oracle_columns') or {}).get('ORDMAS'), head, registry))
         add(orderkey, 'ORDMAS', head, provenance=o.get('provenance', {}), where=prefix, path=base)
         keys = {'ORDMAS': orderkey}; ops = {'ORDMAS': head}
         subnos = {}
@@ -355,6 +350,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
             linekey = f'{orderkey}l{li + 1}'; subno = f'{ref}:{li + 1}'; subnos[li + 1] = (subno, pieces)
             lctx = dict(octx, line=line, calc=dict(subno=subno, pieces=pieces, row=li + 1), self=linekey, keys=keys, ops=ops)
             values = evaluate('ORDSTYLE', lctx, where, lpath, line.get('provenance', {}))
+            values.update(_mapped_values('ORDSTYLE', line.get('oracle_columns'), values, registry))
             add(linekey, 'ORDSTYLE', values, provenance=line.get('provenance'), where=where, path=lpath)
             totals['lines'] += 1
             for si, s, qty in sizedata:
@@ -364,6 +360,7 @@ def plan(catalog, orders, filehash, mapping, required=()):
                 vals = evaluate('ORDSIZE', sctx, where, f'{lpath}.sizes.{si}', {'size': s.get('size_source')})
                 add(sizekey, 'ORDSIZE', vals, provenance=s.get('source'), where=f'{where}, size {s.get("size", "")}', path=f'{lpath}.sizes.{si}')
         totals['pieces'] += order_pieces
+        _plan_mapped_rows(o, orderkey, prefix, base, tables, registry, insertable, issues, add)
 
         bom = dict(octx=octx, keys=keys, ops=ops, subnos=subnos, order_pieces=order_pieces, prefix=prefix, base=base,
                    orderkey=orderkey, ref=ref, tables=tables, writable=writable, issues=issues, evaluate=evaluate,
@@ -538,6 +535,45 @@ def _unique(items):
         if key not in seen:
             seen.add(key); out.append(i)
     return out
+
+
+def _mapped_values(table, given, written, registry):
+    """Columns the person mapped from the Excel file that the standard order does not fill (backend/erp/excel_map.py).
+    A column the order already writes keeps the order's value; a blank cell adds nothing."""
+    out = {}
+    for col, x in (given or {}).items():
+        v = x.get('value') if isinstance(x, dict) else x
+        if col in written or col not in registry.get(table, {}) or not FILLED(v):
+            continue
+        out[col] = v.strip() if isinstance(v, str) else plain(v)
+    return out
+
+
+def _plan_mapped_rows(o, orderkey, prefix, base, tables, registry, insertable, issues, add):
+    """Rows of the order's row tables (fabric, yarn, trims) the person mapped from Excel rows: one insert per row, with
+    the record ID, the link to the order and the row number set by POPPYS and every other value from the file."""
+    from .excel_map import ROW_TABLES
+    for table, records in (o.get('oracle_rows') or {}).items():
+        spec = tables.get(table) or {}
+        if table not in ROW_TABLES or not spec:
+            issues.error(f'{prefix}: rows cannot be added to {table} from POPPYS.', f'{base}.oracle_rows')
+            continue
+        if table not in registry:
+            issues.error(f'{table}: table is not visible to POPPYS AI. Check grants with scripts/grant_bom_tables.py.', f'{base}.oracle_rows')
+            continue
+        if table not in insertable:
+            issues.error(f'{table}: POPPYS AI has no INSERT permission. Run scripts/grant_bom_tables.py.', f'{base}.oracle_rows')
+            continue
+        parent = next((c for c, x in spec['columns'].items() if x.get('parent') == 'ORDMAS'), 'ORDMASID')
+        rowcol = f'{table}ROW' if f'{table}ROW' in registry[table] else None
+        for i, rec in enumerate(records[:LIMITS['lines'] * 10]):
+            key = f'{orderkey}{table.lower()}{i + 1}'
+            values = {spec['key']: '$' + key, parent: '$' + orderkey, **({rowcol: i + 1} if rowcol else {})}
+            values.update(_mapped_values(table, rec, values, registry))
+            add(key, table, values, provenance={c: x for c, x in rec.items() if isinstance(x, dict)},
+                where=f'{prefix}, {spec.get("business", table).lower()} row {i + 1}', path=f'{base}.oracle_rows.{table}.{i}')
+        if len(records) > LIMITS['lines'] * 10:
+            issues.error(f'{prefix}: at most {LIMITS["lines"] * 10} {table} rows can be saved in one order.', f'{base}.oracle_rows')
 
 
 def _check_packs(o, prepared, factor, prefix, base, issues):

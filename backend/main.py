@@ -20,7 +20,7 @@ from . import auth, coverage, evidence, logs, local_store as store, oracle_store
 from .config import COMPANY, DATA, ROOT, OWNER, setting
 from .erp import mapping as registry, readback, semantic
 from .erp.catalog import SnapshotCatalog, OracleCatalog
-from .erp import planner, order_numbers, order_view
+from .erp import planner, order_numbers, order_view, excel_map
 from . import insight_api as insight
 from .insight import benchmark, engine, understand
 from .insight.query import Dialect, QueryError, compile_intent
@@ -35,15 +35,13 @@ def draft_lock(id):
     with _DRAFT_LOCKS_GUARD:
         return _DRAFT_LOCKS.setdefault(id, threading.RLock())
 RANK = {'viewer': 0, 'operator': 1, 'approver': 2, 'admin': 3}
-PERMISSIONS = {
-    'viewer': ['view'],
-    'operator': ['view', 'upload', 'edit', 'preview'],
-    'approver': ['view', 'upload', 'edit', 'preview', 'approve', 'audit'],
-    'admin': ['view', 'upload', 'edit', 'preview', 'approve', 'audit', 'users', 'mapping', 'templates', 'settings'],
-}
+# One access level (owner, 2026-10-21): everyone signs in with the same administrator account and may do everything.
+# Accounts made with an older role keep their row, but the role no longer limits anything.
+ALL_PERMISSIONS = ['view', 'upload', 'edit', 'preview', 'approve', 'audit', 'users', 'mapping', 'templates', 'settings']
+PERMISSIONS = dict.fromkeys(RANK, ALL_PERMISSIONS)
 # Starting values of Setup → Settings come from the company profile (config/company.json); a saved setting wins.
-DEFAULT_SETTINGS = dict(dict(allow_self_approval=False, company_exporter='', default_sample_type=''),
-                        **{k: v for k, v in (COMPANY.get('defaults') or {}).items() if k in ('allow_self_approval', 'company_exporter', 'default_sample_type')})
+DEFAULT_SETTINGS = dict(dict(company_exporter='', default_sample_type=''),
+                        **{k: v for k, v in (COMPANY.get('defaults') or {}).items() if k in ('company_exporter', 'default_sample_type')})
 
 
 @asynccontextmanager
@@ -379,7 +377,6 @@ def get_settings(user=Depends(authenticated)): return settings()
 
 
 class Settings(BaseModel):
-    allow_self_approval: bool | None = None
     company_exporter: str | None = Field(default=None, max_length=100)
     default_sample_type: str | None = Field(default=None, max_length=30)
 
@@ -395,28 +392,17 @@ def put_settings(data: Settings, user=Depends(require('settings'))):
 
 # --- uploads & drafts ---------------------------------------------------------------
 def _new_order_defaults(orders):
-    """Company defaults, then (config/company.json defaults.auto_fill, on by default) the answers the reviewer would
-    otherwise type for every file: today as the order confirmation date when the file has none, and the file's own
-    quantities when it has no sample quantities. Each one is marked on its field, listed before approval and can be
-    changed."""
-    s = settings()
-    auto = (COMPANY.get('defaults') or {}).get('auto_fill', True)
+    """Nothing is filled in for a field the file leaves blank (owner, 2026-10-21): no today's date, no company exporter,
+    no default sample type. The person types what they want on the preview. Only which quantities of the file are the
+    order is decided: the file's own quantities when it has no sample quantities (that picks numbers of the file, it
+    adds none)."""
     for o in orders:
         prov = o.setdefault('provenance', {})
-        if auto and not str(o.get('order_date') or '').strip():
-            o['order_date'] = datetime.now().date().isoformat()
-            prov['order_date'] = {'derivation': 'Today — the file has no order confirmation date', 'reason': 'default'}
         pieces = sum(_qty(x.get('quantity')) for l in o.get('lines') or [] for x in l.get('sizes') or [])
-        if auto and o.get('quantity_basis') not in ('sample', 'order_demo') and pieces > 0:
+        if o.get('quantity_basis') not in ('sample', 'order_demo') and pieces > 0:
             o['quantity_basis'] = 'order_demo'
             prov['quantity_basis'] = {'derivation': 'The file has no sample quantities, so its order quantities are used',
                                       'reason': 'default'}
-        if not o.get('exporter'):
-            o['exporter'] = s['company_exporter']
-            o.setdefault('provenance', {})['exporter'] = {'derivation': 'Company default (Settings)'}
-        if not o.get('sample_type'):
-            o['sample_type'] = s['default_sample_type']
-            o.setdefault('provenance', {})['sample_type'] = {'derivation': 'Company default (Settings)'}
     return orders
 
 
@@ -740,6 +726,77 @@ def _confirm_unit(o, data):
     workbooks.review_notes(o)
 
 
+# --- the person's own Excel → Oracle mapping (New order → Map to Oracle) ---------------------------------------
+class OracleMap(BaseModel):
+    version: int
+    order: int = Field(default=0, ge=0, le=49)
+    sheet: str = Field(min_length=1, max_length=200)
+    targets: dict[str, list[str]] = Field(default_factory=dict)
+    typed: dict[str, str] = Field(default_factory=dict)
+
+
+def _target_tables():
+    """{table: {'kinds': {column: (kind, field)}, 'meta': {column: kb column}}} of the tables a cell can be mapped to."""
+    kb = knowledge_base(); m = oracle.current_mapping(); out = {}
+    for table in excel_map.TABLES:
+        t = kb.table(table)
+        if t:
+            out[table] = dict(kinds=excel_map.kinds(m, table, t['columns']), meta=t['columns'])
+    return out
+
+
+def _sheet_of(d, order):
+    name = workbooks.order_sheet(order) if order else None
+    visible = [s for s in d['sheets'] if not s.get('hidden')]
+    return next((s for s in d['sheets'] if s['name'] == name), visible[0] if visible else d['sheets'][0])
+
+
+@app.get('/api/drafts/{id}/oracle-map')
+def oracle_map(id: str, order: int = Query(default=0, ge=0, le=49), user=Depends(authenticated)):
+    """The mapping screen: Oracle tables and columns (right), and which Excel cells each column takes now (left).
+    Until the person changes it, the cells are the ones the order was read from automatically."""
+    d = store.get(id); m = oracle.current_mapping()
+    o = d['orders'][order] if order < len(d['orders']) else None
+    saved = (d.get('oracle_map') or {}).get(str(order))
+    sheet = next((s for s in d['sheets'] if saved and s['name'] == saved['sheet']), None) or _sheet_of(d, o)
+    targets = saved['targets'] if saved else excel_map.targets_of(o, m, sheet['name']) if o else {}
+    return dict(order=order, orders=len(d['orders']), sheet=sheet['name'], targets=targets, typed=(saved or {}).get('typed') or {},
+                automatic=not saved, tables=excel_map.catalog(m, knowledge_base()))
+
+
+@app.post('/api/drafts/{id}/oracle-map')
+def apply_oracle_map(id: str, data: OracleMap, user=Depends(require('edit'))):
+    with draft_lock(id):
+        d = editable(id, data.version)
+        sheet = next((s for s in d['sheets'] if s['name'] == data.sheet), None)
+        if not sheet:
+            raise ValueError('Select a worksheet.')
+        meta = _target_tables()
+        try:
+            targets = excel_map.validate(data.targets, meta)
+            excel_map.validate({k: ['A1'] for k in data.typed}, meta)        # a typed value follows the same column rules
+            typed = {k: str(v).strip()[:4000] for k, v in data.typed.items() if str(v).strip()}
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        base = d['orders'][data.order] if data.order < len(d['orders']) else {}
+        order = excel_map.build(sheet, targets, typed, base, meta)
+        if base.get('id'):
+            order['id'] = base['id']
+        store.identify([order])
+        if data.order < len(d['orders']):
+            d['orders'][data.order] = order
+        else:
+            d['orders'].append(order)
+        d.setdefault('oracle_map', {})[str(data.order)] = dict(sheet=sheet['name'], targets=targets, typed=typed)
+        d['format'] = d['format'] if d['format'].startswith('Mapped') else f'Mapped by {user["username"]}'
+        d['version'] += 1; d['plan'] = None
+        cover(d)
+        store.save(d, user['username'], data.version)
+        store.audit(user['username'], 'oracle_mapping', id, order=data.order, sheet=sheet['name'],
+                    columns=sorted(targets), typed=sorted(typed))
+        return d
+
+
 class Suggestion(BaseModel):
     sheet: str
 
@@ -817,17 +874,7 @@ def preview(id: str, data: Version, user=Depends(require('preview'))):
         old = d['version']; d['version'] += 1; store.save(d, user['username'], old)
         store.audit(user['username'], 'preview', id, errors=len(d['plan']['errors']), warnings=len(d['plan']['warnings']),
                     live=d['plan']['live'], plan_hash=d['plan']['hash'])
-        # Said before the click, not after: whether this person may accept the order they prepared (four-eyes rule).
-        return dict(d, approval=dict(needs_other_approver=_prepared_by(d, user)))
-
-
-def _prepared_by(d, user):
-    """True when the four-eyes rule stops this person approving: they uploaded, edited or mapped the order and
-    self-approval is off in Setup → Settings."""
-    if settings()['allow_self_approval']:
-        return False
-    prepared = {d.get('uploaded_by')} | {e['actor'] for e in store.audit_events(300, d['id']) if e['action'] in ('edit', 'mapping_applied')}
-    return user['username'] in prepared
+        return d
 
 
 LOST = ('DPY-4011', 'DPY-4024', 'DPY-1001', 'ORA-03113', 'ORA-03114', 'ORA-03135', 'ORA-03156', 'ORA-01013', 'ORA-12170',
@@ -901,9 +948,6 @@ def accept(id: str, data: Approval, user=Depends(require('approve'))):
             raise HTTPException(409, 'This preview was made without Oracle. Connect Oracle and prepare the preview again before approving.')
         if d['plan']['errors']:
             raise HTTPException(409, 'Resolve all questions before approving.')
-        if _prepared_by(d, user):
-            raise HTTPException(403, 'You uploaded or changed this order, so another approver must approve it (four-eyes rule). '
-                                     'An administrator can allow self-approval in Setup → Settings; that change is recorded in the audit log.')
         ex = d['plan'].get('exceptions') or exceptions(d)
         if ex['digest'] and data.exceptions_seen != ex['digest']:
             return JSONResponse(status_code=409, content={
@@ -979,7 +1023,36 @@ def overview(user=Depends(authenticated)):
                      recent=[dict(r, filename=names.get(r['job_id'], {}).get('filename'),
                                   orders=names.get(r['job_id'], {}).get('order_refs') or []) for r in records[:6]])
     last = store.benchmark_runs(1, full_latest=False)
-    return dict(queue=queue[:25], counts=counts, open=len(open_), saved=saved, accuracy=last[0] if last else None)
+    return dict(queue=queue[:25], counts=counts, open=len(open_), saved=saved, accuracy=last[0] if last else None,
+                recent_orders=store.recent_saved(8), activity=_activity(names_by_id={d['id']: d for d in drafts}))
+
+
+ACTIVITY = ('login', 'upload', 'oracle_mapping', 'edit', 'approved_saved', 'approve_failed', 'approve_outcome_unknown',
+            'upload_unreadable', 'user_created', 'user_changed', 'template_saved', 'mapping_applied')
+
+
+def _activity(names_by_id, limit=20):
+    """Who did what lately, newest first: sign-ins, uploads, mappings, edits and saves, each with the file and order
+    it was about (read from the local audit log; nothing invented)."""
+    out = []
+    for e in store.audit_events(300):
+        if e['action'] not in ACTIVITY:
+            continue
+        d = names_by_id.get(e['target']) or {}
+        given = e['detail'].get('orders')
+        orders = [o.get('order_ref') for o in given if isinstance(o, dict) and o.get('order_ref')] if isinstance(given, list) else []
+        out.append(dict(at=e['at'], who=e['actor'], action=e['action'], filename=d.get('filename') or e['detail'].get('filename'),
+                        orders=orders or [x for x in d.get('order_refs') or [] if x], styles=[x for x in d.get('styles') or [] if x],
+                        draft=e['target'] if d else None))
+        if len(out) >= limit:
+            break
+    return out
+
+
+@app.get('/api/tables/updates')
+def table_updates(user=Depends(authenticated)):
+    """Tables POPPYS wrote rows into, with the newest save: the Database flowchart makes them blink until opened."""
+    return store.table_updates()
 
 
 # --- history, read-back graph ---------------------------------------------------------
@@ -2084,10 +2157,11 @@ def order_in_oracle(ordmasid: int, user=Depends(authenticated)):
         rows = {head: [h, *excel[0]], **({line: lines + excel[1]} if line else {}), **({size: sizes + excel[2]} if size else {})}
         labels = order_view.decode(m, rows, names)
         qualified = dialect.table
+        stored = order_view.all_tables(m, kb, fetch, names, ordmasid)
     sheet = readback.order_sheets(order_view.nodes(m, [h], lines, sizes, labels), m)[0]
     sheet['verified'] = None
     out = dict(sheet=sheet, read_at=datetime.now().astimezone().isoformat(timespec='seconds'), saved=None,
-               sql=order_view.proof_sql(m, present, ordmasid, sheet, qualified))
+               sql=order_view.proof_sql(m, present, ordmasid, sheet, qualified), tables=stored)
     if saved:
         out['saved'] = dict({k: saved[k] for k in ('job_id', 'filename', 'saved_at', 'saved_by')},
                             not_saved=[x['label'] for x in (receipt or {}).get('not_saved') or []], check=None)

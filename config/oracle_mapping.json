@@ -33,7 +33,6 @@
         "UOM": {"master": "uom", "value": "PCS", "status": "verified", "label": "Order unit"},
         "SAMPLETYPE": {"field": "order.sample_type", "status": "verified", "label": "Sample type"},
         "ORDCATEGORY": {"value": "SAMPLE ORDER", "status": "verified", "label": "Order category"},
-        "REMARKS": {"template": "POPPYS demo sample import; quantity basis: {order.quantity_basis}", "status": "verified", "label": "Remarks"},
         "MERCH": {"master": "merch", "field": "order.merch", "optional": true, "status": "verified", "label": "Merchandiser"},
         "OQTY": {"field": "calc.pieces", "status": "verified", "label": "Total order quantity (pieces)"},
         "ENAME": {"master": "exporter", "field": "order.exporter", "optional": true, "status": "proposed", "label": "Exporter", "evidence": "NUMBER reference; Exporter is the first field on Sample Order Entry. PARTYMAS.LEDGER as label is unproven."},

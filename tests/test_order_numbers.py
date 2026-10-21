@@ -70,7 +70,6 @@ def env(tmp_path, monkeypatch):
                                  'UNITMAS': [dict(id=8, label='PCS', cancelled=False)]}).install(monkeypatch)
     with TestClient(main.app) as c:
         assert c.post('/api/setup', json={'username': 'admin', 'password': PW}).status_code == 200
-        assert c.put('/api/settings', json={'allow_self_approval': True}).status_code == 200
         yield c, oracle
 
 

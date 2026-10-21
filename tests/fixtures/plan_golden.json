@@ -364,7 +364,6 @@
       "UOM": 41,
       "SAMPLETYPE": "DEVELOPMENT SAMPLE",
       "ORDCATEGORY": "SAMPLE ORDER",
-      "REMARKS": "POPPYS demo sample import; quantity basis: sample",
       "MERCH": "$m5",
       "OQTY": 15
      },
@@ -598,7 +597,6 @@
       "UOM": 41,
       "SAMPLETYPE": "DEVELOPMENT SAMPLE",
       "ORDCATEGORY": "SAMPLE ORDER",
-      "REMARKS": "POPPYS demo sample import; quantity basis: sample",
       "MERCH": "$m5",
       "OQTY": 15
      },
@@ -779,7 +777,6 @@
       "UOM": 41,
       "SAMPLETYPE": "DEVELOPMENT SAMPLE",
       "ORDCATEGORY": "SAMPLE ORDER",
-      "REMARKS": "POPPYS demo sample import; quantity basis: order_demo",
       "OQTY": 45
      },
      "source": {}
@@ -886,9 +883,7 @@
     }
    ],
    "errors": [],
-   "warnings": [
-    "Order 2: source order quantities will be imported as a DEMO SAMPLE order."
-   ],
+   "warnings": [],
    "totals": {
     "orders": 2,
     "lines": 4,
@@ -964,7 +959,6 @@
       "UOM": 41,
       "SAMPLETYPE": "",
       "ORDCATEGORY": "SAMPLE ORDER",
-      "REMARKS": "POPPYS demo sample import; quantity basis: x",
       "MERCH": "$m5",
       "OQTY": 15
      },
@@ -1135,7 +1129,6 @@
       "UOM": 41,
       "SAMPLETYPE": "DEVELOPMENT SAMPLE",
       "ORDCATEGORY": "SAMPLE ORDER",
-      "REMARKS": "POPPYS demo sample import; quantity basis: sample",
       "MERCH": "$m5",
       "OQTY": 0
      },
@@ -1193,17 +1186,13 @@
     }
    ],
    "errors": [
-    "Order 1: confirm sample quantities or explicitly use order quantities for this demo.",
-    "Order 1: order date is required in YYYY-MM-DD format.",
-    "Order 1: PO / contract number is required.",
-    "Order 1: sample type is required.",
+    "Order 1: order date “bad” is not a date (YYYY-MM-DD).",
     "Order 2: duplicate order reference in this workbook.",
     "Order 2, line 1: color master \"OLD\" is cancelled.",
     "Order 2, line 1, size M: enter a non-negative whole number.",
     "Order 2, line 1: duplicate size m; review before combining quantities.",
     "Order 2, line 1, size m: enter a non-negative whole number.",
-    "Order 2, line 1: size total 0 differs from source total 99.",
-    "Order 2, line 1: sample quantities total zero; enter sample quantities or select the order quantities explicitly for the demo."
+    "Order 2, line 1: size total 0 differs from source total 99."
    ],
    "warnings": [],
    "totals": {
@@ -1281,7 +1270,6 @@
       "UOM": 41,
       "SAMPLETYPE": "DEVELOPMENT SAMPLE",
       "ORDCATEGORY": "SAMPLE ORDER",
-      "REMARKS": "POPPYS demo sample import; quantity basis: sample",
       "MERCH": "$m5",
       "OQTY": 15
      },

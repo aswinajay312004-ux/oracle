@@ -1,5 +1,5 @@
 """End-to-end API workflow against the in-memory Oracle stand-in: upload → review → preview →
-approve → read-back graph, plus roles, four-eyes, duplicate protection and audit."""
+approve → read-back graph, plus the one access level, duplicate protection and audit."""
 from copy import deepcopy
 import pytest
 from fastapi.testclient import TestClient
@@ -17,7 +17,6 @@ def env(tmp_path, monkeypatch):
                                  'UNITMAS': [dict(id=8, label='PCS', cancelled=False)]}).install(monkeypatch)
     with TestClient(main.app) as c:
         assert c.post('/api/setup', json={'username': 'admin', 'password': PW}).status_code == 200
-        assert c.put('/api/settings', json={'allow_self_approval': True}).status_code == 200   # one person; see test_roles_and_four_eyes
         yield c, oracle
 
 
@@ -47,7 +46,7 @@ def ready(c, d, ref='TEST/ORD/1'):
 def test_full_order_flow_with_readback_graph(env):
     c, oracle = env
     d = upload(c)
-    assert d['orders'][0]['exporter'] == 'POPPYS KNITWEAR PRIVATE LIMITED'
+    assert d['orders'][0]['exporter'] == ''                 # a field the file leaves blank stays blank
     p = ready(c, d)
     assert p['plan']['live'] and not p['plan']['errors'], p['plan']['errors']
     r = c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p))
@@ -85,23 +84,16 @@ def test_stale_or_changed_preview_cannot_be_approved(env):
     assert r.status_code == 409
 
 
-def test_roles_and_four_eyes(env):
+def test_one_access_level(env):
+    """Owner, 2026-10-21: one administrator access for everyone. Accounts made with an older role can do everything,
+    the person who uploads an order saves it, and the last administrator account is still protected."""
     c, _ = env
-    for user, role in (('op', 'operator'), ('appr', 'approver'), ('look', 'viewer')):
+    for user, role in (('op', 'operator'), ('look', 'viewer')):
         assert c.post('/api/users', json={'username': user, 'password': PW, 'role': role}).status_code == 200
-    assert c.put('/api/settings', json={'allow_self_approval': False}).status_code == 200
     login(c, 'look')
-    assert c.post('/api/uploads', files={'file': ('x.xlsx', merch_bom())}).status_code == 403
-    login(c, 'op')
     d = upload(c); p = ready(c, d)
-    assert c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).status_code == 403
-    assert c.post('/api/mapping/status', json={'table': 'ORDFAB', 'status': 'verified'}).status_code == 403
-    assert c.get('/api/users').status_code == 403
-    login(c, 'appr')
     assert c.post(f'/api/drafts/{d["id"]}/accept', json=approval(p)).status_code == 200
-    # the uploader approving their own upload is refused while four-eyes is on
-    d2 = upload(c, merch_bom(sample=(1, 1, 1, 1))); p2 = ready(c, d2, ref='TEST/ORD/9')
-    assert c.post(f'/api/drafts/{d2["id"]}/accept', json=approval(p2)).status_code == 403
+    assert c.get('/api/users').status_code == 200
     login(c, 'admin')
     assert c.patch('/api/users/admin', json={'role': 'viewer'}).status_code == 409   # last admin protected
 
