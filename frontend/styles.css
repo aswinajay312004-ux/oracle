@@ -1402,3 +1402,27 @@ body.popup-open { overflow: hidden; }
 @keyframes actIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (max-width: 520px) { .activity li.act-row { grid-template-columns: 36px 14px minmax(0, 1fr); } .act-icon { width: 34px; height: 34px; } .activity time.act-time { grid-column: 3; padding: 2px 0; } .act-row.latest time.act-time { background: none; } }
 @media (prefers-reduced-motion: reduce) { .activity li.act-row, .act-live::after { animation: none !important; } }
+
+/* ---------- sidebar pinned to the screen (does not scroll with the page), full height, larger ---------- */
+@media (min-width: 921px) {
+  .shell { display: block; }
+  .sidebar { position: fixed; z-index: 30; left: 0; top: 0; bottom: 0; width: 272px; height: 100vh; margin: 0; padding: 26px 16px 16px; gap: 12px; border-width: 0 1px 0 0; border-radius: 0; box-shadow: 4px 0 24px rgba(9,30,28,.04); }
+  .main { margin-left: 272px; }
+  .brand-logo { width: 172px; }
+  .sidebar .brand-text small { font-size: 12.5px; }
+  .rail-toggle { top: 28px; right: 14px; width: 32px; height: 32px; }
+  .sidebar .nav { gap: 6px; }
+  .sidebar .nav-label { font-size: 11.5px; padding: 16px 14px 6px; }
+  .sidebar .nav button { gap: 14px; padding: 12px 14px; font-size: 15.5px; border-radius: 14px; }
+  .sidebar .nav button svg { width: 21px; height: 21px; }
+  .sidebar .nav button.active::before { left: -16px; top: 9px; bottom: 9px; width: 5px; }
+  .sidebar .status { padding: 16px; font-size: 14.5px; }
+  .sidebar .status small { font-size: 12.5px; }
+  .sidebar .account { padding: 10px; }
+  .sidebar .avatar { width: 38px; height: 38px; font-size: 15px; }
+  .sidebar .who { font-size: 14px; }
+  .shell.rail .sidebar { width: 80px; padding: 16px 10px; }
+  .shell.rail .main { margin-left: 80px; }
+  .shell.rail .nav button { padding: 12px 0; }
+  .shell.rail .nav button.active::before { left: -10px; }
+}
