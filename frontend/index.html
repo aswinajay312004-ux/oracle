@@ -3,31 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f3faf6">
-  <title>POPPYS AI · Orders</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f8a5f'/%3E%3Ctext x='16' y='22' font-family='Arial' font-size='17' font-weight='700' text-anchor='middle' fill='white'%3EP%3C/text%3E%3C/svg%3E">
+  <meta name="theme-color" content="#ffffff">
+  <title>POPPYS AI</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 29C9 25 5 18 7 9c6 0 11 4 12 11 1-7 4-12 10-14 1 10-4 19-13 23z' fill='%230f8a5f'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <div class="shell">
+  <div class="shell" id="shell" hidden>
     <aside class="sidebar" aria-label="Main navigation">
-      <a class="brand" href="#/overview" aria-label="POPPYS AI overview"><span class="brand-mark">P</span><span class="brand-text"><span>POPPYS <b>AI</b></span><small>Excel → Oracle</small></span></a>
+      <a class="brand" href="#/overview" aria-label="POPPYS AI overview"><span class="leaf-mark" data-leaf></span><span class="brand-text"><span>POPPYS <b>AI</b></span><small>Garments · Axpert ERP</small></span></a>
       <nav class="nav" id="nav">
         <a href="#/overview" data-route="overview"><span class="ico" data-icon="home"></span><span>Overview</span></a>
-        <a href="#/new" data-route="new"><span class="ico" data-icon="upload"></span><span>New Order</span></a>
-        <a href="#/orders" data-route="orders"><span class="ico" data-icon="list"></span><span>Orders</span></a>
+        <a href="#/new" data-route="new"><span class="ico" data-icon="plusbox"></span><span>New Order</span></a>
+        <a href="#/orders" data-route="orders"><span class="ico" data-icon="file"></span><span>Orders</span></a>
         <a href="#/database" data-route="database"><span class="ico" data-icon="database"></span><span>Database</span></a>
-        <a href="#/settings" data-route="settings"><span class="ico" data-icon="settings"></span><span>Settings</span></a>
+        <a href="#/settings" data-route="settings"><span class="ico" data-icon="settings"></span><span>Setup</span></a>
+        <a href="#ask" data-ask><span class="ico" data-icon="sparkle"></span><span>Ask AI</span></a>
       </nav>
-      <div class="sidebar-foot"><span class="status-dot" id="side-dot"></span><span id="side-status">Checking Oracle…</span></div>
+      <div class="sidebar-art" aria-hidden="true"><span data-leaves></span><p>AI-powered<br>Excel to Oracle<br>automation for<br>Garments Merchandising</p></div>
+      <div class="help-card"><div class="help-row"><span class="help-ico" data-icon="sparkle"></span><div><strong>Need help?</strong><small>Ask our AI assistant anytime.</small></div></div>
+        <button class="btn full ask-btn" type="button" data-ask><span class="ico" data-icon="sparkle"></span> Ask AI <span class="ico" data-icon="arrow"></span></button></div>
     </aside>
     <div class="main-col">
       <header class="topbar">
-        <div><h1 id="page-title">Overview</h1><p id="page-sub" class="muted"></p></div>
-        <div class="top-actions">
-          <span class="pill" id="oracle-pill"><span class="status-dot" id="top-dot"></span><span id="oracle-label">Oracle</span></span>
-          <div class="account"><span class="avatar" id="avatar">A</span><span class="account-name" id="username">Admin</span>
-            <button class="btn ghost small" id="logout" type="button">Sign out</button></div>
+        <div class="global-search"><span class="ico" data-icon="search"></span><input id="global-q" placeholder="Search orders, files, buyers, or ask anything…" aria-label="Search orders, files, buyers, or ask anything" autocomplete="off"><kbd>⌘ K</kbd>
+          <div class="search-results" id="search-results" hidden></div></div>
+        <div class="top-status">
+          <div class="stat" id="stat-oracle"><span class="status-dot" id="top-dot"></span><div><strong id="oracle-label">Oracle</strong><small id="oracle-sub">Checking…</small></div></div>
+          <div class="stat" id="stat-ai"><span class="status-dot" id="ai-dot"></span><div><strong id="ai-label">AI Assistant</strong><small id="ai-sub">Checking…</small></div></div>
+          <div class="stat env"><span class="ico" data-icon="database"></span><div><strong id="env-label">GARMENT_DEMO</strong><small>Environment</small></div></div>
+          <button class="bell" id="bell" type="button" aria-label="Notifications"><span class="ico" data-icon="bell"></span><span class="bell-count" id="bell-count" hidden></span></button>
+          <div class="menu-wrap"><button class="account" id="account" type="button"><span class="avatar" id="avatar">A</span><span class="account-text"><strong>Admin</strong><small id="username">admin</small></span><span class="ico caret" data-icon="down"></span></button></div>
         </div>
       </header>
       <main id="view" class="view" tabindex="-1"></main>
@@ -52,16 +58,20 @@
   <div id="loading" class="loading" role="status" hidden><span class="spinner"></span><span id="loading-text">Working…</span></div>
 
   <div id="auth" class="auth" hidden>
-    <form id="auth-form" class="auth-card">
-      <span class="brand-mark large">P</span>
-      <h1 id="auth-title">Welcome back</h1>
-      <p id="auth-desc" class="muted">Sign in as the POPPYS AI administrator.</p>
-      <label class="field">Username<input id="auth-user" autocomplete="username" required minlength="2" maxlength="50"></label>
-      <label class="field">Password<input id="auth-pass" type="password" autocomplete="current-password" required minlength="10" maxlength="200"></label>
-      <p id="auth-error" class="form-error" role="alert" hidden></p>
-      <button class="btn primary full" id="auth-submit" type="submit">Sign in</button>
-      <small class="muted">Everything runs on this computer. Nothing is sent to the internet.</small>
-    </form>
+    <div class="auth-hero"><img src="/static/login-hero.webp" alt="POPPYS — From buyer file to Oracle order. Accurate. Approved. Automated."></div>
+    <div class="auth-side">
+      <span class="blob b1"></span><span class="blob b2"></span>
+      <form id="auth-form" class="auth-form">
+        <h1 id="auth-title">Welcome back</h1>
+        <p id="auth-desc" class="muted" hidden></p>
+        <label class="field">Username<span class="input-icon"><span class="ico" data-icon="mail"></span><input id="auth-user" autocomplete="username" required minlength="2" maxlength="50" placeholder="abc@gmail.com"></span></label>
+        <label class="field">Password<span class="input-icon"><span class="ico" data-icon="lock"></span><input id="auth-pass" type="password" autocomplete="current-password" required minlength="10" maxlength="200">
+          <button type="button" class="eye" id="auth-eye" aria-label="Show password"><span class="ico" data-icon="eye"></span></button></span></label>
+        <p id="auth-error" class="form-error" role="alert" hidden></p>
+        <button class="btn primary full big" id="auth-submit" type="submit">Sign in →</button>
+        <small class="muted">Accounts are stored only in this local workspace.</small>
+      </form>
+    </div>
   </div>
 
   <script src="/static/core.js" defer></script>
@@ -71,6 +81,7 @@
   <script src="/static/orders.js" defer></script>
   <script src="/static/database.js" defer></script>
   <script src="/static/settings.js" defer></script>
+  <script src="/static/askai.js" defer></script>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

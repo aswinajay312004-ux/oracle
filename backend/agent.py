@@ -124,10 +124,13 @@ def run(draft, cols=None, plan=None):
         matched = [n for n in order_cols if n in found or (FIELD.get(n) and str(o.get(FIELD[n]) or '').strip()) or (o.get('table_values') or {}).get(n)]
         steps.append(step('match', 'Oracle columns matched', 'ok', f"{len(matched)} of {len(order_cols)} order columns filled from Excel labels · "
                           f"size rows go to SIZES / ORDERQTY", matched=matched, total=len(order_cols)))
+        used = {f"{v['source']['sheet']}!{v['source']['cell']}" for v in found.values()}
+        used |= {f"{p.get('sheet')}!{p.get('cell')}" for p in (o.get('provenance') or {}).values() if isinstance(p, dict) and p.get('cell')}
+        unused = anchors(sheets, used, 30)
     else:
         steps.append(step('match', 'Oracle columns matched', 'skip', 'Oracle is not connected; matching happens when the preview is built'))
     steps.append(step('ai', 'Local AI review', 'pending', 'Checking the cells no rule could place…'))
-    return dict(steps=steps, sections=secs, ran_at=now(), ai=dict(status='pending'))
+    return dict(steps=steps, sections=secs, ran_at=now(), ai=dict(status='pending'), unused=unused if cols else [])
 
 
 # Chat models in order of preference for structured mapping on a laptop (embedding models such as bge-m3 or

@@ -8,6 +8,12 @@ A local, offline, admin-only application that turns a buyer's Excel order into O
 
 `python scripts/create_order_table.py` creates **one** table, `GARMENT_DEMO.EXCEL_ORDERS`. It holds one row per size, and the order details repeat on every row, like the client's own `ORDERENTRY`. It uses familiar column names: IONO, BUYERNAME, STYLENO, PONUM, SHIPDT, COMBO, SIZES, ORDERQTY and so on. Every column's Oracle comment lists the Excel labels it accepts (for example `FOB date|Ship date|Delivery date`). After upload, POPPYS reads those labels from Oracle and fills each column from the matching Excel cell automatically. A column added later is matched the same way. Existing Oracle tables are not changed or deleted; in this mode the app only shows and writes this table. Set `ORDER_TARGET=erp` in `.env.poppys` to use the ORDMAS/ORDSTYLE/ORDSIZE writer instead.
 
+## Data Expert Agent and Ask AI
+
+- **Data Expert Agent** (`backend/agent.py`) runs on every upload and shows each step on the New Order screen. It reads the workbook, recognises the layout, converts it to JSON, and finds every section (order, sample and summary sizes, fabric, trims, packing; printing, embroidery and costing are reported as "not provided" when absent). It then matches the Oracle columns from the Excel labels. Its **local AI step** (Ollama) gets only the label/value pairs no rule used and the columns still empty. A JSON schema with exactly those enums constrains the answer. Every proposal is re-checked and shown with an **AI** tag. Approval is always yours.
+- The local model is picked from what is installed. `OLLAMA_MODEL` is used if present, otherwise `qwen2.5:7b-instruct`, `qwen2.5:latest`, `qwen2.5:14b-instruct`, then `llama3`. Embedding models are never used for chat.
+- **Ask AI** (sidebar, or type a question in the top search) answers questions about saved orders. The model, or a keyword reader when no model runs, only picks the question type and the real buyer, style or OC number. The numbers always come from fixed, read-only queries, and each answer shows how it was calculated.
+
 ## AI-ready data foundation
 
 A local metadata store beside Oracle (nothing is added to client business tables), ready for a future question-answering assistant:

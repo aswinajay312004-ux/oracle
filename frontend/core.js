@@ -9,6 +9,8 @@ const fmt = v => v == null || v === '' ? '—' : typeof v === 'number' ? v.toLoc
 const isCode = col => /(ID|NO|NUM|SUBNO|CODE|KEY|ROW)$/.test(String(col || '')) || ['BUYER', 'MERCH', 'UOM', 'PUOM', 'COMBO', 'GSIZE', 'STNO', 'STYLENAME', 'STYLEDESC', 'SNO', 'ORDSIZEROW'].includes(col);
 const val = (col, v) => v == null || v === '' ? '—' : isCode(col) ? String(v) : fmt(v);
 const num = v => Number.isFinite(Number(v)) ? Number(v) : 0;
+const ago = v => { const d = new Date(String(v).replace(' ', 'T') + (/[zZ+]|\d-\d\d:\d\d$/.test(v) ? '' : 'Z')); if (isNaN(d)) return ''; const m = Math.round((Date.now() - d) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hour${Math.round(m / 60) === 1 ? '' : 's'} ago` : d.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }); };
 const when = v => { if (!v) return '—'; const d = new Date(String(v).replace(' ', 'T') + (/[zZ+]|\d-\d\d:\d\d$/.test(v) ? '' : 'Z')); return isNaN(d) ? esc(v) : d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); };
 const plural = (n, word) => `${fmt(n)} ${word}${n === 1 ? '' : 's'}`;
 
@@ -29,10 +31,19 @@ const ICONS = {
   zoomout: 'M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14zm9 3-4.3-4.3M8 11h6', fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5', undo: 'M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3',
   redo: 'M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h3', save: 'M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 0v6h8V3M7 21v-7h10v7',
   arrow: 'M5 12h14m-5-5 5 5-5 5', back: 'M19 12H5m5-5-5 5 5 5', box: 'M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8', clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm0-13v4l3 2',
-  backup: 'M12 3v12m0 0-4-4m4 4 4-4M5 21h14', key: 'M15 7a4 4 0 1 1-3.9 5H3v3h3v3h3v-3h2.1A4 4 0 0 1 15 7z', cpu: 'M8 8h8v8H8zM4 9h2m-2 6h2m12-6h2m-2 6h2M9 4v2m6-2v2M9 18v2m6-2v2',
+  backup: 'M12 3v12m0 0-4-4m4 4 4-4M5 21h14', plusbox: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm7 5v8m-4-4h8',
+  bell: 'M18 16V11a6 6 0 1 0-12 0v5l-2 2h16zm-8 4a2 2 0 0 0 4 0', down: 'M6 9l6 6 6-6', mail: 'M4 6h16v12H4zm0 0 8 7 8-7', lock: 'M6 11h12v10H6zm2 0V8a4 4 0 0 1 8 0v3m-4 4v2',
+  users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm-7 10a7 7 0 0 1 14 0M17 3a4 4 0 0 1 0 8m5 10a7 7 0 0 0-4-6.3', shirt: 'M8 3 3 6l2 5 3-1v11h8V10l3 1 2-5-5-3a4 4 0 0 1-8 0z',
+  truck: 'M2 6h11v10H2zm11 4h4l3 3v3h-7M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm11 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4z', grid: 'M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z',
+  activity: 'M3 12h4l3-8 4 16 3-8h4', calendar: 'M4 5h16v16H4zm0 5h16M9 3v4m6-4v4', play: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm-2-13 6 4-6 4z',
+  xls: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zm0 0v5h5M9 12l4 5m0-5-4 5', checkcircle: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm-4-9 3 3 5-6',
+  send: 'M4 12 20 4l-4 16-4-7zm8 1 8-9', layers: 'M12 3 2 8l10 5 10-5zM2 13l10 5 10-5M2 17.5l10 5 10-5', key: 'M15 7a4 4 0 1 1-3.9 5H3v3h3v3h3v-3h2.1A4 4 0 0 1 15 7z', cpu: 'M8 8h8v8H8zM4 9h2m-2 6h2m12-6h2m-2 6h2M9 4v2m6-2v2M9 18v2m6-2v2',
 };
 const icon = (name, cls = '') => `<span class="ico ${cls}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICONS[name] || ''}"/></svg></span>`;
-function paintIcons(root = document) { $$('[data-icon]', root).forEach(el => { el.outerHTML = icon(el.dataset.icon, el.className.replace('ico', '').trim()); }); }
+const LEAF = '<svg viewBox="0 0 40 40" aria-hidden="true"><path d="M21 37C11 31 5 20 8 8c9 1 15 8 15 18 2-10 7-17 15-19 2 14-5 25-17 30z" fill="url(#lg)"/><path d="M21 37c-2-9-6-17-12-26M21 37c3-10 7-18 15-27" stroke="#fff" stroke-width="1.4" fill="none" opacity=".55"/><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2bb383"/><stop offset="1" stop-color="#0b6e4b"/></linearGradient></defs></svg>';
+const LEAVES = '<svg viewBox="0 0 220 120" aria-hidden="true"><circle cx="70" cy="80" r="60" fill="#eaf7f0"/><path d="M60 118C44 98 40 70 52 44c16 10 22 30 12 50 6-22 20-38 40-42 2 30-14 52-44 66z" fill="#58c08f"/><path d="M60 118c-4-22-4-46 0-70m4 52c10-18 22-32 38-42" stroke="#eaf7f0" stroke-width="2" fill="none"/><path d="M108 118c-4-14 0-30 12-40 6 14 2 30-12 40z" fill="#9bdcbb"/></svg>';
+function paintIcons(root = document) { $$('[data-icon]', root).forEach(el => { el.outerHTML = icon(el.dataset.icon, el.className.replace('ico', '').trim()); });
+  $$('[data-leaf]', root).forEach(el => { el.innerHTML = LEAF; el.removeAttribute('data-leaf'); }); $$('[data-leaves]', root).forEach(el => { el.innerHTML = LEAVES; el.removeAttribute('data-leaves'); }); }
 
 function friendly(detail, status) {
   if (Array.isArray(detail)) return detail.map(d => d.msg || String(d)).join('\n');
@@ -101,32 +112,37 @@ const tableLabel = t => TABLE_LABELS[t] || t;
 const sourceChip = src => { if (!src) return ''; if (src.cell) return `<span class="chip" title="${esc(src.sheet)} ${esc(src.cell)}${src.value != null ? ' = ' + esc(src.value) : ''}${src.formula ? ' · ' + esc(src.formula) : ''}${src.via ? ' · ' + esc(src.via) : ''}">${icon('file')}${esc(src.sheet)}!${esc(src.cell)}</span>`; if (src.origin) return `<span class="chip manual">${esc(src.origin)}</span>`; return ''; };
 
 function route(name, handler) { App.routes[name] = handler; }
-function setTitle(title, sub = '') { $('#page-title').textContent = title; $('#page-sub').textContent = sub; document.title = `${title} · POPPYS AI`; }
+/* Page heading lives at the top of the content (title, subtitle, optional actions on the right). */
+function setTitle(title, sub = '', actions = '') { App.page = { title, sub, actions }; document.title = `${title} · POPPYS AI`; }
+function head() { const p = App.page || {}; return `<div class="page-head"><div><h1>${esc(p.title || '')}</h1>${p.sub ? `<p class="muted">${esc(p.sub)}</p>` : ''}</div>${p.actions ? `<div class="page-actions">${p.actions}</div>` : ''}</div>`; }
+function page(view, html) { view.innerHTML = head() + html; paintIcons(view); }
 async function navigate() {
   const [name, ...rest] = (location.hash.replace(/^#\/?/, '') || 'overview').split('/');
   const handler = App.routes[name] || App.routes.overview;
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.route === name));
-  Drawer.close(); const view = $('#view'); view.innerHTML = '';
-  try { await handler(view, rest.map(decodeURIComponent)); } catch (e) { view.innerHTML = `<div class="callout attention">${icon('alert')}<div>${esc(e.message)}</div></div>`; }
+  Drawer.close(); const view = $('#view'); view.innerHTML = ''; App.page = null; $('#search-results').hidden = true;
+  try { await handler(view, rest.map(decodeURIComponent)); if (App.page && !view.querySelector(':scope > .page-head')) view.insertAdjacentHTML('afterbegin', head()); } catch (e) { view.innerHTML = head() + `<div class="callout attention">${icon('alert')}<div>${esc(e.message)}</div></div>`; }
   paintIcons(view); view.focus({ preventScroll: true });
 }
 function go(hash) { if (location.hash === hash) navigate(); else location.hash = hash; }
 
 async function refreshHealth() {
-  try { const h = await api('/api/health'); App.state.health = h; const ok = h.database.connected;
-    ['#side-dot', '#top-dot'].forEach(s => { $(s).className = `status-dot ${ok ? 'on' : 'off'}`; });
-    $('#side-status').textContent = ok ? `Oracle connected · ${h.database.owner}` : 'Oracle not connected';
-    $('#oracle-label').textContent = ok ? 'Oracle connected' : 'Oracle offline';
+  try { const h = await api('/api/health'); App.state.health = h; const ok = h.database.connected; const ai = h.ollama || {};
+    $('#top-dot').className = `status-dot ${ok ? 'on' : 'off'}`; $('#oracle-label').textContent = ok ? 'Oracle Connected' : 'Oracle Offline';
+    $('#oracle-sub').textContent = ok ? 'Axpert ERP' : 'Start the database'; $('#env-label').textContent = h.database.owner || 'GARMENT_DEMO';
+    $('#ai-dot').className = `status-dot ${ai.model ? 'on' : 'off'}`; $('#ai-label').textContent = ai.model ? 'AI Assistant Ready' : 'AI Assistant Off';
+    $('#ai-sub').textContent = ai.model || (ai.available ? 'No chat model installed' : 'Start Ollama (optional)');
   } catch (_) { /* shown on next action */ }
 }
 async function showAuth() {
   const s = await fetch('/api/session', { credentials: 'same-origin' }).then(r => r.json());
   App.state.user = s.username; App.state.setup = s.needs_setup;
-  $('#auth').hidden = !!s.authenticated;
+  $('#auth').hidden = !!s.authenticated; $('#shell').hidden = !s.authenticated;
   $('#auth-title').textContent = s.needs_setup ? 'Create the admin account' : 'Welcome back';
-  $('#auth-desc').textContent = s.needs_setup ? 'POPPYS AI has one administrator. Choose the username and password you will use on this computer.' : 'Sign in as the POPPYS AI administrator.';
-  $('#auth-submit').textContent = s.needs_setup ? 'Create admin account' : 'Sign in';
+  $('#auth-desc').textContent = 'POPPYS AI has one administrator. Choose the username and password you will use on this computer (at least 10 characters).';
+  $('#auth-desc').hidden = !s.needs_setup;
+  $('#auth-submit').textContent = s.needs_setup ? 'Create admin account →' : 'Sign in →';
   $('#auth-pass').autocomplete = s.needs_setup ? 'new-password' : 'current-password';
-  $('#username').textContent = s.username || 'Admin'; $('#avatar').textContent = (s.username || 'A').slice(0, 1).toUpperCase();
+  $('#username').textContent = s.username || 'admin'; $('#avatar').textContent = (s.username || 'A').slice(0, 1).toUpperCase();
   return s.authenticated;
 }

@@ -125,7 +125,7 @@ def health(user=Depends(authenticated)):
     ollama={'available':False,'models':[]}
     try:
         r=httpx.get('http://127.0.0.1:11434/api/tags',timeout=2);r.raise_for_status()
-        ollama=dict(available=True,models=[m['name'] for m in r.json().get('models',[])])
+        ollama=dict(available=True,models=[m['name'] for m in r.json().get('models',[])],model=agent.available()[0])
     except Exception:pass
     return dict(database=status,ollama=ollama)
 
@@ -154,8 +154,10 @@ def agent_columns():
         with oracle.connect() as conn:return order_table.columns(conn) if table_mode(conn) else None
     except Exception:return None
 
+class AgentRun(BaseModel):version:int
+
 @app.post('/api/drafts/{id}/agent/ai')
-def agent_ai(id:str,data:Version,user=Depends(authenticated)):
+def agent_ai(id:str,data:AgentRun,user=Depends(authenticated)):
     """The local-AI step of the agent. The model call runs outside the write lock; its validated proposals are
     applied only if the draft did not change meanwhile."""
     d=store.get(id)
@@ -248,7 +250,9 @@ def preview(id:str,data:Version,user=Depends(authenticated)):
     with LOCK:
         d=editable(id,data.version)
         with oracle.connect() as conn:
-            d['plan']=order_table.plan(conn,d['orders'],d['filehash'],d['sheets'],d['filename']) if table_mode(conn) else oracle.plan(conn,d['orders'],d['filehash'])
+            simple=table_mode(conn)
+            d['plan']=order_table.plan(conn,d['orders'],d['filehash'],d['sheets'],d['filename']) if simple else oracle.plan(conn,d['orders'],d['filehash'])
+            if not d.get('agent'):d['agent']=agent.run(d,order_table.columns(conn) if simple else None)  # uploads made before the agent existed
         # Preview itself is a revision, preventing an earlier accept from approving a replaced preview.
         old=d['version'];d['version']+=1;store.save(d,user,old);return d
 
@@ -363,12 +367,11 @@ def overview(user=Depends(authenticated)):
         for o in saved:
             day=str(o['saved_at'])[:10];result['saved_by_day'][day]=result['saved_by_day'].get(day,0)+1
             month=day[:7];result['by_month'][month]=result['by_month'].get(month,0)+1
+        with store.db() as lc:
+            checks=[r[0] for r in lc.execute("SELECT outcome FROM quality_results WHERE rule='Saved values read back from Oracle'")]
+        result['sync']=dict(verified=checks.count('PASS'),checked=len(checks))
         with oracle.connect() as conn:
-            c=conn.cursor();ok=0;known=0
-            for i in imports:
-                r=oracle.read_result(c,i['job_id'])
-                if r and 'verified' in r:known+=1;ok+=bool(r['verified'])
-            result['sync']=dict(verified=ok,checked=known)
+            c=conn.cursor()
             try:
                 c.execute('''SELECT CHANGESET,max(ORDMASID),count(*),max(APPROVER),max(CHANGED_AT) FROM PP_CHANGE_LOG
                     GROUP BY CHANGESET ORDER BY max(CHANGED_AT) DESC FETCH FIRST 6 ROWS ONLY''')
