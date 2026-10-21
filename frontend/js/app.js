@@ -6,7 +6,7 @@ import { loadExplorer, bindExplorer, showTables } from './explorer.js';
 import { orderPanel } from './dborders.js';
 import { loadAdmin, bindAdmin } from './admin.js';
 import { loadChat, bindChat } from './chat.js';
-import { loadDashboard, bindActivity } from './dashboard.js';
+import { loadDashboard, bindActivity, bindQueue } from './dashboard.js';
 
 async function session() {
   const s = await fetch('/api/session', { credentials: 'same-origin' }).then(r => r.json());
@@ -115,7 +115,7 @@ function bind() {
   document.addEventListener('poppys:tables', () => { go('explorer'); showTables(); });
   window.addEventListener('beforeunload', e => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
   keyboardReach();
-  ws.bindWorkspace(); bindExplorer(); bindAdmin(); bindChat(); bindActivity();
+  ws.bindWorkspace(); bindExplorer(); bindAdmin(); bindChat(); bindActivity(); bindQueue();
 }
 
 // Rows and headings that act on a click (open a record, sort a column, pick a sheet cell, expand a group) are reachable and

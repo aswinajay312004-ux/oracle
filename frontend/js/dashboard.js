@@ -41,12 +41,7 @@ export async function loadDashboard() {
     : '<li class="act-empty muted">Nothing yet.</li>';
   const setupNav = document.querySelector('.nav button[data-view="admin"]'); $('#dash-activity-all').hidden = !setupNav || setupNav.hidden;
   $('#dash-waiting-card').hidden = !o.queue.length;
-  $('#dash-queue').innerHTML = o.queue.length ? `<div class="tbl-wrap flush"><table><thead><tr><th scope="col">File</th><th scope="col">Order</th><th scope="col" class="num">Pieces</th><th scope="col">Status</th><th scope="col">Uploaded</th></tr></thead><tbody>
-    ${o.queue.slice(0, 8).map(d => `<tr class="clickable" data-open-draft="${esc(d.id)}"><td><b>${esc(d.filename)}</b></td>
-      <td>${esc([...(d.order_refs || []), ...(d.styles || [])].filter(Boolean).slice(0, 3).join(' · ') || '—')}</td>
-      <td class="num">${d.pieces == null ? '—' : esc(fmt(d.pieces, 0))}</td>
-      <td><span class="pill ${STATUS_PILL[d.status] ?? ''}">${esc(STATUS_TEXT[d.status] || d.status)}</span></td>
-      <td class="nowrap">${d.created_at ? esc(timeAgo(d.created_at)) : '—'} <span class="muted small-text">${esc(d.uploaded_by || '')}</span></td></tr>`).join('')}</tbody></table></div>` : '';
+  queueRows = o.queue; drawQueue();
 }
 
 // Oracle (saving), database view (Ask AI's read-only account) and the local AI assistant, as three status cards.
@@ -108,5 +103,41 @@ export function bindActivity() {
     document.querySelector('.nav button[data-view="admin"]')?.click();
     for (let n = 0; n < 50 && state.busy; n++) await new Promise(r => setTimeout(r, 50));
     document.querySelector('.subnav [data-admin="audit"]')?.click();
+  });
+}
+
+// "Not saved yet": file type icon, order chips, status pill, who uploaded; headers sort the rows in the browser.
+let queueRows = []; let queueSort = { key: null, dir: 1 };
+const fileExt = f => ((f || '').match(/\.([a-z0-9]+)$/i)?.[1] || 'file').toUpperCase();
+const refsOf = d => [...(d.order_refs || []), ...(d.styles || [])].filter(Boolean).slice(0, 3);
+const SORTERS = { file: d => (d.filename || '').toLowerCase(), order: d => refsOf(d).join(' ').toLowerCase(), pieces: d => d.pieces ?? -1,
+  status: d => STATUS_TEXT[d.status] || d.status || '', uploaded: d => d.created_at ? Date.parse(d.created_at) : 0 };
+const SORT_ICON = '<svg class="q-sort-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="up" d="m8 9 4-4 4 4"/><path class="down" d="m8 15 4 4 4-4"/></svg>';
+const STATUS_ICON = { err: '<path d="M12 8v5M12 16.5h.01"/>', warn: '<path d="M12 8v5M12 16.5h.01"/>', ok: '<path d="m8 12 3 3 5-6"/>', '': '<path d="M12 7v5l3 2"/>' };
+function fileIcon(name) {
+  const ext = fileExt(name); const excel = /^(XLSX|XLSM|XLS|XLSB|ODS|CSV)$/.test(ext);
+  return excel ? `<span class="q-file x" aria-hidden="true"><b>X</b></span>`
+    : `<span class="q-file doc" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 8h10M7 12h10M7 16h6"/></svg><small>${esc(ext.slice(0, 4))}</small></span>`;
+}
+function drawQueue() {
+  let rows = queueRows.slice();
+  if (queueSort.key) { const f = SORTERS[queueSort.key]; rows.sort((a, b) => (f(a) > f(b) ? 1 : f(a) < f(b) ? -1 : 0) * queueSort.dir); }
+  const th = (key, label, cls = '') => { const on = queueSort.key === key; const sort = on ? (queueSort.dir > 0 ? 'ascending' : 'descending') : 'none';
+    return `<th scope="col" class="${cls}" aria-sort="${sort}"><button type="button" class="q-sort ${on ? (queueSort.dir > 0 ? 'asc' : 'desc') : ''}" data-q-sort="${key}">${label}${SORT_ICON}</button></th>`; };
+  $('#dash-queue').innerHTML = rows.length ? `<div class="tbl-wrap flush"><table class="q-table"><thead><tr>${th('file', 'File')}${th('order', 'Order')}${th('pieces', 'Pieces', 'num')}${th('status', 'Status')}${th('uploaded', 'Uploaded')}<th scope="col"><span class="sr-only">Open</span></th></tr></thead><tbody>
+    ${rows.slice(0, 8).map(d => { const tone = STATUS_PILL[d.status] ?? ''; const refs = refsOf(d);
+      return `<tr class="clickable" data-open-draft="${esc(d.id)}">
+      <td><div class="q-filecell">${fileIcon(d.filename)}<span class="q-name"><b>${esc(d.filename)}</b><small>${esc(fileExt(d.filename))}${d.format ? ` · ${esc(d.format)}` : ''}</small></span></div></td>
+      <td>${refs.length ? `<span class="q-ref">${esc(refs.join(' · '))}</span>` : '<span class="q-ref empty">—</span>'}</td>
+      <td class="num q-num">${d.pieces == null ? '—' : esc(fmt(d.pieces, 0))}</td>
+      <td><span class="q-status ${tone}"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" class="q-status-bg"/>${STATUS_ICON[tone] || STATUS_ICON['']}</svg>${esc(STATUS_TEXT[d.status] || d.status)}</span></td>
+      <td><div class="q-when"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span><span>${d.created_at ? esc(timeAgo(d.created_at)) : '—'}</span>${d.uploaded_by ? `<small>${esc(d.uploaded_by)}</small>` : ''}</span></div></td>
+      <td class="q-more"><button type="button" class="icon-btn" data-open-draft="${esc(d.id)}" aria-label="Open ${esc(d.filename)}" title="Open"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button></td></tr>`; }).join('')}</tbody></table></div>` : '';
+}
+export function bindQueue() {
+  $('#dash-queue')?.addEventListener('click', e => {
+    const b = e.target.closest('[data-q-sort]'); if (!b) return;
+    e.stopPropagation(); const key = b.dataset.qSort;
+    queueSort = queueSort.key === key ? { key, dir: -queueSort.dir } : { key, dir: 1 }; drawQueue();
   });
 }
