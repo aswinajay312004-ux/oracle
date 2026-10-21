@@ -33,10 +33,11 @@ export async function loadDashboard() {
     ${o.recent_orders.map(r => `<tr class="clickable" data-order-panel="${esc(r.ordmasid)}"><th scope="row"><button class="link" data-order-panel="${esc(r.ordmasid)}">${esc(r.order_ref || '—')}</button></th>
       <td>${esc(name(r))}</td><td class="opt">${esc(r.buyer || '—')}</td><td class="num">${r.pieces == null ? '—' : esc(fmt(r.pieces, 0))}</td>
       <td class="nowrap">${esc(timeAgo(r.saved_at))}<div class="muted small-text">${esc(r.saved_by || '')}</div></td></tr>`).join('')}</tbody></table></div>`
-    : '<p class="empty">No orders saved yet. Click <b>＋ New order</b> to upload an Excel file.</p>';
+    : `<div class="saved-empty"><span class="saved-art" aria-hidden="true"><i class="sp s1">+</i><i class="sp s2">+</i><i class="sp s3">·</i><i class="sp s4">+</i><span class="saved-doc"><svg viewBox="0 0 48 56" width="52" height="60"><path d="M6 2h26l14 14v34a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4z" fill="#bfe9d6"/><path d="M32 2v10a4 4 0 0 0 4 4h10z" fill="#7fd3b0"/><path d="M12 26h22M12 33h22M12 40h14" stroke="#2fa577" stroke-width="3" stroke-linecap="round"/></svg></span></span>
+      <strong>No orders saved yet</strong><p>Upload an Excel file using the <b>New order</b> button to save orders.</p></div>`;
   $('#dash-activity').innerHTML = o.activity.length ? o.activity.map((a, i) => `<li class="act-row${i === 0 ? ' latest' : ''}" style="--i:${Math.min(i, 10)}">
       <span class="act-icon ${ACT_TONE[a.action] || ''}" aria-hidden="true">${actIcon(a.action)}</span><span class="act-line" aria-hidden="true"><i></i></span>
-      <span class="act-body"><span class="act-who">${esc(a.who)}</span><span class="act-what">${(WHAT[a.action] || (() => esc(a.action)))(a)}</span></span>
+      <span class="act-body one"><span class="act-who">${esc(a.who)}</span> <span class="act-what">${(WHAT[a.action] || (() => esc(a.action)))(a)}</span></span>
       <time class="act-time" datetime="${esc(a.at)}" title="${esc(new Date(a.at).toLocaleString())}">${i === 0 ? '<i class="act-live" aria-hidden="true"></i>' : CLOCK}${esc(timeAgo(a.at))}</time></li>`).join('')
     : '<li class="act-empty muted">Nothing yet.</li>';
   const setupNav = document.querySelector('.nav button[data-view="admin"]'); $('#dash-activity-all').hidden = !setupNav || setupNav.hidden;
@@ -107,7 +108,7 @@ export function bindActivity() {
 }
 
 // "Not saved yet": file type icon, order chips, status pill, who uploaded; headers sort the rows in the browser.
-let queueRows = []; let queueSort = { key: null, dir: 1 };
+let queueRows = []; let queueSort = { key: null, dir: 1 }; let queueQuery = ''; let queueHide = new Set();
 const fileExt = f => ((f || '').match(/\.([a-z0-9]+)$/i)?.[1] || 'file').toUpperCase();
 const refsOf = d => [...(d.order_refs || []), ...(d.styles || [])].filter(Boolean).slice(0, 3);
 const SORTERS = { file: d => (d.filename || '').toLowerCase(), order: d => refsOf(d).join(' ').toLowerCase(), pieces: d => d.pieces ?? -1,
@@ -120,21 +121,37 @@ function fileIcon(name) {
     : `<span class="q-file doc" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 8h10M7 12h10M7 16h6"/></svg><small>${esc(ext.slice(0, 4))}</small></span>`;
 }
 function drawQueue() {
-  let rows = queueRows.slice();
+  const q = queueQuery.trim().toLowerCase();
+  let rows = queueRows.filter(d => !queueHide.has(d.status) && (!q || [d.filename, d.uploaded_by, d.format, ...(d.order_refs || []), ...(d.styles || []), ...(d.buyers || [])]
+    .some(v => String(v || '').toLowerCase().includes(q))));
+  drawFilterMenu();
   if (queueSort.key) { const f = SORTERS[queueSort.key]; rows.sort((a, b) => (f(a) > f(b) ? 1 : f(a) < f(b) ? -1 : 0) * queueSort.dir); }
   const th = (key, label, cls = '') => { const on = queueSort.key === key; const sort = on ? (queueSort.dir > 0 ? 'ascending' : 'descending') : 'none';
     return `<th scope="col" class="${cls}" aria-sort="${sort}"><button type="button" class="q-sort ${on ? (queueSort.dir > 0 ? 'asc' : 'desc') : ''}" data-q-sort="${key}">${label}${SORT_ICON}</button></th>`; };
-  $('#dash-queue').innerHTML = rows.length ? `<div class="tbl-wrap flush"><table class="q-table"><thead><tr>${th('file', 'File')}${th('order', 'Order')}${th('pieces', 'Pieces', 'num')}${th('status', 'Status')}${th('uploaded', 'Uploaded')}<th scope="col"><span class="sr-only">Open</span></th></tr></thead><tbody>
-    ${rows.slice(0, 8).map(d => { const tone = STATUS_PILL[d.status] ?? ''; const refs = refsOf(d);
+  $('#dash-queue').innerHTML = rows.length ? `<div class="tbl-wrap flush"><table class="q-table"><thead><tr><th scope="col" class="q-plain">File</th>${th('order', 'Order')}${th('pieces', 'Pieces', 'num')}${th('status', 'Status')}${th('uploaded', 'Uploaded')}<th scope="col"><span class="sr-only">Open</span></th></tr></thead><tbody>
+    ${rows.map(d => { const tone = STATUS_PILL[d.status] ?? ''; const refs = refsOf(d);
       return `<tr class="clickable" data-open-draft="${esc(d.id)}">
       <td><div class="q-filecell">${fileIcon(d.filename)}<span class="q-name"><b>${esc(d.filename)}</b><small>${esc(fileExt(d.filename))}${d.format ? ` · ${esc(d.format)}` : ''}</small></span></div></td>
       <td>${refs.length ? `<span class="q-ref">${esc(refs.join(' · '))}</span>` : '<span class="q-ref empty">—</span>'}</td>
       <td class="num q-num">${d.pieces == null ? '—' : esc(fmt(d.pieces, 0))}</td>
       <td><span class="q-status ${tone}"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" class="q-status-bg"/>${STATUS_ICON[tone] || STATUS_ICON['']}</svg>${esc(STATUS_TEXT[d.status] || d.status)}</span></td>
       <td><div class="q-when"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span><span>${d.created_at ? esc(timeAgo(d.created_at)) : '—'}</span>${d.uploaded_by ? `<small>${esc(d.uploaded_by)}</small>` : ''}</span></div></td>
-      <td class="q-more"><button type="button" class="icon-btn" data-open-draft="${esc(d.id)}" aria-label="Open ${esc(d.filename)}" title="Open"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button></td></tr>`; }).join('')}</tbody></table></div>` : '';
+      <td class="q-more"><button type="button" class="icon-btn" data-open-draft="${esc(d.id)}" aria-label="Open ${esc(d.filename)}" title="Open"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button></td></tr>`; }).join('')}</tbody></table></div>` : `<p class="q-none">${queueRows.length ? 'No file matches this search or filter.' : ''}</p>`;
+}
+function drawFilterMenu() {
+  const menu = $('#q-filter-menu'); if (!menu) return;
+  const present = [...new Set(queueRows.map(d => d.status))];
+  menu.innerHTML = `<strong>Show status</strong>${present.map(st => `<label><input type="checkbox" data-q-status="${esc(st)}" ${queueHide.has(st) ? '' : 'checked'}> ${esc(STATUS_TEXT[st] || st)}</label>`).join('')}`;
+  $('.q-filter-dot').hidden = !present.some(st => queueHide.has(st));
 }
 export function bindQueue() {
+  $('#q-search')?.addEventListener('input', e => { queueQuery = e.target.value; drawQueue(); });
+  const btn = $('#q-filter'); const menu = $('#q-filter-menu');
+  const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  btn?.addEventListener('click', e => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.setAttribute('aria-expanded', String(!menu.hidden)); });
+  menu?.addEventListener('click', e => e.stopPropagation());
+  menu?.addEventListener('change', e => { const st = e.target.dataset.qStatus; if (st == null) return; if (e.target.checked) queueHide.delete(st); else queueHide.add(st); drawQueue(); });
+  document.addEventListener('click', close); document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { close(); btn.focus(); } });
   $('#dash-queue')?.addEventListener('click', e => {
     const b = e.target.closest('[data-q-sort]'); if (!b) return;
     e.stopPropagation(); const key = b.dataset.qSort;
