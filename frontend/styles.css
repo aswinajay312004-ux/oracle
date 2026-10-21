@@ -1189,3 +1189,32 @@ body.popup-open { overflow: hidden; }
 .pv-tables, .pv-table { min-width: 0; }
 .pv-table { overflow: hidden; }
 .pv-table .tbl-wrap, .op-table .tbl-wrap { overflow-x: auto; max-height: 520px; }
+
+/* All tables as a mind map (mindmap.js): GARMENT_DEMO → groups → tables, branches open and close */
+.flow-card .flow-wrap.mm-wrap { max-height: none; min-height: 0; background: none; border-bottom: 0; }
+.mm-tools { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.mm-zoom { min-width: 44px; text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mm-scroll { overflow: auto; max-height: 640px; background: radial-gradient(circle at 1px 1px, #e2eae8 1px, transparent 0) 0 0 / 18px 18px, #fbfdfc; }
+.mm { display: block; }
+.mm-edge { fill: none; stroke: #9cc7bf; stroke-width: 2; transition: d .32s ease; }
+.mm-edge.master { stroke: #b9a8ee; } .mm-edge.dashed { stroke-dasharray: 6 5; stroke: #d9a443; }
+.mm-node { cursor: pointer; transition: transform .32s ease; outline: none; }
+.mm-box { fill: #fff; stroke: #c4d6d2; stroke-width: 1.4; transition: fill .15s, stroke .15s; }
+.mm-node.root .mm-box { fill: var(--brand); stroke: var(--brand); }
+.mm-node.root .mm-t1, .mm-node.root .mm-t2 { fill: #fff; }
+.mm-node.group .mm-box { fill: var(--brand-soft); stroke: #9fd3c9; }
+.mm-node.header .mm-box { stroke: var(--header); stroke-width: 2; }
+.mm-node.master .mm-box { stroke: #b9a8ee; }
+.mm-node.dashed .mm-box { stroke-dasharray: 5 4; }
+.mm-node:hover .mm-box, .mm-node:focus-visible .mm-box { stroke: var(--brand-2); stroke-width: 2.4; }
+.mm-node.sel .mm-box { fill: #eaf7f4; stroke: var(--brand); stroke-width: 2.6; }
+.mm-t1 { font: 650 13px var(--font); fill: var(--ink); }
+.mm-t2 { font: 11px var(--mono); fill: var(--muted); }
+.mm-toggle { cursor: pointer; }
+.mm-toggle circle { fill: #fff; stroke: #9cc7bf; stroke-width: 1.5; }
+.mm-toggle:hover circle { fill: var(--brand-soft); stroke: var(--brand); }
+.mm-toggle text { font: 700 15px var(--font); fill: var(--brand-ink); }
+.mm-toggle .mm-count { font: 600 11px var(--font); fill: var(--muted); text-anchor: start; }
+.mm-node.blink .mm-box { stroke: #f59e0b; stroke-width: 3; animation: tbl-blink 1.1s ease-in-out infinite; }
+.mm-node.blink .mm-t2 { fill: #b45309; font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { .mm-node, .mm-edge { transition: none; } .mm-node.blink .mm-box { animation: none; fill: #fef3c7; } }

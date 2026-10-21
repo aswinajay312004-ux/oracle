@@ -81,7 +81,10 @@ DATABASE
     Order ID click -> valadhu pakkam panel: Details, Oracle tables (andha
     order ku Oracle la irukura ella rows, ella columns), Excel as uploaded,
     Check in SQL Developer.
-  - All tables: mela flowchart (ella tables um, edhu edhoda link nu). Table
+  - All tables: mela mind map (NotebookLM maadhiri): GARMENT_DEMO -> Order
+    tables / Master tables -> Order -> Order line -> Size quantity... Node
+    pakkathula irukura > click panna adhoda kizh tables open aagum, < close.
+    "Open all" / "Close all" um irukku. Table
     ah click panna keezha andha table oda rows. Puthu order save pannina
     tables blink aagum; andha table ah open panna blink nikkum (indha
     computer la mattum nyabagam).

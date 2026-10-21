@@ -69,3 +69,45 @@ def test_graph_module_is_csp_safe():
     buttons = re.findall(r'<button[^>]*data-z="(\w+)"[^>]*>', src)
     assert sorted(buttons) == ['fit', 'in', 'out', 'reset']
     assert all('aria-label=' in b for b in re.findall(r'<button[^>]*data-z="\w+"[^>]*>', src))
+
+
+# --- Database → All tables mind map (frontend/js/mindmap.js) ----------------------------------------------------
+MINDMAP = GRAPH.with_name('mindmap.js')
+
+
+def mm(expr):
+    code = f'const m = await import({json.dumps(MINDMAP.as_uri())});\nprocess.stdout.write(JSON.stringify({expr}));'
+    out = subprocess.run([NODE, '--input-type=module', '-e', code], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+TABLES = json.dumps([dict(table=t, business=t, kind=k, rows=1) for t, k in (
+    ('ORDMAS', 'header'), ('ORDSTYLE', 'detail'), ('ORDSIZE', 'detail'), ('ORDFAB', 'detail'), ('ORDYARN', 'detail'),
+    ('ORDACC', 'detail'), ('BUYMAS', 'master'), ('COLORMAS', 'master'), ('LONELY', 'other'), ('UPLOADS', 'local'))])
+JOINS = json.dumps([dict(parent=p, child=c, status=s) for p, c, s in (
+    ('ORDMAS', 'ORDSTYLE', 'verified'), ('ORDMAS', 'ORDSIZE', 'verified'), ('ORDSTYLE', 'ORDSIZE', 'verified'),
+    ('ORDSTYLE', 'ORDFAB', 'proposed'), ('ORDMAS', 'ORDFAB', 'verified'), ('ORDFAB', 'ORDYARN', 'proposed'),
+    ('ORDMAS', 'ORDACC', 'verified'), ('BUYMAS', 'ORDMAS', 'verified'), ('COLORMAS', 'ORDSTYLE', 'verified'))])
+
+
+@needs_node
+def test_mind_map_splits_the_schema_into_one_tree_without_crossing_lines():
+    t = mm(f'(() => {{ const r = m.buildTree({TABLES}, {JOINS}); return Object.fromEntries(Object.values(r.nodes).map(n => [n.id, [n.parent || null, n.children]])); }})()')
+    assert t['__root'][1] == ['__orders', '__masters', '__other']
+    assert t['ORDMAS'][0] == '__orders' and t['ORDSTYLE'][0] == 'ORDMAS'
+    assert t['ORDSIZE'][0] == 'ORDSTYLE'                         # under its order line (the deepest parent), not the order
+    assert t['ORDFAB'][0] == 'ORDSTYLE' and t['ORDYARN'][0] == 'ORDFAB'
+    assert t['BUYMAS'][0] == '__masters' and t['LONELY'][0] == '__other' and 'UPLOADS' not in t
+    parents = [p for _, (p, _) in t.items() if p]
+    assert len(parents) == len(t) - 1                            # every table has exactly one place in the tree
+
+
+@needs_node
+def test_mind_map_layout_puts_a_parent_beside_its_open_children():
+    pos = mm(f'(() => {{ const r = m.buildTree({TABLES}, {JOINS}); const open = new Set(["__root", "__orders", "ORDMAS"]); return m.layout(r.nodes, open).pos; }})()')
+    assert 'ORDSTYLE' in pos and 'ORDSIZE' not in pos              # ORDSTYLE is closed: its branch is not drawn
+    kids = [pos[k]['y'] for k in ('ORDSTYLE', 'ORDACC')]
+    assert pos['ORDMAS']['x'] < pos['ORDSTYLE']['x'] and min(kids) <= pos['ORDMAS']['y'] <= max(kids)
+    ys = sorted(p['y'] for p in pos.values() if p['x'] == pos['ORDSTYLE']['x'])
+    assert all(b - a >= 46 for a, b in zip(ys, ys[1:]))           # no two boxes overlap

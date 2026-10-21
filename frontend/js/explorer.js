@@ -3,7 +3,7 @@
 // opened on this computer (remembered in this browser only).
 import { $, $$, esc, show, fmt, plural, busy, notify, state } from './util.js';
 import { api, id } from './api.js';
-import { renderGraph } from './graph.js';
+import { mindMap } from './mindmap.js';
 import { loadOrders, orderPanel } from './dborders.js';
 
 let tables = []; let tablesReady = null; let current = null; let tab = 'records';
@@ -15,7 +15,6 @@ const RANK = { label: 1, reference: 2, measure: 3, date: 4 };
 const APPROX = 'Approximate count from Oracle statistics. Very large tables are not counted row by row, so pages stay fast. Filter the table to get an exact count.';
 const NOT_COUNTED = 'There are more linked rows than listed here. Counting them all took too long on this database, so no exact number is shown.';
 const blank = v => v == null || v === '';
-const confirmed = s => s === 'verified' || s === 'declared';
 const SEEN = 'poppys.seen-tables';
 const count = (n, approx) => approx ? `<span class="ex-approx" title="${esc(APPROX)}">≈ ${fmt(n, 0)}</span>` : fmt(n, 0);
 
@@ -54,35 +53,25 @@ function markSeen(table) {
   if (!updates[table]) return;
   const s = seen(); s[table] = updates[table].at;
   try { localStorage.setItem(SEEN, JSON.stringify(s)); } catch (_) { /* this browser keeps nothing: it blinks again next time */ }
-  $(`#db-flow .gnode[data-id="${CSS.escape(table)}"]`)?.classList.remove('blink');
+  map?.seen(table);
   note();
 }
 const fresh = t => !!updates[t] && (seen()[t] || '') < updates[t].at;
 function note() {
   const blinking = tables.filter(t => fresh(t.table)).map(t => t.table);
-  $('#flow-note').textContent = blinking.length ? `Blinking: tables a recent save wrote rows into (${blinking.join(', ')}). Open one to stop it blinking.`
-    : 'Click a table to see its rows below. Lines show which tables are linked.';
+  $('#flow-note').textContent = blinking.length ? `Blinking: tables a recent save wrote rows into (${blinking.join(', ')}). Click one to see its rows; it stops blinking.`
+    : 'Click ›  to open a branch, click a table to see its rows below.';
 }
 
+let map = null;
 async function drawFlow() {
   let joins = [];
   try { [joins, updates] = await Promise.all([api('/api/knowledge/joins'), api('/api/tables/updates').catch(() => ({}))]); }
   catch (e) { $('#db-flow').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
-  const shown = tables.filter(t => t.kind !== 'local');
-  const ids = new Set(shown.map(t => t.table));
-  const nodes = shown.map(t => ({ id: t.table, title: t.business || t.table, code: t.table, kind: t.kind === 'header' ? 'header' : t.kind === 'master' ? 'master' : 'detail',
-    line3: fresh(t.table) ? `New rows: ${updates[t.table].order_ref || 'saved'}` : '', cls: fresh(t.table) ? 'blink' : '',
-    status: { text: t.rows == null ? '' : `${t.approx ? '≈ ' : ''}${fmt(t.rows, 0)} rows`, cls: 'muted' } }));
-  const edges = [];
-  for (const j of joins) {
-    if (!ids.has(j.parent) || !ids.has(j.child) || j.parent === j.child || j.status === 'rejected') continue;
-    if (edges.some(e => e.from === j.parent && e.to === j.child)) continue;
-    edges.push({ from: j.parent, to: j.child, label: '', cls: confirmed(j.status) ? 'link' : 'proposed',
-      title: `${j.label || ''} · ${j.pairs.map(([c, p]) => `${j.child}.${c} = ${j.parent}.${p}`).join(' AND ')}` });
-  }
+  const blink = new Set(tables.filter(t => fresh(t.table)).map(t => t.table));
+  const notes = Object.fromEntries([...blink].map(t => [t, `new rows: ${updates[t].order_ref || 'saved'}`]));
   note();
-  renderGraph($('#db-flow'), { nodes, edges }, { selected: current?.table, masterBand: true, bandTitle: 'NAMES (MASTER TABLES) — point at one to see what uses it',
-    treeTitle: 'ORDER TABLES', nodeW: 196, nodeH: 70, gapX: 70, label: 'Database tables and how they link',
+  map = mindMap($('#db-flow'), tables, joins, { selected: current?.table, blink, notes, owner: state.health?.database?.owner || 'GARMENT_DEMO',
     onSelect: t => { markSeen(t); openTable(t); $('#table-view').scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
 }
 
