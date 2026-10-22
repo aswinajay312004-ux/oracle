@@ -29,6 +29,18 @@ def init():
         CREATE TABLE IF NOT EXISTS learned_labels(table_name TEXT NOT NULL,column_name TEXT NOT NULL,label TEXT NOT NULL,
             created_by TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(table_name,column_name,label));
         ''')
+        # Older builds used a different template layout. Preserve those rows
+        # separately before creating the current mapping-template table.
+        cols={r['name'] for r in c.execute('PRAGMA table_info(templates)')}
+        if 'payload' not in cols:
+            suffix=0
+            while True:
+                legacy='templates_legacy' + (f'_{suffix}' if suffix else '')
+                if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(legacy,)).fetchone():break
+                suffix+=1
+            c.execute(f'ALTER TABLE templates RENAME TO {legacy}')
+            c.execute('''CREATE TABLE templates(id INTEGER PRIMARY KEY,name TEXT NOT NULL,version INTEGER NOT NULL,active INTEGER NOT NULL,
+                payload TEXT NOT NULL,created_by TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,UNIQUE(name,version))''')
 
 def identify(orders):
     for o in orders:

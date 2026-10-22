@@ -99,7 +99,8 @@ def issue(response,user):
     token=secrets.token_urlsafe(32)
     with store.db() as c:
         c.execute('DELETE FROM sessions WHERE expires<?',(time.time(),))
-        c.execute('INSERT INTO sessions VALUES (?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),user,time.time()+28800))
+        c.execute('INSERT INTO sessions(token_hash,username,expires) VALUES (?,?,?)',
+                  (hashlib.sha256(token.encode()).hexdigest(),user,time.time()+28800))
     response.set_cookie('poppys_session',token,httponly=True,samesite='strict',max_age=28800)
 
 class Credentials(BaseModel):
@@ -119,7 +120,8 @@ def setup(data:Credentials,response:Response):
     with LOCK,store.db() as c:
         if c.execute('SELECT 1 FROM users').fetchone():raise HTTPException(409,'Setup is already complete. Sign in.')
         salt=secrets.token_hex(16)
-        c.execute('INSERT INTO users VALUES (?,?,?)',(data.username,salt,password_hash(data.password,salt)))
+        c.execute('INSERT INTO users(username,salt,password_hash) VALUES (?,?,?)',
+                  (data.username,salt,password_hash(data.password,salt)))
     issue(response,data.username);return dict(authenticated=True,username=data.username)
 
 @app.post('/api/login')
