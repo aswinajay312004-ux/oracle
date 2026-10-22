@@ -4,6 +4,7 @@
 
 - Active delivery branch: `claude/optimistic-gates-nkfe7f`. The branch was first fast-forwarded to remote commit `671c286` before changes were made.
 - The six untracked ERP audit files found at the start belonged to a different, richer branch. They were preserved and pushed as commit `f95876a` on `codex/erp-audit-checkpoint`. That checkpoint has 19 failing and 11 passing tests on its own branch; it is not merged into this ORDERENTRY delivery.
+- The verified delivery is pushed on `claude/optimistic-gates-nkfe7f`. GitHub `main` remains at `5ecaea7`: automatic approval review rejected the attempted default-branch fast-forward because that remote mutation requires explicit approval. No force push or workaround was used.
 - The current app uses `GARMENT_DEMO.ORDERENTRY` as its default save target. `EXCEL_ORDERS` and the older ORDMAS/ORDSTYLE/ORDSIZE path are historical here. `ORDER_TARGET=erp` does not switch this branch's entry flow.
 
 ## Completed in this branch
