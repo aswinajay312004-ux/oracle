@@ -65,6 +65,10 @@ For development, run `start-dev.bat`; it restarts the server when Python or fron
 
 The URL is local to this computer. The app has no built-in public sharing service; exposing it to other computers needs a separately reviewed deployment and authentication setup.
 
+### Local login recovery
+
+The POPPYS sign-in is stored in `data/poppys.sqlite3` (or `POPPYS_DATA_DIR` if set); it is separate from the Oracle database password. If an existing account rejects its password, run `.venv\Scripts\python.exe scripts\reset_local_admin.py` in Command Prompt from this repository. The command shows the local workspace and account name, asks twice for a new password without displaying it, backs up the SQLite database, and signs out old sessions. It leaves orders and Oracle credentials unchanged. Sign in with the new password after it finishes.
+
 For a fresh development or CI container only, `python scripts/create_test_schema.py` builds a **synthetic** `GARMENT_DEMO` from `docs/live_schema_columns.json`. It refuses to run if `GARMENT_DEMO` exists.
 
 ## Verify
