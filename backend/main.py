@@ -80,8 +80,8 @@ async def db_error(request,exc):
     code=getattr(exc.args[0],'full_code','') if exc.args else ''
     LOG.error('Oracle error on %s %s: %s',request.method,request.url.path,exc)   # full technical detail for developers, never to the screen
     if code.startswith('DPY-'):
-        return JSONResponse({'detail':'Oracle is not reachable. Start the local database (Docker, oracle26ai) and try again. Nothing was saved.','code':code},status_code=503)
-    return JSONResponse({'detail':FRIENDLY_ORA.get(code,'Oracle could not complete this request. Nothing was saved. Open the preview again and retry.')+f' ({code})','code':code},status_code=503)
+        return JSONResponse({'detail':'Oracle is not reachable. Check Saved orders before retrying: a connection failure may happen after a save commits. Then start the local database (Docker, oracle26ai) if needed.','code':code},status_code=503)
+    return JSONResponse({'detail':FRIENDLY_ORA.get(code,'Oracle could not confirm the result. Check Saved orders before retrying, then refresh the preview if needed.')+f' ({code})','code':code},status_code=503)
 
 def session(request):
     token=request.cookies.get('poppys_session','')
@@ -189,14 +189,10 @@ def upload_steps(file,user):
     store.identify(draft['orders'])
     draft['sections']=entry.find_sections(draft['sheets'],draft['orders'])
     draft['document']=document.document(draft)
-    if not apply_best_template(draft):
-        # No saved mapping fits: link the Excel tables (fabric, printing…) to the Oracle tables whose columns they name.
-        try:
-            with oracle.connect() as conn:
-                for sug in entry.suggest_links(conn,draft):
-                    draft['targets'].append(dict(table=sug['table'],rows='section',section=dict(id=sug['section']),link=sug['link'],auto=True,
-                        why=f"{sug['matched']} of {sug['headers']} Excel headers of {sug['title']} match {sug['table']} columns"))
-        except (oracledb.Error,RuntimeError):pass
+    # A matching table name or header is not proof that it is the right ERP destination.
+    # Only a previously reviewed template may add linked targets automatically. New
+    # sections remain in the JSON and the reviewer can inspect / explicitly map them.
+    apply_best_template(draft)
     draft['agent']=agent.run(draft)
     (DATA/(id+'.xlsx')).write_bytes(content)
     store.save(draft,user);store.log(user,'Uploaded workbook',draft['filename'],dict(draft=id,format=draft['format']))

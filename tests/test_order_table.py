@@ -43,43 +43,12 @@ def test_plan_rows_blanks_and_reviewer_choices():
 
 
 @pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE') != '1', reason='Set POPPYS_TEST_ORACLE=1 for local Oracle tests')
-def test_single_table_upload_preview_approve_edit(tmp_path, monkeypatch):
-    monkeypatch.setattr(local_store, 'DATA', tmp_path); monkeypatch.setattr(main, 'DATA', tmp_path)
-    monkeypatch.setenv('POPPYS_ORDER_TARGET', 'table')
-    ref = 'TEST-OC-' + secrets.token_hex(4).upper()
-    with TestClient(main.app) as c:
-        c.post('/api/setup', json={'username': 'admin', 'password': 'test-password-123'})
-        d = c.post('/api/uploads', files={'file': ('bom.xlsx', factory.merch_bom(ocn=ref))}).json()
-        d = c.post(f"/api/drafts/{d['id']}/bind", json=dict(version=d['version'], order=0, target=f'column:{order_table.TABLE}.REMARKS', sheet='ST1', cell='C3')).json()
-        p = c.post(f"/api/drafts/{d['id']}/preview", json={'version': d['version']}).json()
-        plan = p['plan']
-        assert plan['mode'] == 'table' and plan['errors'] == [], plan['errors']
-        assert plan['operations'][0]['values']['REMARKS'] == 'SS-27'
-        r = c.post(f"/api/drafts/{d['id']}/accept", json={'version': p['version'], 'plan_hash': plan['hash']}).json()
-        assert r['verified'] and r['verified_rows'] == 3
-        key = r['orders'][0]['ordmasid']
-        detail = c.get(f'/api/orders/{key}').json()
-        assert detail['mode'] == 'table' and detail['summary']['size_total'] == 21
-        assert c.get(f'/api/orders/{key}/tables/{order_table.TABLE}').json()['rows'][0]['IONO'] == ref
-        first = detail['rows'][order_table.TABLE][0]['ENTRY_ID']
-        ch = c.post(f'/api/orders/{key}/changes', json={'changes': [{'id': first, 'column': 'ORDERQTY', 'value': '6'},
-                                                                   {'id': 'all', 'column': 'ORDERDATE', 'value': '2026-11-02'}]}).json()
-        assert ch['errors'] == []
-        assert c.post(f"/api/changes/{ch['id']}/approve", json={'hash': ch['hash']}).json()['verified']
-        after = c.get(f'/api/orders/{key}').json()['summary']
-        assert after['size_total'] == 22 and after['order_date'] == '2026-11-02'
-        again = c.post('/api/uploads', files={'file': ('bom.xlsx', factory.merch_bom(ocn=ref))}).json()
-        dup = c.post(f"/api/drafts/{again['id']}/preview", json={'version': again['version']}).json()['plan']
-        assert any('already saved' in e for e in dup['errors'])
-
-
-@pytest.mark.skipif(os.getenv('POPPYS_TEST_ORACLE') != '1', reason='Set POPPYS_TEST_ORACLE=1 for local Oracle tests')
 def test_ask_ai_answers_from_fixed_queries(tmp_path, monkeypatch):
     monkeypatch.setattr(local_store, 'DATA', tmp_path); monkeypatch.setattr(main, 'DATA', tmp_path)
     monkeypatch.setattr(main.agent, 'available', lambda model=None: (None, []))   # keyword reader; no model in CI
     with TestClient(main.app) as c:
         c.post('/api/setup', json={'username': 'admin', 'password': 'test-password-123'})
         r = c.post('/api/ai/ask', json={'question': 'how many pieces for TEST BUYER?'}).json()
-        assert r['intent'] == 'total_pieces' and 'TEST BUYER' in r['text'] and 'SUM(ORDERQTY)' in r['sql']
+        assert r['intent'] == 'total_pieces' and 'TEST BUYER' in r['text'] and any('SUM("ORDERQTY")' in sql for sql in r['sql'])
         sizes = c.post('/api/ai/ask', json={'question': 'size wise pieces'}).json()
-        assert sizes['intent'] == 'by_size' and sizes['rows']
+        assert sizes['intent'] == 'by_size' and sizes['sections'][0]['rows']

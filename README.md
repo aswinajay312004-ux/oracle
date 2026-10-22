@@ -4,9 +4,9 @@ A local, offline, admin-only application that turns a buyer's Excel order into O
 
 **Upload → Review → Approve.** Nothing is written to Oracle until the admin approves the exact preview.
 
-## Simple mode: one Oracle table (default)
+## Current order entry flow
 
-`python scripts/create_order_table.py` creates **one** table, `GARMENT_DEMO.EXCEL_ORDERS`. It holds one row per size, and the order details repeat on every row, like the client's own `ORDERENTRY`. It uses familiar column names: IONO, BUYERNAME, STYLENO, PONUM, SHIPDT, COMBO, SIZES, ORDERQTY and so on. Every column's Oracle comment lists the Excel labels it accepts (for example `FOB date|Ship date|Delivery date`). After upload, POPPYS reads those labels from Oracle and fills each column from the matching Excel cell automatically. A column added later is matched the same way. Existing Oracle tables are not changed or deleted; in this mode the app only shows and writes this table. Set `ORDER_TARGET=erp` in `.env.poppys` to use the ORDMAS/ORDSTYLE/ORDSIZE writer instead.
+The current branch previews and writes to `GARMENT_DEMO.ORDERENTRY` by default (`ENTRY_TABLE` in `.env.poppys` can select another approved table). It reads live Oracle columns and maps workbook cells to the selected table; optional linked tables are added in the mapping screen only after their relationship is confirmed. Earlier `EXCEL_ORDERS` and ORDMAS/ORDSTYLE/ORDSIZE records remain readable for history, but `ORDER_TARGET=erp` does not change the current save path.
 
 ## Data Expert Agent and Ask AI
 
@@ -37,16 +37,16 @@ A local metadata store beside Oracle (nothing is added to client business tables
 ## Data rules
 
 - **Optional is normal.** A value missing from Excel stays blank (NULL) in Oracle. No zeros, empty strings or defaults are invented. A missing section (for example printing) creates no child records.
-- **Blocking issues are kept to real problems:** a value Oracle would reject (type, length, precision), a mandatory database column without a value, an ambiguous or cancelled master, a size quantity without a size, sizes that do not add up to the workbook's own total, a date that can be read two ways, or an order reference that already exists.
-- The order reference (`ORDMAS.DOCID`) is the one business value always needed. It identifies the order and prevents duplicate saves.
+- **Blocking issues are kept to real problems:** a value Oracle would reject (type, length, precision), a mandatory database column without a value, a size quantity without a size, sizes that do not add up to the workbook's own total, an ambiguous date, or an order reference that already exists.
+- The current `ORDERENTRY` path uses `IONO` as its order reference. The exact required columns are read from live Oracle metadata before approval.
 - **Source values are preserved.** The uploaded file is stored unchanged. Converted values (dates, numbers) keep the raw Excel value beside them. Formulas keep their text and cached value and are never recalculated. Edits are stored as revisions.
-- Buyer, style, description, colour, size and merchandiser are saved as links to their master records. Existing masters are reused; a new master is shown in the preview before it is created.
+- Buyer, style, description, colour, size and merchandiser are mapped to the selected table's actual columns. The current path does not create or link master records automatically.
 - Pieces-per-unit is optional. Without it, quantities are saved exactly as in Excel and the unit is left blank.
 
 ## Safety
 
 - An approved plan is written as **one transaction** (all records or none), then every record is read back on a new connection and compared before success is reported. Retrying after a lost response returns the original receipt; it never inserts twice.
-- Order edits use optimistic concurrency. If Oracle changed after the preview, the approval is refused. Totals (`ORDSTYLE.ORDQTY/PRODQTY`, `ORDMAS.OQTY`) are recalculated only when they were consistent before.
+- Order edits use optimistic concurrency. If Oracle changed after the preview, the approval is refused.
 - Table creation and foreign keys are separate, explicitly confirmed schema changes. Oracle DDL commits immediately, so it is never mixed with order writes. A guarded procedure accepts only a single `CREATE TABLE` or `ADD FOREIGN KEY` inside `GARMENT_DEMO`.
 - Application-level relationships are stored in POPPYS only and never create Oracle constraints.
 - Saved buyer templates are reused only where the label beside each mapped cell still matches. A changed layout is reported, never applied blindly.
@@ -56,18 +56,22 @@ A local metadata store beside Oracle (nothing is added to client business tables
 ## Start
 
 1. Start Docker Desktop and confirm the existing `oracle26ai` container is healthy.
-2. Run `python scripts/bootstrap_local.py` once. It creates the limited `POPPYS_APP` account and the ignored `.env.poppys` file. It does not reset or delete `GARMENT_DEMO`.
-3. Run `python scripts/upgrade_local.py`. It is additive and re-runnable. It grants read access for the explorer and update access to `ORDMAS/ORDSTYLE/ORDSIZE` for approved edits. It also creates the change and schema audit tables and the guarded schema-change procedure.
-4. Run `python scripts/create_order_table.py` (once; creates only `EXCEL_ORDERS`).
-5. Run `start.bat` (Command Prompt, or double-click it) or `./start.ps1` (PowerShell), open `http://127.0.0.1:8008`, create the admin account and upload a workbook.
+2. Run `setup-local.bat` once to create `.venv` and install Python dependencies. `start.bat` also runs this automatically when `.venv` is missing.
+3. If `.env.poppys` does not exist, run `.venv\Scripts\python.exe scripts\bootstrap_local.py` once. It creates the limited `POPPYS_APP` account without resetting `GARMENT_DEMO`.
+4. Run `.venv\Scripts\python.exe scripts\upgrade_local.py` to grant access to the current `ENTRY_TABLE` and explorer. This is additive and safe to rerun. `create_order_table.py` is only for the earlier `EXCEL_ORDERS` path and is not required for the current flow.
+5. Run `start.bat` (Command Prompt or double-click) or `.\start.ps1` (PowerShell), open the URL printed in the terminal, sign in, and upload a workbook. Keep the terminal open; Ctrl+C stops the server.
+
+For development, run `start-dev.bat`; it restarts the server when Python or frontend files change. Refresh the browser to load the new page. To bring in newly pushed commits on another machine, run `update-live.cmd` and refresh the browser. Both start scripts use port 8008 by default. If another server already owns 8008, in Command Prompt run `set POPPYS_PORT=8010` before `start.bat` or `start-dev.bat`; in PowerShell run `$env:POPPYS_PORT='8010'` before `.\start.ps1`.
+
+The URL is local to this computer. The app has no built-in public sharing service; exposing it to other computers needs a separately reviewed deployment and authentication setup.
 
 For a fresh development or CI container only, `python scripts/create_test_schema.py` builds a **synthetic** `GARMENT_DEMO` from `docs/live_schema_columns.json`. It refuses to run if `GARMENT_DEMO` exists.
 
 ## Verify
 
 ```
-python -m pytest -q                                   # unit and rule tests
-$env:POPPYS_TEST_ORACLE='1'; python -m pytest -q      # + local Oracle integration and end-to-end API tests
+.venv\Scripts\python.exe -m pytest -q                # install requirements-dev.txt first
+$env:POPPYS_TEST_ORACLE='1'; .venv\Scripts\python.exe -m pytest -q      # + local Oracle integration tests
 $env:POPPYS_TEST_DDL='1'                              # + adds a TEST_PRINT_* table to check table/relationship creation
 ```
 

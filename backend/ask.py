@@ -184,6 +184,12 @@ def size_table(rows):
 
 def answer(conn, table, q, model=None, pending=(), recent=(), context=None, links=(), saved=None):
     """saved: {order ref: POPPYS save info}; links: [{table, column, parent_column}] verified links from the order table."""
+    # The fixed aggregate queries below do not have a date predicate. Refuse time-scoped questions
+    # instead of returning an all-time figure that appears to answer the requested period.
+    time_scope = re.search(r'\b(?:this|last|previous)\s+(?:week|month|quarter|year)\b|\b(?:today|yesterday)\b|\b(?:past|last)\s+\d+\s+days?\b', q, re.I)
+    if time_scope:
+        return dict(intent='unsupported_filter', text=f'I cannot apply the requested time period ({time_scope.group(0)}) to this answer yet. Ask without that period or check the orders directly.',
+                    understood_by='explicit time constraint', sql=[], sections=[])
     cols = cols_of(conn, table)
     sqls = []
     refs, found_how = find_orders(conn, table, cols, q)

@@ -3,8 +3,8 @@ import os
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / 'data'
-DATA.mkdir(exist_ok=True)
+DATA = Path(os.environ.get('POPPYS_DATA_DIR') or ROOT / 'data').expanduser().resolve()
+DATA.mkdir(parents=True, exist_ok=True)
 VALUES = dotenv_values(ROOT / '.env.poppys')
 
 def setting(key, default=''):

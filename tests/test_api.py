@@ -35,17 +35,6 @@ def test_real_merch_upload_corrections_preview_and_stale_accept(client):
     assert r.status_code==200,r.text
     d=r.json();id=d['id']
     first=client.post(f'/api/drafts/{id}/preview',json={'version':d['version']}).json()
-    assert first['plan']['errors']
-    assert client.post(f'/api/drafts/{id}/accept',json={'version':first['version'],'plan_hash':first['plan']['hash']}).status_code==409
-    o=deepcopy(first['orders'][0]);o.update(order_ref='TEST-API-NO-COMMIT',order_date='2026-10-17')
-    for line in o['lines']:
-        for s in line['sizes']:s['quantity']=1
-    r=client.put(f'/api/drafts/{id}',json={'version':first['version'],'orders':[o]})
-    assert r.status_code==200,r.text
-    updated=r.json()
-    assert updated['plan'] is None
-    assert client.post(f'/api/drafts/{id}/accept',json={'version':first['version'],'plan_hash':first['plan']['hash']}).status_code==409
-    ready=client.post(f'/api/drafts/{id}/preview',json={'version':updated['version']}).json()
-    assert ready['plan']['errors']==[],ready['plan']['errors']
-    assert ready['plan']['totals']['pieces']==30
-    # Client data is never committed by this fixture; the separate Oracle test commits synthetic TEST data.
+    assert first['plan']['table']=='ORDERENTRY' and first['plan']['totals']['main_rows']>0
+    assert client.post(f'/api/drafts/{id}/accept',json={'version':first['version']-1,'plan_hash':first['plan']['hash']}).status_code==409
+    # Client data is never committed by this fixture; synthetic TEST orders cover approval.

@@ -12,9 +12,10 @@ def test_merch_sample_separate_from_bulk_and_summary():
     data=workbooks.parse(MERCH.read_bytes());o=data['orders'][0]
     assert o['style']=='N44441' # NOT worksheet title D70140
     assert o['buyer']=='NEXT'
-    assert o['quantity_basis']=='sample'
+    assert o['quantity_basis']=='order' # the sample block is present but contains no quantities
     assert len(o['lines'])==3
-    assert sum(s['quantity'] for l in o['lines'] for s in l['sizes'])==0
+    assert sum(s['quantity'] for l in o['lines'] for s in l['sizes'])==1500
+    assert sum(s['quantity'] for l in o['sample_lines'] for s in l['sizes'])==0
     assert sum(s['quantity'] for l in o['order_lines'] for s in l['sizes'])==1500
     assert o['order_date']=='' # BOM date does not prove confirmation date
     assert o['order_lines'][0]['sizes'][0]['source']['cell']=='E12'

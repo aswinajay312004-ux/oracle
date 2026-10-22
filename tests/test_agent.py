@@ -10,7 +10,7 @@ from tests.test_order_table import cols
 
 def test_deterministic_steps_and_sections():
     draft = dict(workbooks.parse(factory.merch_bom()), id='x', version=1)
-    rep = agent.run(draft, cols())
+    rep = agent.run(draft)
     keys = [s['key'] for s in rep['steps']]
     assert keys == ['read', 'layout', 'json', 'sections', 'match', 'ai']
     assert rep['steps'][1]['detail'] == 'Merch BOM'
@@ -29,7 +29,12 @@ class FakeResponse:
 
 def test_ai_proposals_are_validated(monkeypatch):
     draft = dict(workbooks.parse(factory.merch_bom(extra_header=True)), id='x', version=1)
-    c = cols()
+    c = {name: dict(meta, system=False, labels=[meta['label']]) for name, meta in cols().items()}
+    table = 'EXCEL_ORDERS'
+    plan = dict(table=table, orders=[dict(tables={table: dict(boxes={
+        'REMARKS': dict(state='blank'), 'PRICE': dict(state='blank')})})], unused=[
+        dict(sheet='ST1', cell='H3', label='Payment Terms', value='LC 60 DAYS'),
+        dict(sheet='ST1', cell='H2', label='Ship Mode', value='SEA')])
     monkeypatch.setattr(agent, 'available', lambda model=None: ('qwen2.5:7b', ['qwen2.5:7b']))
     seen = {}
     def fake_post(url, timeout, json):
@@ -40,31 +45,41 @@ def test_ai_proposals_are_validated(monkeypatch):
             {'column': 'BUYERNAME', 'cell': 'ST1!Z99', 'reason': 'made up'}]}              # not offered
         return FakeResponse({'message': {'content': __import__('json').dumps(answer)}})
     monkeypatch.setattr(agent.httpx, 'post', fake_post)
-    rep = agent.ai_review(draft, c)
+    rep = agent.ai_review(draft, plan, c)
     enum_cols = seen['schema']['properties']['mappings']['items']['properties']['column']['enum']
     assert 'REMARKS' in enum_cols and 'BUYERNAME' not in enum_cols  # only still-empty columns are offered
     accepted = [p for p in rep['proposals'] if p['accepted']]
     assert [(p['column'], p['value']) for p in accepted] == [('REMARKS', 'LC 60 DAYS')]
-    tv = draft['orders'][0]['table_values']['REMARKS']
-    assert tv['source']['cell'] == 'H3' and tv['source']['via'].startswith('AI suggestion')
+    binding = draft['orders'][0]['bind'][table]['REMARKS']
+    assert binding['cell'] == 'H3' and binding['via'].startswith('AI suggestion')
     assert len(rep['proposals']) == 3 and sum(not p['accepted'] for p in rep['proposals']) == 2
 
 
 def test_ai_skips_cleanly_without_a_model(monkeypatch):
     draft = dict(workbooks.parse(factory.merch_bom(extra_header=True)), id='x', version=1)
     monkeypatch.setattr(agent, 'available', lambda model=None: (None, []))
-    rep = agent.ai_review(draft, cols())
-    assert rep['status'] == 'skip' and 'not running' in rep['detail'] and 'table_values' not in draft['orders'][0]
+    c = {name: dict(meta, system=False, labels=[meta['label']]) for name, meta in cols().items()}
+    plan = dict(table='EXCEL_ORDERS', orders=[dict(tables={'EXCEL_ORDERS': dict(boxes={'REMARKS': dict(state='blank')})})],
+                unused=[dict(sheet='ST1', cell='H3', label='Payment Terms', value='LC 60 DAYS')])
+    rep = agent.ai_review(draft, plan, c)
+    assert rep['status'] == 'skip' and 'not running' in rep['detail'] and 'bind' not in draft['orders'][0]
 
 
 def test_ask_keyword_reader_picks_intent_and_real_filters():
     from backend import ask
-    buyers, styles, refs = ["CARTER'S", 'NEXT'], ['CT27085'], ['TEST-CT27085-01']
-    assert ask.keyword_intent("how many pieces for carter's?", buyers, styles, refs) == dict(intent='total_pieces', buyer="CARTER'S", style=None, oc=None)
-    assert ask.keyword_intent('how many orders this month', buyers, styles, refs)['intent'] == 'order_count'
-    assert ask.keyword_intent('size wise quantity of CT27085', buyers, styles, refs) == dict(intent='by_size', buyer=None, style='CT27085', oc=None)
-    assert ask.keyword_intent('which uploads are waiting for approval', buyers, styles, refs)['intent'] == 'pending'
-    assert ask.keyword_intent('pieces per buyer', buyers, styles, refs)['intent'] == 'by_buyer'
+    assert ask.keyword_intent("how many pieces for carter's?", False, "CARTER'S", None) == 'total_pieces'
+    assert ask.keyword_intent('how many orders this month', False, None, None) == 'order_count'
+    assert ask.keyword_intent('size wise quantity of CT27085', True, None, None) == 'order_sizes'
+    assert ask.keyword_intent('which uploads are waiting for approval', False, None, None) == 'pending'
+    assert ask.keyword_intent('pieces per buyer', False, None, None) == 'by_buyer'
+
+
+@pytest.mark.parametrize('question', ['how many orders this month', 'pieces for NEXT last year', 'orders in the past 30 days'])
+def test_ask_refuses_time_filter_it_cannot_apply(question):
+    from backend import ask
+    result = ask.answer(None, 'EXCEL_ORDERS', question)
+    assert result['intent'] == 'unsupported_filter'
+    assert result['sql'] == [] and 'cannot apply' in result['text']
 
 
 @pytest.mark.skipif(__import__('os').getenv('POPPYS_TEST_ORACLE') != '1', reason='Set POPPYS_TEST_ORACLE=1 for local Oracle tests')
@@ -83,7 +98,9 @@ def test_agent_ai_endpoint_applies_only_validated_proposals(tmp_path, monkeypatc
         r = c.post(f"/api/drafts/{d['id']}/agent/ai", json={'version': d['version']})
         assert r.status_code == 200, r.text
         got = r.json()
-        assert got['agent']['ai']['proposals'][0]['accepted'] and got['orders'][0]['table_values']['REMARKS']['value'] == 'LC 60 DAYS'
+        # Payment Terms is already mapped deterministically to PT. The model must not
+        # invent an extra REMARKS mapping when there is no unused candidate cell.
+        assert got['agent']['ai']['proposals'] == []
         p = c.post(f"/api/drafts/{d['id']}/preview", json={'version': got['version']}).json()['plan']
-        assert p['operations'][0]['values']['REMARKS'] == 'LC 60 DAYS'
-        assert p['operations'][0]['columns']['REMARKS']['source']['via'].startswith('AI suggestion')
+        assert p['operations'][0]['values']['PT'] == 'LC 60 DAYS'
+        assert 'REMARKS' not in p['operations'][0]['values']

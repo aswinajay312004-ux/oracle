@@ -8,4 +8,11 @@ tools/rea/
 docs/workbook_analysis/
 docs/live_sample_records.txt
 *.log
+.venv/
+.worktrees/
+.playwright-cli/
+output/
+tools/cloudflared.exe
+.qa-data/
+.qa-pytest*/
 

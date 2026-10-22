@@ -878,12 +878,13 @@ def commit(draft, expected_hash, approver, learned=None):
                 quoted = ','.join(f'"{n}"' for n in names)
                 c.execute(f'INSERT INTO {OWNER}."{table}" ({quoted}) VALUES ({",".join(":" + k for k in binds)})', binds)
                 rid = c.lastrowid
-                c.execute(f'SELECT {quoted} FROM {OWNER}."{table}" WHERE ROWID = :r', r=rid)
-                got = c.fetchone()
+                c.execute(f'SELECT ROWIDTOCHAR(ROWID), {quoted} FROM {OWNER}."{table}" WHERE ROWID = :r', r=rid)
+                found = c.fetchone()
+                canonical_rowid, got = (found[0], found[1:]) if found else (None, None)
                 if not got or not all(same(cols[n], vals[n], g) for n, g in zip(names, got)):
                     raise ValueError(f'{table}: a saved row did not read back the same. Nothing was saved.')
                 c.execute('SELECT PP_RECORD_SEQ.nextval FROM dual'); handle = c.fetchone()[0]
-                rows_out.append(dict(table=table, key=op['key'], row=op['row'], id=handle, rowid=rid, order=order_keys[op['order']],
+                rows_out.append(dict(table=table, key=op['key'], row=op['row'], id=handle, rowid=canonical_rowid, order=order_keys[op['order']],
                                      values={n: plain(g) for n, g in zip(names, got)}))
             result = dict(job_id=draft['id'], mode='entry', table=main, tables=list(checked['tables']), orders=orders_out, rows=rows_out,
                           links={t: info['link'] for t, info in checked['tables'].items() if info.get('link')},
@@ -928,6 +929,17 @@ def fetch_rows(conn, table, rowids):
         for r in c:
             rec = dict(zip(names, map(plain, r)))
             out[rec.pop('PP_ROWID')] = rec
+        # Older receipts stored the driver's compact ROWID spelling. It binds to the
+        # right Oracle row but differs from ROWIDTOCHAR, so retain that receipt key too.
+        for old in part:
+            if old in out:
+                continue
+            c.execute(f'SELECT ROWIDTOCHAR(t.ROWID) AS PP_ROWID, t.* FROM {OWNER}."{table}" t WHERE t.ROWID = :r', r=old)
+            found = c.fetchone()
+            if found:
+                rec = dict(zip([d[0] for d in c.description], map(plain, found)))
+                out[old] = rec
+                out[rec.pop('PP_ROWID')] = rec
     return out
 
 
@@ -1171,14 +1183,16 @@ def writable_tables(conn):
 
 
 def suggest_links(conn, draft, cache=None):
-    """Which other Oracle tables this upload's Excel tables belong to. A table is suggested for an Excel table when
-    POPPYS may add rows to it, it has the order's key column (IONO) to link the rows, and at least three of the
-    Excel headers name its columns (and at least half of them). Size blocks are the main table's own rows."""
+    """Unverified candidate tables for reviewer inspection, never automatic posting destinations.
+
+    Header similarity and a shared IONO name do not establish a business relationship.
+    The candidate list excludes the obsolete POPPYS EXCEL_ORDERS table.
+    """
     main = (draft.get('targets') or default_targets())[0]['table']
     used = {t['table'] for t in draft.get('targets') or []}
     out = []
     for table in writable_tables(conn):
-        if table in used or table == main:
+        if table in used or table == main or table == 'EXCEL_ORDERS':
             continue
         cols = (cache or {}).get(table) or columns(conn, table)
         if cache is not None:
