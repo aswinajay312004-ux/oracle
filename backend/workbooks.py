@@ -80,7 +80,9 @@ def inspect(content):
     return sheets
 
 def parse(content):
-    sheets=inspect(content)
+    return parse_sheets(inspect(content))
+
+def parse_sheets(sheets):
     orders=[]; formats=[]
     for sheet in sheets:
         if sheet['hidden']:

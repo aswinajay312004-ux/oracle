@@ -4,6 +4,7 @@ database exploration and admin-approved schema changes.
 Never drops, truncates or rewrites GARMENT_DEMO data. Each step checks whether it is
 already applied. Run after scripts/bootstrap_local.py.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -34,6 +35,17 @@ end;
 /'''
 
 
+def entry_table():
+    for line in CONFIG.read_text(encoding='utf-8').splitlines():
+        key, _, value = line.partition('=')
+        if key.strip() == 'ENTRY_TABLE' and value.strip():
+            name = value.strip().upper()
+            if not re.fullmatch(r'[A-Z][A-Z0-9_$#]{0,127}', name):
+                raise SystemExit('ENTRY_TABLE in .env.poppys is not a table name.')
+            return name
+    return 'ORDERENTRY'
+
+
 def exists(sql):
     return sqlplus(sql).strip() != '0'
 
@@ -52,6 +64,13 @@ end;
     steps.append('read access to GARMENT_DEMO tables')
     sqlplus('\n'.join(f'grant update on GARMENT_DEMO.{t} to POPPYS_APP;' for t in UPDATABLE))
     steps.append('approved order updates on ' + ', '.join(UPDATABLE))
+    # The order entry table POPPYS fills (ORDERENTRY unless ENTRY_TABLE says otherwise): add rows, and change them after approval.
+    entry = entry_table()
+    if exists(f"select count(*) from dba_tables where owner='GARMENT_DEMO' and table_name='{entry}';"):
+        sqlplus(f'grant select, insert, update on GARMENT_DEMO.{entry} to POPPYS_APP;')
+        steps.append(f'save and approved edits on {entry}')
+    else:
+        steps.append(f'{entry} not found in GARMENT_DEMO (nothing granted)')
     if not exists("select count(*) from dba_tables where owner='POPPYS_APP' and table_name='PP_CHANGE_LOG';"):
         sqlplus('''create table POPPYS_APP.PP_CHANGE_LOG (
  ID number generated always as identity primary key, CHANGESET varchar2(64) not null,

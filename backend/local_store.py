@@ -26,6 +26,8 @@ def init():
         CREATE TABLE IF NOT EXISTS change_sets(id TEXT PRIMARY KEY,ordmasid INTEGER,payload TEXT NOT NULL,status TEXT NOT NULL,
             created_by TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,applied_at TEXT);
         CREATE TABLE IF NOT EXISTS activity(id INTEGER PRIMARY KEY,at TEXT DEFAULT CURRENT_TIMESTAMP,actor TEXT,action TEXT,subject TEXT,detail TEXT);
+        CREATE TABLE IF NOT EXISTS learned_labels(table_name TEXT NOT NULL,column_name TEXT NOT NULL,label TEXT NOT NULL,
+            created_by TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(table_name,column_name,label));
         ''')
 
 def identify(orders):
@@ -183,3 +185,18 @@ def merge_table_values(old,incoming):
     for col,prev in (old or {}).items():
         result.setdefault(col,prev)
     return result
+
+def learn(table,column,label,actor):
+    """Remember that an Excel label means this column (from the person's own mapping), so the next upload matches it."""
+    with db() as c:
+        c.execute('DELETE FROM learned_labels WHERE table_name=? AND label=? AND column_name<>?',(table,label,column))
+        c.execute('INSERT OR IGNORE INTO learned_labels(table_name,column_name,label,created_by) VALUES (?,?,?,?)',(table,column,label,actor))
+
+def forget(table,column,label=None):
+    with db() as c:
+        if label is None:c.execute('DELETE FROM learned_labels WHERE table_name=? AND column_name=?',(table,column))
+        else:c.execute('DELETE FROM learned_labels WHERE table_name=? AND column_name=? AND label=?',(table,column,label))
+
+def learned():
+    with db() as c:
+        return [dict(r) for r in c.execute('SELECT table_name,column_name,label,created_by,created_at FROM learned_labels ORDER BY table_name,column_name,label')]

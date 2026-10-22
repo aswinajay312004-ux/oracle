@@ -79,7 +79,7 @@ def sections(sheets, orders):
     return out
 
 
-def anchors(sheets, used_cells, limit=60):
+def anchors(sheets, used_cells, limit=60):  # kept for older drafts; the engine's excel_pairs is used now
     """Compact label -> value pairs of the header area that no column has used yet (candidates for the AI)."""
     out = []
     for sheet in (s for s in sheets if not s['hidden']):
@@ -102,35 +102,38 @@ def anchors(sheets, used_cells, limit=60):
     return unique[:limit]
 
 
-def run(draft, cols=None, plan=None):
+def run(draft):
     """Deterministic part of the agent (fast, runs on every upload)."""
     sheets, orders = draft['sheets'], draft['orders']
     cells = sum(len(s['cells']) for s in sheets); formulas = sum(1 for s in sheets for c in s['cells'] if c['formula'])
     steps = [step('read', 'Workbook read', 'ok', f"{len(sheets)} sheet{'s' if len(sheets) != 1 else ''} · {cells:,} filled cells · {formulas:,} formulas kept as text"
                   + (f" · {sum(1 for s in sheets if s['hidden'])} hidden" if any(s['hidden'] for s in sheets) else '')),
              step('layout', 'Layout recognised', 'ok' if orders else 'warn',
-                  draft['format'] if orders else 'Unknown layout — map the main cells once, then save it as a template')]
+                  draft['format'] if orders else 'Unknown layout — click the order cells once in Edit mapping, then save it as a mapping')]
     sizes = sum(1 for o in orders for l in o.get('lines', []) for s in l.get('sizes', []) if s.get('quantity') not in (None, ''))
     steps.append(step('json', 'Converted to structured JSON', 'ok' if orders else 'info',
                       f"{len(orders)} order{'s' if len(orders) != 1 else ''} · {sum(len(o.get('lines', [])) for o in orders)} lines · {sizes} size quantities, each with its sheet and cell"))
     secs = sections(sheets, orders)
     steps.append(step('sections', 'Sections found', 'ok', f"{len(secs)} sections · "
                       + ', '.join(f"{s['name']}" for s in secs if s['status'] in ('saved', 'reference'))[:220]))
-    if cols:
-        from .order_table import label_values, FIELD
-        found = label_values(sheets, cols)
-        order_cols = [n for n, m in cols.items() if m['level'] == 'order']
-        o = orders[0] if orders else {}
-        matched = [n for n in order_cols if n in found or (FIELD.get(n) and str(o.get(FIELD[n]) or '').strip()) or (o.get('table_values') or {}).get(n)]
-        steps.append(step('match', 'Oracle columns matched', 'ok', f"{len(matched)} of {len(order_cols)} order columns filled from Excel labels · "
-                          f"size rows go to SIZES / ORDERQTY", matched=matched, total=len(order_cols)))
-        used = {f"{v['source']['sheet']}!{v['source']['cell']}" for v in found.values()}
-        used |= {f"{p.get('sheet')}!{p.get('cell')}" for p in (o.get('provenance') or {}).values() if isinstance(p, dict) and p.get('cell')}
-        unused = anchors(sheets, used, 30)
-    else:
-        steps.append(step('match', 'Oracle columns matched', 'skip', 'Oracle is not connected; matching happens when the preview is built'))
+    steps.append(step('match', 'Oracle columns matched', 'pending', 'Matching when Oracle is connected'))
     steps.append(step('ai', 'Local AI review', 'pending', 'Checking the cells no rule could place…'))
-    return dict(steps=steps, sections=secs, ran_at=now(), ai=dict(status='pending'), unused=unused if cols else [])
+    return dict(steps=steps, sections=secs, ran_at=now(), ai=dict(status='pending'))
+
+
+def matched(draft):
+    """Update the agent's match step from the preview (plan) the engine built."""
+    plan = draft.get('plan') or {}; rep = draft.setdefault('agent', run(draft))
+    for st in rep['steps']:
+        if st['key'] != 'match':
+            continue
+        if not plan:
+            st.update(status='skip', detail='Oracle is not connected; matching happens when the preview is built', at=now()); continue
+        t = plan['totals']; v = (plan.get('orders') or [{}])[0].get('tables', {}).get(plan['table'], {})
+        ai = sum(1 for b in v.get('boxes', {}).values() if b.get('state') == 'ai')
+        st.update(status='ok', at=now(), detail=f"{t['filled']} of {t['columns']} {plan['table']} columns filled from Excel" + (f' ({ai} by the local AI)' if ai else '')
+                  + f" · {t['main_rows']} row{'s' if t['main_rows'] != 1 else ''} ready · {t['blank']} left blank (not in Excel)")
+    return rep
 
 
 # Chat models in order of preference for structured mapping on a laptop (embedding models such as bge-m3 or
@@ -155,35 +158,30 @@ def available(model=None):
     return pick, names
 
 
-def ai_review(draft, cols, plan=None, model=None, timeout=180):
-    """Local model proposes which unused Excel cell fills which still-empty order column. Returns a report and
-    applies only validated proposals to draft['orders'][0]['table_values'] with an 'AI suggestion' source."""
-    from .order_table import FIELD, label_values
+def ai_review(draft, plan, cols, model=None, timeout=180):
+    """The local model proposes which unused Excel value fills which still-empty column of the main table. Only
+    validated proposals are applied, as cell mappings marked AI (the person can confirm or clear each one)."""
     from .oracle_store import convert
     orders = draft['orders']
-    if not orders or not cols:
+    if not orders or not plan or not cols:
         return dict(status='skip', detail='Nothing to review yet.', proposals=[])
-    o = orders[0]
-    found = label_values(draft['sheets'], cols)
-    used = {f"{v['source']['sheet']}!{v['source']['cell']}" for v in found.values()}
-    used |= {f"{p.get('sheet')}!{p.get('cell')}" for p in (o.get('provenance') or {}).values() if isinstance(p, dict) and p.get('cell')}
-    used |= {f"{(v.get('source') or {}).get('sheet')}!{(v.get('source') or {}).get('cell')}" for v in (o.get('table_values') or {}).values()}
-    empty = [n for n, m in cols.items() if m['level'] == 'order' and n not in found and not (FIELD.get(n) and str(o.get(FIELD[n]) or '').strip())
-             and n not in (o.get('table_values') or {})]
-    cand = anchors(draft['sheets'], used)
+    o = orders[0]; table = plan['table']
+    view = (plan.get('orders') or [{}])[0].get('tables', {}).get(table, {})
+    empty = [n for n, b in view.get('boxes', {}).items() if b.get('state') in ('blank', 'empty_label') and n in cols and not cols[n]['system']]
+    cand = [u for u in plan.get('unused') or [] if not u.get('inline')]
     if not empty:
-        return dict(status='ok', detail='Every order column already has a value or an explicit choice. Nothing for the AI to do.', proposals=[])
+        return dict(status='ok', detail='Every column already has a value or a choice. Nothing for the AI to do.', proposals=[])
     if not cand:
         return dict(status='ok', detail=f'{len(empty)} columns are empty, and the Excel has no unused label/value pairs for them. They stay blank.', proposals=[])
     model_name, names = available(model)
     if not model_name:
-        return dict(status='skip', detail=('Local AI is not running' if not names else f"Model {model or setting('OLLAMA_MODEL', 'qwen2.5:7b')} is not installed")
+        return dict(status='skip', detail=('Local AI is not running' if not names else f"Model {model or setting('OLLAMA_MODEL', 'qwen2.5:7b-instruct')} is not installed")
                     + '. The rule-based reading above is complete; you can map any remaining cell yourself.', proposals=[])
     by_cell = {f"{a['sheet']}!{a['cell']}": a for a in cand}
     schema = {'type': 'object', 'properties': {'mappings': {'type': 'array', 'items': {'type': 'object', 'properties': {
         'column': {'type': 'string', 'enum': empty}, 'cell': {'type': 'string', 'enum': list(by_cell)}, 'reason': {'type': 'string'}},
         'required': ['column', 'cell', 'reason']}}}, 'required': ['mappings']}
-    columns_txt = [dict(column=n, meaning=cols[n]['label'], excel_labels=sorted(cols[n]['synonyms'])[:8], type=cols[n]['type']) for n in empty]
+    columns_txt = [dict(column=n, meaning=cols[n]['label'], excel_labels=cols[n]['labels'][:8], type=cols[n]['type']) for n in empty]
     anchors_txt = [dict(cell=k, label=a['label'], value=str(a['value'])[:60]) for k, a in by_cell.items()]
     prompt = ('You are a garment-merchandising data expert. Match EMPTY Oracle columns to Excel label/value pairs. '
               'Only map when the Excel label clearly means the same business field as the column. When unsure, leave it out: '
@@ -211,8 +209,8 @@ def ai_review(draft, cols, plan=None, model=None, timeout=180):
             try:
                 convert(cols[col], a['value'])
                 p.update(accepted=True); taken.add(col)
-                o.setdefault('table_values', {})[col] = dict(value=a['value'], source=dict(source(a['sheet'], a['cell'], a['value'], a['formula']),
-                                                                                         via=f"AI suggestion ({model_name}): Excel label \"{a['label']}\""))
+                o.setdefault('bind', {}).setdefault(table, {})[col] = dict(kind='cell', sheet=a['sheet'], cell=a['cell'], ai=True,
+                                                                         via=f"AI suggestion ({model_name}): Excel label \"{a['label']}\"")
             except ValueError as exc:
                 p.update(accepted=False, why=f'value does not fit the column ({exc})')
         proposals.append(p)

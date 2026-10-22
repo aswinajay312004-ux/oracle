@@ -98,18 +98,76 @@ async function confirmDialog(title, message, action = 'Continue') {
 }
 
 /* Business-friendly names for Oracle tables (actual identifiers always shown alongside). */
-const TABLE_LABELS = { ORDMAS: 'Order header', ORDSTYLE: 'Order lines', ORDSIZE: 'Size quantities', BUYMAS: 'Buyers', STYLENUM: 'Style numbers', STYLEMAS: 'Garment descriptions',
-  SIZE_MAS: 'Sizes', COLORMAS: 'Colours', UNITMAS: 'Units', MERCHMAS: 'Merchandisers', PARTYMAS: 'Parties', ORDSHIP: 'Shipments', ORDFAB: 'Fabrics', ORDYARN: 'Yarns',
-  ORDACC: 'Accessories', ORDCOMP: 'Components', ORDDOC: 'Documents', ORDCMTFAB: 'CMT fabrics', ORDERENTRY: 'Order entry', EXCEL_ORDERS: 'Excel orders' };
-const COLUMN_LABELS = { DOCID: 'Order reference', BUYER: 'Buyer', STYLENO: 'Style number', STYLEDESC: 'Description', BONO: 'Buyer PO', ODATE: 'Order date', UOM: 'Unit',
-  SAMPLETYPE: 'Sample type', ORDCATEGORY: 'Category', MERCH: 'Merchandiser', OQTY: 'Order quantity', REMARKS: 'Remarks', STNO: 'Style', STYLENAME: 'Description',
-  PONUM: 'PO number', SUBNO: 'Line key', COMBO: 'Colour', ORDQTY: 'Line quantity', PRODQTY: 'Production qty', SHIPDT: 'Ship date', PUOM: 'Unit', SNO: 'Line no.',
-  GSIZE: 'Size', RQTY: 'Quantity', PQTY: 'Production qty', ORDSIZEROW: 'Row', SUB3_SUBNO: 'Line key', ORDMASID: 'Order ID', ORDSTYLEID: 'Line ID', ORDSIZEID: 'Size ID',
-  IONO: 'OC number', BUYERNAME: 'Buyer', SEASON: 'Season', DESCOUNTRY: 'Destination', ORDERDATE: 'Order date', BOMDATE: 'BOM date', FABIHDATE: 'Fabric in-house date',
-  PACKQTY: 'Packs', PRICE: 'Price', GARMENT: 'Garment', ORDSTYLEROW: 'Line no.', SIZES: 'Size', ORDERQTY: 'Quantity', QTYTYPE: 'Quantity type', SOURCE_FILE: 'Excel file',
-  SOURCE_CELL: 'Excel cell', ENTRY_ID: 'Row ID', ORDER_KEY: 'Order ID', IMPORT_ID: 'Import ID', CREATEDBY: 'Approved by', CREATEDON: 'Saved on' };
-const tableLabel = t => TABLE_LABELS[t] || t;
-const sourceChip = src => { if (!src) return ''; if (src.cell) return `<span class="chip" title="${esc(src.sheet)} ${esc(src.cell)}${src.value != null ? ' = ' + esc(src.value) : ''}${src.formula ? ' · ' + esc(src.formula) : ''}${src.via ? ' · ' + esc(src.via) : ''}">${icon('file')}${esc(src.sheet)}!${esc(src.cell)}</span>`; if (src.origin) return `<span class="chip manual">${esc(src.origin)}</span>`; return ''; };
+const TABLE_LABELS = { ORDERENTRY: 'Order entry', ORDMAS: 'Order header', ORDSTYLE: 'Order lines', ORDSIZE: 'Size quantities', BUYMAS: 'Buyers', STYLENUM: 'Style numbers',
+  STYLEMAS: 'Garment descriptions', SIZE_MAS: 'Sizes', COLORMAS: 'Colours', UNITMAS: 'Units', MERCHMAS: 'Merchandisers', PARTYMAS: 'Parties', ORDSHIP: 'Shipments',
+  ORDFAB: 'Order fabrics', ORDYARN: 'Order yarns', ORDACC: 'Order accessories', ORDCOMP: 'Order components', ORDDOC: 'Order documents', ORDCMTFAB: 'CMT fabrics',
+  EXCEL_ORDERS: 'Excel orders (earlier POPPYS table)', FABRICS: 'Fabrics', PRINTING: 'Printing', FINANCE: 'Finance' };
+const tableLabel = t => TABLE_LABELS[t] || String(t || '').replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase());
+/* Business groups: one colour each on the compare screen; the group name is always written next to the colour. */
+const GROUPS = { order: ['Order', '#4b5bd6'], buyer: ['Buyer', '#2f6fd1'], style: ['Style', '#7a52c7'], colour: ['Colour', '#c2477e'], size: ['Size & quantity', '#d9822b'],
+  fabric: ['Fabric', '#1f9a64'], shipment: ['Shipment', '#0e8a8a'], commercial: ['Price & terms', '#a67c00'], packing: ['Packing', '#8a6d3b'],
+  printing: ['Printing & embroidery', '#c0504d'], trims: ['Trims', '#5b6b7a'], other: ['Other', '#7c8a84'] };
+const groupColor = g => (GROUPS[g] || GROUPS.other)[1];
+const groupName = g => (GROUPS[g] || GROUPS.other)[0];
+const sourceChip = src => { if (!src) return ''; if (src.cell) return `<span class="chip" title="${esc(src.sheet)} ${esc(src.cell)}${src.value != null ? ' = ' + esc(src.value) : ''}${src.formula ? ' · ' + esc(src.formula) : ''}${src.via ? ' · ' + esc(src.via) : ''}">${icon('xls')}${esc(src.cell)}</span>`; if (src.origin) return `<span class="chip manual">${esc(src.origin)}</span>`; return ''; };
+const colLetter = n => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
+const splitRef = ref => { const m = String(ref || '').match(/^(.*)!([A-Z]+\d+)$/); return m ? { sheet: m[1], cell: m[2] } : null; };
+const fmtCell = v => v == null ? '' : typeof v === 'number' ? (Number.isInteger(v) ? String(v) : String(Math.round(v * 10000) / 10000)) : String(v);
+const fileSize = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+
+/* Excel viewer: the original workbook cells with real row numbers and column letters, merged cells and highlights.
+   marks: {address: 'class names'}; style: {address: inline css}. Large sheets show the first rows/columns that have data. */
+function xlGrid(sheet, { marks = {}, style = {}, maxRows = 400, maxCols = 40, selected = null } = {}) {
+  if (!sheet) return '<div class="empty">No worksheet.</div>';
+  const cells = new Map(sheet.cells.map(c => [c.row + ':' + c.col, c]));
+  const rows = Math.min(Math.max(1, ...sheet.cells.map(c => c.row)), maxRows), cols = Math.min(Math.max(1, ...sheet.cells.map(c => c.col)), maxCols);
+  const span = new Map(), hidden = new Set();
+  for (const rng of sheet.merged || []) {
+    const m = rng.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/); if (!m) continue;
+    const num = l => [...l].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0);
+    const c1 = num(m[1]), r1 = +m[2], c2 = num(m[3]), r2 = +m[4]; if (r1 > rows || c1 > cols) continue;
+    span.set(r1 + ':' + c1, [Math.min(r2, rows) - r1 + 1, Math.min(c2, cols) - c1 + 1]);
+    for (let r = r1; r <= Math.min(r2, rows); r++) for (let c = c1; c <= Math.min(c2, cols); c++) if (r !== r1 || c !== c1) hidden.add(r + ':' + c);
+  }
+  let html = `<table class="xl"><thead><tr><th class="rh"></th>${Array.from({ length: cols }, (_, i) => `<th>${colLetter(i + 1)}</th>`).join('')}</tr></thead><tbody>`;
+  for (let r = 1; r <= rows; r++) {
+    html += `<tr><td class="rh">${r}</td>`;
+    for (let c = 1; c <= cols; c++) {
+      const k = r + ':' + c; if (hidden.has(k)) continue;
+      const cell = cells.get(k); const addr = colLetter(c) + r; const sp = span.get(k);
+      const cls = ['c', cell ? '' : 'e', typeof cell?.value === 'number' ? 'n' : '', marks[addr] || '', selected === addr ? 'hit' : ''].filter(Boolean).join(' ');
+      html += `<td class="${cls}" data-cell="${addr}"${sp ? ` rowspan="${sp[0]}" colspan="${sp[1]}"` : ''}${style[addr] ? ` style="${style[addr]}"` : ''}${cell ? ` title="${esc(addr)}: ${esc(fmtCell(cell.value))}${cell.formula ? ' (formula ' + esc(cell.formula) + ')' : ''}"` : ''}>${cell ? esc(fmtCell(cell.value)) : ''}</td>`;
+    }
+    html += '</tr>';
+  }
+  const more = Math.max(...sheet.cells.map(c => c.row), 0) > maxRows || Math.max(...sheet.cells.map(c => c.col), 0) > maxCols;
+  return html + `</tbody></table>${more ? `<p class="xl-note" style="padding:8px">Showing rows 1–${rows} and columns A–${colLetter(cols)}.</p>` : ''}`;
+}
+function scrollToCell(wrap, addr) { const td = wrap?.querySelector(`[data-cell="${addr}"]`); if (!td) return; const w = wrap.getBoundingClientRect(), r = td.getBoundingClientRect();
+  wrap.scrollTo({ top: wrap.scrollTop + r.top - w.top - w.height / 2 + r.height / 2, left: wrap.scrollLeft + r.left - w.left - w.width / 3, behavior: 'smooth' }); }
+
+/* One Oracle column as a box: label, column name, value, and where the value came from. */
+const STATE_TEXT = { excel: 'From Excel', ai: 'AI suggestion — please check', typed: 'Typed by you', derived: 'Calculated from Excel', link: 'Same as the order', key: 'New number when saved',
+  auto: 'Next OC number', blank: 'Not in this Excel', empty_label: 'Label in Excel, value empty', cleared: 'Left blank by you', na: 'Not applicable', system: 'Filled by the ERP',
+  default: 'Oracle fills it', error: 'Needs a fix' };
+function boxValue(b) {
+  if (b.level === 'row' && b.count) {
+    const shown = b.values.slice(0, 3).join(', ') + (b.distinct > 3 ? ` +${b.distinct - 3}` : '');
+    return `<span class="val many">${esc(shown)}</span><small class="muted">${b.count} row${b.count === 1 ? '' : 's'}${b.total != null ? ` · total ${fmt(b.total)}` : ''}</small>`;
+  }
+  if (b.value != null && b.value !== '') return `<span class="val">${esc(fmtCell(b.value))}</span>`;
+  return `<span class="val">—</span>`;
+}
+function boxHtml(col, b, { selected = false, editing = false, edit } = {}) {
+  const state = b.state || 'blank'; const src = b.source || {};
+  const where = src.cell ? `${src.cell}${b.excel_label ? ' · ' + b.excel_label : ''}` : (b.note || STATE_TEXT[state] || '');
+  const input = editing && b.level !== 'row' && !col.system ? `<input data-edit="${esc(col.name)}" value="${esc(edit ?? (b.value ?? ''))}" ${col.type === 'DATE' ? 'type="date"' : col.type === 'NUMBER' ? 'inputmode="decimal"' : ''} aria-label="${esc(col.label)}">` : boxValue(b);
+  return `<div class="box s-${state}${selected ? ' sel' : ''}${editing ? ' editing' : ''}${edit !== undefined ? ' changed' : ''}" data-col="${esc(col.name)}" tabindex="0" role="button" aria-label="${esc(col.label)}: ${esc(b.value ?? STATE_TEXT[state] ?? '')}">
+    ${state === 'ai' ? '<span class="ai-tag">AI</span>' : ''}
+    <div class="top"><span class="lab" title="${esc(col.label)}">${esc(col.label)}</span><span class="code">${esc(col.name)}</span></div>
+    ${input}
+    <div class="src" title="${esc((b.note || '') + (src.via ? ' · ' + src.via : ''))}"><span class="pin" style="${state === 'excel' || state === 'derived' || state === 'link' ? `background:${groupColor(b.group)}` : ''}"></span><span>${esc(state === 'error' ? b.note : where)}</span></div></div>`;
+}
 
 function route(name, handler) { App.routes[name] = handler; }
 /* Page heading lives at the top of the content (title, subtitle, optional actions on the right). */

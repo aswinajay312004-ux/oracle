@@ -133,7 +133,9 @@ def convert(meta, value):
     kind=meta['type']
     if kind in ('VARCHAR2','CHAR','NVARCHAR2','NCHAR','CLOB'):
         result=value.isoformat()[:10] if isinstance(value,(datetime,date)) else (str(int(value)) if isinstance(value,float) and value.is_integer() else str(value))
-        if kind!='CLOB' and len(result.encode('utf-8'))>meta['length']:raise ValueError(f'longer than {meta["length"]} bytes')
+        if kind!='CLOB' and meta.get('char_used')=='C' and meta.get('char_length'):
+            if len(result)>meta['char_length']:raise ValueError(f'longer than {meta["char_length"]} characters')
+        elif kind!='CLOB' and len(result.encode('utf-8'))>meta['length']:raise ValueError(f'longer than {meta["length"]} bytes')
         return result
     if kind=='NUMBER':
         try:d=Decimal(str(value).strip().replace(',',''))
@@ -393,7 +395,10 @@ def history():
         out=[]
         for j,h,a,d,payload in c:
             result=json.loads(payload.read() if hasattr(payload,'read') else payload)
-            out.append(dict(job_id=j,plan_hash=h,approver=a,committed_at=d.isoformat(),orders=result.get('orders',[]),rows=len(result.get('rows',[])),mode=result.get('mode','erp')))
+            out.append(dict(job_id=j,plan_hash=h,approver=a,committed_at=d.isoformat(),orders=result.get('orders',[]),rows=len(result.get('rows',[])),mode=result.get('mode','erp'),
+                table=result.get('table'),tables=result.get('tables',[]),
+                # entry mode: where each saved row is (no values), so screens can read today's values by ROWID
+                row_refs=[dict(table=r['table'],rowid=r['rowid'],order=r.get('order'),id=r.get('id')) for r in result.get('rows',[]) if r.get('rowid')]))
         return out
 
 # ------------------------------------------------------------ saved orders

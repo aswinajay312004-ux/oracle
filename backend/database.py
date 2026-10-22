@@ -240,3 +240,101 @@ def schema_log(conn):
     c = conn.cursor()
     c.execute('SELECT ACTION,OBJECT_NAME,DDL,APPROVER,EXECUTED_AT FROM PP_SCHEMA_LOG ORDER BY EXECUTED_AT DESC FETCH FIRST 50 ROWS ONLY')
     return [dict(action=a, object=o, ddl=d.read() if hasattr(d, 'read') else d, approver=w, at=t.isoformat()) for a, o, d, w, t in c]
+
+
+# ---------------------------------------------------------------- browsing data (Database screen)
+
+TEXT_TYPES = ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR')
+
+
+def column_stats(conn, table, cols):
+    """How many rows have a value in each column (one query)."""
+    if not IDENT.match(table) or not cols:
+        raise KeyError('Table not found')
+    names = [n for n, m in cols.items() if IDENT.match(n) and m['type'] not in ('CLOB', 'BLOB', 'LONG', 'RAW')]
+    c = conn.cursor()
+    c.execute(f'SELECT count(*), {", ".join(f"count({chr(34)}{n}{chr(34)})" for n in names)} FROM {OWNER}."{table}"')
+    got = c.fetchone()
+    return dict(total=got[0], filled=dict(zip(names, got[1:])))
+
+
+def where_clause(cols, col=None, val=None, month=None, q=None, isnull=False):
+    """Bound filter for the data grid: one column equal to a value (or its month), and/or a text search."""
+    parts, binds = [], {}
+    if col:
+        if col not in cols or not IDENT.match(col):
+            raise ValueError('Unknown column.')
+        kind = cols[col]['type']
+        if isnull:
+            parts.append(f'"{col}" IS NULL')
+        elif month:
+            if not re.fullmatch(r'\d{4}-\d{2}', month) or not (kind == 'DATE' or kind.startswith('TIMESTAMP')):
+                raise ValueError('Month filter needs a date column and YYYY-MM.')
+            parts.append(f"TRUNC(\"{col}\", 'MM') = TO_DATE(:m, 'YYYY-MM')"); binds['m'] = month
+        elif kind == 'NUMBER':
+            try:
+                binds['v'] = Decimal(str(val))
+            except InvalidOperation:
+                raise ValueError('That value is not a number.')
+            parts.append(f'"{col}" = :v')
+        elif kind == 'DATE' or kind.startswith('TIMESTAMP'):
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', str(val or '')):
+                raise ValueError('Date filter needs YYYY-MM-DD.')
+            parts.append(f"TRUNC(\"{col}\") = TO_DATE(:v, 'YYYY-MM-DD')"); binds['v'] = val
+        else:
+            parts.append(f'"{col}" = :v'); binds['v'] = str(val)
+    if q:
+        text_cols = [n for n, m in cols.items() if m['type'] in TEXT_TYPES and IDENT.match(n)][:15]
+        if text_cols:
+            parts.append('(' + ' OR '.join(f'UPPER("{n}") LIKE :q' for n in text_cols) + ')')
+            binds['q'] = '%' + str(q).upper().replace('%', '').replace('_', '')[:60] + '%'
+    return (' WHERE ' + ' AND '.join(parts)) if parts else '', binds
+
+
+def browse(conn, table, cols, primary=(), offset=0, limit=50, **filters):
+    if not IDENT.match(table):
+        raise KeyError('Table not found')
+    where, binds = where_clause(cols, **filters)
+    c = conn.cursor()
+    c.execute(f'SELECT count(*) FROM {OWNER}."{table}"{where}', binds)
+    total = c.fetchone()[0]
+    if primary:
+        order = ' ORDER BY ' + ', '.join(f'"{p}" DESC' for p in primary)
+    elif {'IONO', 'ORDSTYLEROW', 'ORDSIZEROW'} <= set(cols):
+        order = ' ORDER BY "IONO", "ORDSTYLEROW", "ORDSIZEROW"'
+    else:
+        order = ' ORDER BY ROWID'
+    c.execute(f'SELECT ROWIDTOCHAR(t.ROWID) AS PP_ROWID, t.* FROM {OWNER}."{table}" t{where}{order} OFFSET {int(max(offset, 0))} ROWS FETCH NEXT {int(min(max(limit, 1), 200))} ROWS ONLY', binds)
+    names = [d[0] for d in c.description]
+    from .oracle_store import plain
+    rows = [dict(zip(names, map(plain, r))) for r in c.fetchall()]
+    return dict(table=table, total=total, offset=offset, rows=rows)
+
+
+def chart(conn, table, cols, by, measure='rows', period=None, limit=15, **filters):
+    """Grouped figures for one chart; every group carries the filter that opens its rows."""
+    if not IDENT.match(table) or by not in cols:
+        raise ValueError('Choose a column to group by.')
+    kind = cols[by]['type']
+    if measure == 'rows':
+        agg = 'count(*)'
+    elif measure == 'orders' and 'IONO' in cols:
+        agg = 'count(DISTINCT "IONO")'
+    elif measure.startswith('sum:') and measure[4:] in cols and cols[measure[4:]]['type'] == 'NUMBER':
+        agg = f'NVL(sum("{measure[4:]}"),0)'
+    else:
+        raise ValueError('Unknown measure.')
+    where, binds = where_clause(cols, **filters)
+    c = conn.cursor()
+    if kind == 'DATE' or kind.startswith('TIMESTAMP'):
+        c.execute(f'''SELECT TO_CHAR(TRUNC("{by}", 'MM'), 'YYYY-MM') g, {agg} FROM {OWNER}."{table}"{where}{" AND" if where else " WHERE"} "{by}" IS NOT NULL
+            GROUP BY TRUNC("{by}", 'MM') ORDER BY TRUNC("{by}", 'MM') DESC FETCH FIRST 12 ROWS ONLY''', binds)
+        groups = [dict(label=g, value=float(v) if v is not None else 0, filter=dict(col=by, month=g)) for g, v in c][::-1]
+    else:
+        c.execute(f'''SELECT "{by}" g, {agg} v FROM {OWNER}."{table}"{where} GROUP BY "{by}" ORDER BY v DESC NULLS LAST, g FETCH FIRST {int(limit)} ROWS ONLY''', binds)
+        from .oracle_store import plain
+        groups = [dict(label='(blank)' if g is None else str(plain(g)), value=float(v) if v is not None else 0,
+                       filter=dict(col=by, isnull=True) if g is None else dict(col=by, val=str(plain(g)))) for g, v in c]
+    for g in groups:
+        g['value'] = int(g['value']) if float(g['value']).is_integer() else g['value']
+    return dict(table=table, by=by, measure=measure, groups=groups)

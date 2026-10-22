@@ -224,7 +224,8 @@ def record(draft, receipt, actor):
     """After an Oracle commit: register each order's UUID, link its rows, store field-level lineage, what every blank
     means and the checks that ran. Idempotent (safe to repeat after a crash)."""
     plan = draft.get('plan') or {}; ops = {op['key']: op for op in plan.get('operations', [])}
-    table_mode = receipt.get('mode') == 'table'
+    table_mode = receipt.get('mode') in ('table', 'entry')
+    entry_mode = receipt.get('mode') == 'entry'
     with db() as s:
         for oi, o in enumerate(receipt.get('orders', [])):
             row = s.execute('SELECT uuid FROM order_registry WHERE job_id=? AND order_id=?', (receipt['job_id'], o['ordmasid'])).fetchone()
@@ -232,7 +233,8 @@ def record(draft, receipt, actor):
             s.execute('''INSERT OR IGNORE INTO order_registry(uuid, job_id, order_id, order_ref, mode, target_table, file_hash, filename, approved_by, approved_at, mapping_version, template)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (oid, receipt['job_id'], o['ordmasid'], o['order_ref'], receipt.get('mode', 'erp'), receipt.get('table'),
                 draft.get('filehash'), draft.get('filename'), actor, receipt.get('committed_at'), draft.get('version'), json.dumps(draft.get('template'))))
-            mine = [r for r in receipt['rows'] if (r['values'].get('ORDER_KEY') == o['ordmasid']) or (not table_mode and r['values'].get('ORDMASID') == o['ordmasid'])
+            mine = [r for r in receipt['rows'] if (entry_mode and r.get('order') == o['ordmasid']) or (not entry_mode and r['values'].get('ORDER_KEY') == o['ordmasid'])
+                    or (not table_mode and r['values'].get('ORDMASID') == o['ordmasid'])
                     or (not table_mode and r['table'] not in ('ORDMAS', 'ORDSTYLE', 'ORDSIZE'))]
             for r in mine:
                 s.execute('INSERT OR IGNORE INTO record_links VALUES (?,?,?)', (oid, r['table'], r.get('id')))
@@ -268,8 +270,11 @@ def field_states(plan, excel_order, order_key, rows):
     """PROVIDED: a value was saved. NOT_APPLICABLE: the reviewer said so. UNKNOWN: Excel has the label but no value.
     NOT_PROVIDED: nothing about it in Excel. An absent field is never turned into 'false' or 'not applicable'."""
     meta = (plan.get('tables') or {}).get(plan.get('table'), {}).get('columns', [])
-    first = rows[0]['values'] if rows else {}
+    first = next((r['values'] for r in rows if r.get('table', plan.get('table')) == plan.get('table')), {}) if rows else {}
     chosen = excel_order.get('table_values') or {}
+    for col, b in ((excel_order.get('bind') or {}).get(plan.get('table')) or {}).items():
+        if b.get('kind') == 'na':
+            chosen[col] = {'source': {'origin': 'Not applicable'}}
     labelled = set(plan.get('labelled_blank') or [])
     out = {}
     for c in meta:
@@ -356,18 +361,18 @@ def approve_metric(metric_id, actor):
         s.execute("UPDATE business_metrics SET status='APPROVED', approved_by=?, approved_at=? WHERE id=?", (actor, now(), metric_id))
 
 
-def seed_metrics(table):
+def seed_metrics(table, key='ORDER_KEY'):
     """Starting definitions for the single order table. They follow from how POPPYS writes that table, but they stay
     PROPOSED until the business owner approves them: the system never approves its own formulas."""
     with db() as s:
         if s.execute('SELECT count(*) FROM business_metrics').fetchone()[0]:
             return
     for m in [
-        dict(name='Order quantity (pieces)', definition='Pieces ordered in one order.', formula=f'SUM(ORDERQTY) FROM {table} GROUP BY ORDER_KEY',
+        dict(name='Order quantity (pieces)', definition='Pieces ordered in one order.', formula=f'SUM(ORDERQTY) FROM {table} GROUP BY {key}',
              grain='one order', null_handling='Rows without a quantity are not counted.',
-             duplicate_handling=f'Never SUM(OQTY): OQTY repeats on every row of an order. Use SUM(ORDERQTY), or MAX(OQTY) per ORDER_KEY.'),
-        dict(name='Total orders', definition='Number of saved orders.', formula=f'COUNT(DISTINCT ORDER_KEY) FROM {table}', grain='all orders',
-             duplicate_handling='Count ORDER_KEY once; a table row is one size, not one order.'),
+             duplicate_handling=f'Never SUM(OQTY): OQTY repeats on every row of an order. Use SUM(ORDERQTY), or MAX(OQTY) per {key}.'),
+        dict(name='Total orders', definition='Number of saved orders.', formula=f'COUNT(DISTINCT {key}) FROM {table}', grain='all orders',
+             duplicate_handling=f'Count {key} once; a table row is one size, not one order.'),
         dict(name='Quantity by size', definition='Pieces per size across orders.', formula=f'SUM(ORDERQTY) FROM {table} GROUP BY SIZES', grain='one size name',
              null_handling='Size names are compared exactly as written in Excel ("Up To 1M" and "Up To 1Mth" are different).'),
     ]:
