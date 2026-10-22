@@ -1,237 +1,178 @@
 'use strict';
-/* Orders: saved order history, details, visualization, approved edits and audit trail. */
-const OR = { q: '', filter: 'all', sort: 'new', items: null };
+/* Orders: everything POPPYS saved to Oracle. Open an order to see its values (with their Excel cells), change them
+   with approval, and read its history. Values always come from Oracle as it is now. */
+const ORD = { list: [], q: '', filter: 'all', id: null, data: null, editing: false, edits: {}, rowEdits: {} };
+const DERIVED_COLS = new Set(['ORDSTYLEROW', 'ORDSIZEROW', 'COMBOQTY']);
+const SIZE_COLS = ['COMBO', 'SIZES', 'ORDERQTY'];
 
-route('orders', async (view, [id, action]) => {
-  setTitle('Orders', 'Every approved order, read live from Oracle');
-  if (id && action === 'edit') return renderEdit(view, Number(id));
-  OR.items = await api('/api/orders');
-  const drafts = (await api('/api/drafts')).filter(d => !d.committed);
-  view.innerHTML = `<div class="stack"><section class="card"><div class="toolbar">
-      <label class="search">${icon('search')}<input id="o-q" placeholder="Search order, buyer, style, file…" value="${esc(OR.q)}" aria-label="Search orders"></label>
-      <div class="seg" id="o-filter">${[['all', 'All'], ['edited', 'Edited'], ['pending', `Awaiting approval (${drafts.length})`]].map(([k, l]) => `<button type="button" data-f="${k}" class="${OR.filter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
-      <select id="o-sort" aria-label="Sort">${[['new', 'Newest first'], ['old', 'Oldest first'], ['qty', 'Largest quantity'], ['ref', 'Order reference']].map(([k, l]) => `<option value="${k}" ${OR.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
-      <a class="btn primary" href="#/new">${icon('plus')} New order</a></div>
-    <div id="o-table"></div></section></div>`;
-  const draw = () => { $('#o-table', view).innerHTML = OR.filter === 'pending' ? pendingTable(drafts) : ordersTable(); paintIcons(view); wireMenus(view); };
-  $('#o-q', view).addEventListener('input', e => { OR.q = e.target.value; draw(); });
-  $('#o-sort', view).addEventListener('change', e => { OR.sort = e.target.value; draw(); });
-  $$('[data-f]', view).forEach(b => b.onclick = () => { OR.filter = b.dataset.f; $$('[data-f]', view).forEach(x => x.classList.toggle('active', x === b)); draw(); });
+route('orders', async (view, [id]) => {
+  setTitle('Orders', 'Orders saved to Oracle by POPPYS. Open one to see its values, edit them with approval, and see its history.',
+    `<a class="btn primary" href="#/new">${icon('upload')} New order</a>`);
+  ORD.list = await api('/api/orders');
+  page(view, `<section class="card"><div class="orders-bar">
+      <div class="search">${icon('search')}<input id="o-q" placeholder="Search OC number, buyer, style or file" value="${esc(ORD.q)}" aria-label="Search orders"></div>
+      <div class="seg">${[['all', 'All'], ['editable', 'Editable'], ['earlier', 'Earlier versions']].map(([k, l]) =>
+        `<button type="button" data-of="${k}" class="${ORD.filter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <span class="muted" id="o-count" style="margin-left:auto"></span></div>
+    <div id="o-table"></div></section>`);
+  const draw = () => drawOrders($('#o-table', view));
+  $('#o-q', view).oninput = e => { ORD.q = e.target.value; draw(); };
+  $$('[data-of]', view).forEach(b => b.onclick = () => { ORD.filter = b.dataset.of; $$('[data-of]', view).forEach(x => x.classList.toggle('active', x === b)); draw(); });
   draw();
-  if (id) openOrder(Number(id), action === 'visual' ? 'visual' : action === 'history' ? 'history' : 'details');
+  if (id) openOrder(Number(id));
 });
 
-function ordersTable() {
-  const q = OR.q.trim().toLowerCase();
-  let items = OR.items.filter(o => !q || [o.order_ref, o.buyer, o.style, o.filename, String(o.ordmasid)].some(v => String(v || '').toLowerCase().includes(q)));
-  if (OR.filter === 'edited') items = items.filter(o => o.edits);
-  const sorters = { new: (a, b) => String(b.saved_at).localeCompare(String(a.saved_at)), old: (a, b) => String(a.saved_at).localeCompare(String(b.saved_at)), qty: (a, b) => num(b.quantity) - num(a.quantity), ref: (a, b) => String(a.order_ref).localeCompare(String(b.order_ref)) };
-  items.sort(sorters[OR.sort]);
-  if (!items.length) return `<div class="empty">${icon('list')}<p>${OR.items.length ? 'No orders match your search.' : 'No orders saved yet. Upload an Excel order to get started.'}</p></div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>Order</th><th>Buyer</th><th>Style</th><th class="num">Quantity</th><th>Order date</th><th>Saved</th><th>Status</th><th></th></tr></thead><tbody>
-    ${items.map(o => `<tr><td class="clickable" data-open="${o.ordmasid}"><strong>${esc(o.order_ref)}</strong><span class="sub">${esc(o.filename || '')} · ID ${o.ordmasid}</span></td><td>${esc(o.buyer || '—')}</td><td>${esc(o.style || '—')}</td>
-      <td class="num">${fmt(o.quantity)}</td><td>${esc(o.order_date || '—')}</td><td>${when(o.saved_at)}<span class="sub">by ${esc(o.approver)}</span></td>
-      <td>${o.status === 'Saved' ? '<span class="badge green">Saved</span>' : `<span class="badge amber">${esc(o.status)}</span>`}${o.edits ? ` <span class="badge blue">${plural(o.edits, 'edit')}</span>` : ''}</td>
-      <td class="num"><div class="menu-wrap"><button class="icon-btn" data-menu="${o.ordmasid}" aria-label="Actions for ${esc(o.order_ref)}" aria-haspopup="menu">${icon('dots')}</button></div></td></tr>`).join('')}</tbody></table></div>`;
+function drawOrders(el) {
+  const q = ORD.q.trim().toLowerCase();
+  const items = ORD.list.filter(o => (ORD.filter === 'all' || (ORD.filter === 'editable' ? o.editable : !o.editable))
+    && (!q || `${o.order_ref} ${o.buyer || ''} ${o.style || ''} ${o.filename || ''}`.toLowerCase().includes(q)));
+  $('#o-count').textContent = plural(items.length, 'order');
+  if (!ORD.list.length) { el.innerHTML = `<div class="empty">${icon('file')}<p>No orders saved yet.</p><p><a class="btn primary" href="#/new">${icon('upload')} Upload a buyer Excel</a></p></div>`; paintIcons(el); return; }
+  if (!items.length) { el.innerHTML = '<div class="empty">No order matches the search.</div>'; return; }
+  el.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>OC number</th><th>Buyer</th><th>Style</th><th class="num">Pieces</th><th class="num">Rows</th>
+    <th>Saved on</th><th>Saved by</th><th>Status</th><th><span class="visually-hidden">Open</span></th></tr></thead><tbody>
+    ${items.map(o => `<tr class="clickable" data-open="${o.ordmasid}"><td><strong>${esc(o.order_ref)}</strong>${o.mode !== 'entry' ? ' <span class="badge">earlier version</span>' : ''}
+        ${o.filename ? `<span class="sub">${esc(o.filename)}</span>` : ''}</td><td>${esc(o.buyer || '—')}</td><td>${esc(o.style || '—')}</td>
+      <td class="num">${fmt(o.quantity)}</td><td class="num">${fmt(o.rows)}</td><td>${when(o.saved_at)}${o.edits ? `<span class="sub">${plural(o.edits, 'approved change')}</span>` : ''}</td>
+      <td><span class="who"><i>${esc((o.approver || '?').slice(0, 1).toUpperCase())}</i>${esc(o.approver || '—')}</span></td>
+      <td><span class="status-chip ${o.status === 'Saved' ? 'green' : 'red'}">${esc(o.status)}</span></td>
+      <td><button class="dots-btn" type="button" data-open="${o.ordmasid}" aria-label="Open order ${esc(o.order_ref)}">${icon('eye')}</button></td></tr>`).join('')}</tbody></table></div>`;
+  paintIcons(el);
+  $$('tr[data-open]', el).forEach(r => r.onclick = () => go(`#/orders/${r.dataset.open}`));
 }
-function pendingTable(drafts) {
-  if (!drafts.length) return `<div class="empty">${icon('check')}<p>Nothing is waiting for approval.</p></div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>Workbook</th><th>Orders</th><th>Uploaded</th><th></th></tr></thead><tbody>${drafts.map(d => `<tr><td><strong>${esc(d.filename)}</strong><span class="sub">${esc(d.format)}</span></td><td>${esc(d.refs.filter(Boolean).join(', ') || plural(d.orders, 'order'))}</td><td>${when(d.created_at)}</td><td class="num"><a class="btn small soft" href="#/new/${esc(d.id)}">Review &amp; approve</a></td></tr>`).join('')}</tbody></table></div>`;
+
+/* ------------------------------------------------------------------ one order */
+function openOrder(id) {
+  Object.assign(ORD, { id, data: null, editing: false, edits: {}, rowEdits: {} });
+  const o = ORD.list.find(x => x.ordmasid === id);
+  Drawer.open({ eyebrow: 'Saved order', title: o ? `Order ${o.order_ref}` : 'Order', wide: true,
+    tabs: [['details', 'Details'], ['rows', 'Saved rows'], ['history', 'History']], active: 'details',
+    render: async tab => {
+      if (!ORD.data || ORD.data.ordmasid !== id) ORD.data = await api(`/api/orders/${id}`);
+      $('#drawer-title').textContent = `Order ${ORD.data.summary?.order_ref || o?.order_ref || id}`;
+      if (tab === 'rows') return rowsTab(ORD.data);
+      if (tab === 'history') return historyTab(await api(`/api/orders/${id}/history`), ORD.data);
+      return detailsTab(ORD.data);
+    },
+    after: (body, tab) => { if (tab === 'details') wireDetails(body); } });
 }
-function wireMenus(view) {
-  $$('[data-open]', view).forEach(td => td.onclick = () => openOrder(Number(td.dataset.open)));
-  $$('[data-menu]', view).forEach(btn => btn.onclick = e => {
-    e.stopPropagation(); $$('.menu').forEach(m => m.remove()); const id = btn.dataset.menu;
-    const menu = document.createElement('div'); menu.className = 'menu'; menu.setAttribute('role', 'menu');
-    menu.innerHTML = [['eye', 'View details', () => openOrder(Number(id))], ['edit', 'Edit order', () => go(`#/orders/${id}/edit`)], ['flow', 'View database flow', () => go(`#/database/flow/${id}`)],
-      ['chart', 'Visualization', () => openOrder(Number(id), 'visual')], ['history', 'View change history', () => openOrder(Number(id), 'history')]].map(([ic, l], i) => `<button type="button" role="menuitem" data-i="${i}">${icon(ic)}${l}</button>`).join('');
-    const actions = [() => openOrder(Number(id)), () => go(`#/orders/${id}/edit`), () => go(`#/database/flow/${id}`), () => openOrder(Number(id), 'visual'), () => openOrder(Number(id), 'history')];
-    $$('button', menu).forEach(b => b.onclick = () => { menu.remove(); actions[Number(b.dataset.i)](); });
-    document.body.appendChild(menu); const r = btn.getBoundingClientRect();
-    menu.style.position = 'fixed'; menu.style.top = `${Math.min(r.bottom + 4, innerHeight - 230)}px`; menu.style.left = `${Math.max(8, r.right - 214)}px`; menu.style.right = 'auto';
-    menu.querySelector('button').focus();
+
+function boxesFor(d, t) {
+  const rows = (d.rows[t] || []).filter(r => !r._missing); const srcs = d.sources?.columns?.[t] || {};
+  return (d.columns[t] || []).map(c => {
+    const vals = rows.map(r => r[c.name]); const present = vals.filter(v => v != null && v !== '');
+    const distinct = [...new Set(present.map(String))];
+    const level = distinct.length > 1 ? 'row' : 'order'; const src = srcs[c.name];
+    const state = !present.length ? (c.system ? 'system' : 'blank') : c.system ? 'system' : src ? 'excel' : DERIVED_COLS.has(c.name) ? 'derived' : 'typed';
+    const nums = present.filter(v => typeof v === 'number');
+    return { col: c, box: { level, count: present.length, values: distinct.slice(0, 8), distinct: distinct.length, value: level === 'order' ? present[0] ?? null : null,
+      total: level === 'row' && c.name === 'ORDERQTY' && nums.length ? nums.reduce((a, b) => a + b, 0) : null, state, source: src || (state === 'derived' ? { origin: 'Calculated from Excel' } : null),
+      note: state === 'typed' ? 'Value in Oracle' : state === 'system' ? 'Filled by the ERP' : null } };
   });
 }
-document.addEventListener('click', () => $$('.menu').forEach(m => m.remove()));
-document.addEventListener('keydown', e => { if (e.key === 'Escape') $$('.menu').forEach(m => m.remove()); });
+function canEdit(d) { return d.editable && Object.values(d.can_update || {}).some(Boolean); }
 
-const orderCache = {};
-async function loadOrder(id, fresh = false) { if (fresh || !orderCache[id]) orderCache[id] = await api(`/api/orders/${id}`); return orderCache[id]; }
-
-function openOrder(id, tab = 'details') {
-  Drawer.open({ eyebrow: 'Order', title: `Order ${id}`, tabs: [['details', 'Details'], ['visual', 'Visualization'], ['history', 'Change history'], ['trail', 'Data trail']], active: tab, wide: true,
-    after: (body, t) => { if (t === 'trail') wireTrail(body, id); }, render: async t => { const d = await loadOrder(id, true); $('#drawer-title').textContent = d.summary.order_ref || `Order ${id}`;
-      if (t === 'visual') return orderDashboard(d);
-      if (t === 'history') return historyHtml(await api(`/api/orders/${id}/history`));
-      if (t === 'trail') return trailHtml(id, await api(`/api/orders/${id}/foundation`));
-      return orderDetails(d); } });
+function detailsTab(d) {
+  const s = d.summary || {}; const imp = d.import_ || {};
+  const facts = [['OC number', s.order_ref], ['Buyer', s.buyer], ['Style', s.style], ['Pieces', s.size_total ? fmt(s.size_total) : null], ['Ship date', s.ship_date],
+    ['Saved by', imp.approver], ['Saved on', imp.committed_at && when(imp.committed_at)]].filter(([, v]) => v != null && v !== '');
+  const head = `<div class="row between"><div class="facts" style="margin:0">${facts.map(([k, v]) => `<div><span>${k}</span><strong>${esc(v)}</strong></div>`).join('')}
+      ${imp.filename ? `<div><span>Excel file</span><strong><a href="/api/drafts/${esc(imp.job_id)}/file">${esc(imp.filename)}</a></strong></div>` : ''}</div>
+    ${canEdit(d) && !ORD.editing ? `<button class="btn primary" id="o-edit">${icon('edit')} Edit</button>` : ''}</div>`;
+  const notes = [d.mode !== 'entry' ? `<div class="callout info">${icon('info')}<div>Saved by an earlier version of POPPYS; view only.</div></div>` : '',
+    s.missing ? `<div class="callout attention">${icon('alert')}<div>${plural(s.missing, 'saved row')} of this order ${s.missing === 1 ? 'is' : 'are'} no longer in Oracle (changed or removed outside POPPYS).</div></div>` : '',
+    s.reconciled === false ? `<div class="callout attention">${icon('alert')}<div>The size quantities add up to ${fmt(s.size_total)}, but the total pieces (OQTY) is ${fmt(s.total)}.</div></div>` : '',
+    ORD.editing ? `<div class="callout">${icon('info')}<div>Change a box to change it on every row of the order, or change a size row. Nothing is saved until you review and approve the changes.</div></div>` : ''].join('');
+  const tables = Object.keys(d.rows || {}).map(t => {
+    const items = boxesFor(d, t); const filled = items.filter(x => x.box.count), blank = items.filter(x => !x.box.count);
+    const editing = ORD.editing && d.can_update?.[t];
+    const box = x => boxHtml(x.col, x.box, editing && x.box.level === 'order' && !x.col.system ? { editing: true, edit: ORD.edits[t]?.[x.col.name] } : {});
+    return `<section class="stack tight" data-table="${esc(t)}"><div class="group-head"><h3>${esc(tableLabel(t))} <code style="color:var(--muted)">${esc(t)}</code></h3>
+        <p>${plural((d.rows[t] || []).length, 'row')}, ${filled.length} of ${items.length} columns with a value</p></div>
+      <div class="boxes">${filled.map(box).join('')}</div>
+      ${editing && SIZE_COLS.some(c => (d.columns[t] || []).some(x => x.name === c)) ? sizeEditor(d, t) : ''}
+      ${blank.length ? `<details class="quiet"><summary>Blank columns (${blank.length})</summary><div class="boxes" style="margin-top:10px">${blank.map(box).join('')}</div></details>` : ''}</section>`;
+  }).join('');
+  return `${head}${notes}${tables}${ORD.editing ? `<div class="editbar"><span class="grow" id="o-count-edits">No changes yet.</span>
+    <button class="btn" id="o-cancel">Cancel</button><button class="btn primary" id="o-review">${icon('eye')} Review changes</button></div>` : ''}`;
 }
-
-function valueText(d, table, col, v) {
-  const lab = d.labels[`${table}.${col}`]; if (lab && v != null) return `${esc(lab[String(v)] ?? v)} <span class="faint mono">#${esc(v)}</span>`;
-  return v == null ? '<span class="blank">blank</span>' : esc(val(col, v));
+function sizeEditor(d, t) {
+  const cols = SIZE_COLS.filter(c => (d.columns[t] || []).some(x => x.name === c));
+  const rows = (d.rows[t] || []).filter(r => !r._missing);
+  return `<div class="card rows-card" style="box-shadow:none"><div class="table-wrap"><table class="data-table"><thead><tr><th>#</th>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
+    ${rows.map((r, i) => `<tr><td class="muted">${i + 1}</td>${cols.map(c => `<td><input data-rid="${esc(r._id)}" data-rcol="${esc(c)}" value="${esc(ORD.rowEdits[t]?.[r._id]?.[c] ?? r[c] ?? '')}" aria-label="${esc(c)} row ${i + 1}"></td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
 }
-function orderDetails(d) {
-  if (d.mode === 'table') return tableOrderDetails(d);
-  const s = d.summary; const head = d.rows.ORDMAS[0]; const src = d.sources || {};
-  const filled = Object.entries(head).filter(([, v]) => v != null);
-  return `<div class="row"><a class="btn primary small" href="#/orders/${d.ordmasid}/edit">${icon('edit')} Edit order</a><a class="btn small" href="#/database/flow/${d.ordmasid}">${icon('flow')} Database flow</a></div>
-    <div class="dash-tiles"><div><span>Buyer</span><strong>${esc(s.buyer || '—')}</strong></div><div><span>Style</span><strong>${esc(s.style || '—')}</strong></div><div><span>Order quantity</span><strong>${fmt(s.total)}</strong></div><div><span>Order date</span><strong>${esc(s.order_date || '—')}</strong></div></div>
-    ${d.import ? `<div class="callout success">${icon('check')}<div>Saved from <strong>${esc(d.import.filename || 'workbook')}</strong> on ${when(d.import.committed_at)} by ${esc(d.import.approver)}. Values below are read live from Oracle.</div></div>` : ''}
-    <section class="card"><div class="card-head"><div class="table-name"><span class="tname">ORDMAS</span><span class="muted">· Order header · ${plural(filled.length, 'filled column')}</span></div></div>
-      <div class="table-wrap"><table class="kv"><tbody>${filled.map(([k, v]) => `<tr><td><span class="col-name">${esc(k)}</span><span class="col-label">${esc(COLUMN_LABELS[k] || '')}</span></td><td>${valueText(d, 'ORDMAS', k, v)}</td><td>${sourceChip(src[`ORDMAS:${head.ORDMASID}`]?.[k]?.source)}</td></tr>`).join('')}</tbody></table></div></section>
-    ${rowsTable(d, 'ORDSTYLE', ['SNO', 'COMBO', 'PONUM', 'ORDQTY', 'PRODQTY', 'SHIPDT', 'SUBNO'], 'ORDSTYLEID')}
-    ${rowsTable(d, 'ORDSIZE', ['SUB3_SUBNO', 'GSIZE', 'RQTY', 'PQTY', 'ORDSIZEROW'], 'ORDSIZEID')}`;
+function countEdits() {
+  const n = Object.values(ORD.edits).reduce((a, x) => a + Object.keys(x).length, 0) + Object.values(ORD.rowEdits).reduce((a, x) => a + Object.values(x).reduce((b, y) => b + Object.keys(y).length, 0), 0);
+  const el = $('#o-count-edits'); if (el) el.textContent = n ? `${plural(n, 'change')} to review.` : 'No changes yet.';
+  return n;
 }
-function rowsTable(d, table, preferred, pk) {
-  const rows = d.rows[table]; if (!rows.length) return `<section class="card"><div class="card-head"><span class="tname mono">${table}</span><span class="sub">No records for this order</span></div></section>`;
-  const cols = [...new Set([...preferred.filter(c => rows.some(r => r[c] != null)), ...Object.keys(rows[0]).filter(c => c !== pk && !preferred.includes(c) && c !== 'ORDMASID' && rows.some(r => r[c] != null))])];
-  return `<section class="card"><div class="card-head"><div class="table-name"><span class="tname mono">${table}</span><span class="muted">· ${esc(tableLabel(table))} · ${plural(rows.length, 'record')}</span></div></div>
-    <div class="table-wrap" style="max-height:360px"><table><thead><tr><th>${pk}</th>${cols.map(c => `<th title="${esc(COLUMN_LABELS[c] || '')}">${c}</th>`).join('')}</tr></thead><tbody>
-    ${rows.map(r => `<tr><td class="mono">${esc(r[pk])}</td>${cols.map(c => { const s = d.sources?.[`${table}:${r[pk]}`]?.[c]?.source; return `<td>${valueText(d, table, c, r[c])}${s?.cell ? `<span class="sub">${sourceChip(s)}</span>` : ''}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div></section>`;
+function wireDetails(body) {
+  $('#o-edit', body)?.addEventListener('click', () => { Object.assign(ORD, { editing: true, edits: {}, rowEdits: {} }); Drawer.show('details'); });
+  $('#o-cancel', body)?.addEventListener('click', () => { Object.assign(ORD, { editing: false, edits: {}, rowEdits: {} }); Drawer.show('details'); });
+  $('#o-review', body)?.addEventListener('click', reviewChanges);
+  $$('[data-edit]', body).forEach(inp => inp.oninput = () => { const t = inp.closest('[data-table]').dataset.table;
+    (ORD.edits[t] ||= {})[inp.dataset.edit] = inp.value; inp.closest('.box').classList.add('changed'); countEdits(); });
+  $$('[data-rid]', body).forEach(inp => inp.oninput = () => { const t = inp.closest('[data-table]').dataset.table;
+    ((ORD.rowEdits[t] ||= {})[inp.dataset.rid] ||= {})[inp.dataset.rcol] = inp.value; countEdits(); });
+  $$('.box[data-col]', body).forEach(el => { if (ORD.editing) return; const t = el.closest('[data-table]')?.dataset.table;
+    const src = ORD.data?.sources?.columns?.[t]?.[el.dataset.col]; if (src?.cell) el.title = `From Excel ${src.sheet}!${src.cell}${src.value != null ? ' = ' + src.value : ''}`; });
 }
-
-const PALETTE = ['#0f8a5f', '#2b6a99', '#9a6512', '#6b4fa3', '#1fa971', '#c2413b', '#4c9ac9', '#b98a2e'];
-function orderDashboard(d) {
-  const s = d.summary; const maxSize = Math.max(1, ...s.sizes.map(x => num(x.quantity))); const maxLine = Math.max(1, ...s.lines.map(l => num(l.quantity)));
-  const recTotal = Object.values(s.records).reduce((a, b) => a + b, 0);
-  let angle = 0; const total = s.lines.reduce((a, l) => a + num(l.quantity), 0);
-  const arcs = total ? s.lines.map((l, i) => { const a0 = angle; angle += num(l.quantity) / total * Math.PI * 2; const a1 = angle; const large = a1 - a0 > Math.PI ? 1 : 0;
-    const p = (a, r) => `${60 + r * Math.sin(a)},${60 - r * Math.cos(a)}`;
-    if (s.lines.length === 1) return `<circle cx="60" cy="60" r="44" fill="none" stroke="${PALETTE[0]}" stroke-width="22"/>`;
-    return `<path d="M${p(a0, 55)} A55 55 0 ${large} 1 ${p(a1, 55)} L${p(a1, 33)} A33 33 0 ${large} 0 ${p(a0, 33)} Z" fill="${PALETTE[i % PALETTE.length]}"/>`; }).join('') : '';
-  return `<div class="dash-tiles"><div><span>Order quantity</span><strong>${fmt(s.total)}</strong></div><div><span>Lines</span><strong>${fmt(s.lines.length)}</strong></div>
-      <div><span>Sizes</span><strong>${fmt(s.sizes.length)}</strong></div><div><span>Ship date${s.ship_dates.length > 1 ? 's' : ''}</span><strong>${esc(s.ship_dates.join(', ') || '—')}</strong></div></div>
-    <div class="callout ${s.reconciled ? 'success' : 'attention'}">${icon(s.reconciled ? 'check' : 'alert')}<div>${s.reconciled ? `Order quantity matches the sum of the size quantities (${fmt(s.size_total)}).` : `Order quantity ${fmt(s.total)} differs from the sum of sizes ${fmt(s.size_total)}.`}</div></div>
-    <section class="card card-pad"><h3>Quantity by size</h3>${s.sizes.length ? `<div class="vbars">${s.sizes.map(x => `<div class="vb"><b>${fmt(x.quantity)}</b><i style="height:${Math.max(2, num(x.quantity) / maxSize * 120)}px"></i></div>`).join('')}</div><div class="vlabels">${s.sizes.map(x => `<span>${esc(x.size)}</span>`).join('')}</div>` : '<p class="muted">No size records.</p>'}</section>
-    <div class="grid g2"><section class="card card-pad"><h3>Lines / colours</h3>${total ? `<div class="donut-wrap"><svg viewBox="0 0 120 120" width="130" height="130" role="img" aria-label="Quantity by line">${arcs}</svg><div class="legend">${s.lines.map((l, i) => `<span><i style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(l.label)} · ${fmt(l.quantity)} (${Math.round(num(l.quantity) / total * 100)}%)</span>`).join('')}</div></div>` : '<p class="muted">No line quantities.</p>'}</section>
-      <section class="card card-pad"><h3>Records in Oracle</h3><div class="bars" style="margin-top:10px">${Object.entries(s.records).map(([t, n]) => `<div class="bar-row"><span class="lbl mono">${t}</span><span class="track"><span class="fill" style="width:${recTotal ? n / Math.max(...Object.values(s.records)) * 100 : 0}%;display:block"></span></span><span class="val">${n}</span></div>`).join('')}</div>
-        <p class="faint" style="margin-top:10px">Counted per table separately, so nothing is double counted.</p></section></div>
-    ${s.lines.length ? `<section class="card card-pad"><h3>Line detail</h3><div class="bars" style="margin-top:10px">${s.lines.map(l => `<div class="bar-row"><span class="lbl" title="${esc(l.label)}">${esc(l.label)}</span><span class="track"><span class="fill" style="width:${num(l.quantity) / maxLine * 100}%;display:block"></span></span><span class="val">${fmt(l.quantity)}</span></div><div class="faint" style="font-size:12px;margin:-4px 0 4px 100px">${l.sizes.map(z => `${esc(z.size)}: ${fmt(z.quantity)}`).join(' · ')}${l.ship_date ? ` · ships ${esc(l.ship_date)}` : ''}</div>`).join('')}</div></section>` : ''}
-    <section class="card card-pad"><h3>Completeness</h3><p class="muted" style="margin:4px 0 10px">Columns that hold a value. Blank optional columns are normal when the buyer did not send that information.</p>
-      <div class="bars">${Object.entries(s.filled).map(([t, cols]) => `<div class="bar-row"><span class="lbl mono">${t}</span><span class="track"><span class="fill" style="width:${Math.min(100, cols.length / Math.max(1, ...Object.values(s.filled).map(c => c.length)) * 100)}%;display:block"></span></span><span class="val">${cols.length}</span></div>`).join('')}</div></section>`;
-}
-
-function historyHtml(h) {
-  const groups = {}; h.changes.forEach(c => { (groups[c.changeset] ||= []).push(c); });
-  return `${h.import_ ? `<div class="callout success">${icon('upload')}<div><strong>Created from Excel</strong> · ${esc(h.import_.filename || '')} · approved by ${esc(h.import_.approver)} on ${when(h.import_.committed_at)}</div></div>` : ''}
-    ${Object.keys(groups).length ? Object.values(groups).map(items => `<section class="card"><div class="card-head"><div><strong>Approved change</strong><span class="sub">${when(items[0].changed_at)} · by ${esc(items[0].approver)}</span></div><span class="badge blue">${plural(items.length, 'value')}</span></div>
-      <div class="table-wrap"><table><thead><tr><th>Column</th><th>Old value</th><th></th><th>New value</th></tr></thead><tbody>${items.map(c => `<tr><td><span class="col-name">${esc(c.table)}.${esc(c.column)}</span><span class="col-label">record ${esc(c.row_id)}</span></td><td>${c.old == null ? '<span class="blank">blank</span>' : esc(c.old)}</td><td class="arrow">→</td><td><strong>${c.new == null ? '<span class="blank">blank</span>' : esc(c.new)}</strong></td></tr>`).join('')}</tbody></table></div></section>`).join('') : '<div class="empty">No changes since the order was saved.</div>'}`;
-}
-
-/* ---------------- edit with preview + approval ---------------- */
-const EDIT_HEAD = ['DOCID', 'BUYER', 'STYLENO', 'STYLEDESC', 'BONO', 'ODATE', 'SAMPLETYPE', 'MERCH', 'REMARKS'];
-const REF_ROLE = { 'ORDMAS.BUYER': 'buyer', 'ORDMAS.STYLENO': 'style', 'ORDMAS.STYLEDESC': 'description', 'ORDMAS.MERCH': 'merch', 'ORDSTYLE.COMBO': 'color', 'ORDSIZE.GSIZE': 'size' };
-async function renderEdit(view, id) {
-  const d0 = await loadOrder(id, true); if (d0.mode === 'table') return renderTableEdit(view, id, d0);
-  const d = d0; const masters = await api('/api/masters').catch(() => ({}));
-  setTitle(`Edit ${d.summary.order_ref || 'order'}`, 'Proposed changes are previewed and approved before Oracle is updated');
-  const head = d.rows.ORDMAS[0]; const src = d.sources || {};
-  const excel = (t, rid, col) => { const s = src[`${t}:${rid}`]?.[col]; const v = s?.raw ?? s?.source?.value; return v == null ? '<span class="faint">—</span>' : `${esc(fmt(v))} ${sourceChip(s.source)}`; };
-  const current = (t, col, v) => { const lab = d.labels[`${t}.${col}`]; return v == null ? '' : lab ? (lab[String(v)] ?? String(v)) : String(v); };
-  const input = (t, rid, col, v) => { const role = REF_ROLE[`${t}.${col}`]; return `<input data-t="${t}" data-id="${rid}" data-c="${col}" data-orig="${esc(current(t, col, v))}" value="${esc(current(t, col, v))}" ${role ? `list="ml-${role}"` : ''} ${col.endsWith('DATE') || col === 'ODATE' || col === 'SHIPDT' ? 'placeholder="YYYY-MM-DD"' : 'placeholder="blank"'}>`; };
-  const row = (t, rid, col, v, label) => `<tr data-row><td><span class="col-name">${esc(col)}</span><span class="col-label">${esc(label || COLUMN_LABELS[col] || '')}</span></td><td>${excel(t, rid, col)}</td><td>${v == null ? '<span class="blank">blank</span>' : esc(current(t, col, v))}</td><td>${input(t, rid, col, v)}</td></tr>`;
-  const extraHead = Object.keys(head).filter(k => head[k] != null && !EDIT_HEAD.includes(k) && !['ORDMASID', 'OQTY', 'UOM', 'ORDCATEGORY'].includes(k));
-  view.innerHTML = `<div class="stack"><div class="row between"><a class="btn ghost" href="#/orders/${id}">${icon('back')} Back to order</a><span class="muted">Oracle is not changed until you approve the preview.</span></div>
-    ${Object.entries(masters).map(([role, list]) => `<datalist id="ml-${role}">${list.filter(m => !m.cancelled).map(m => `<option value="${esc(m.label)}"></option>`).join('')}</datalist>`).join('')}
-    <section class="card"><div class="card-head"><div><h2>Order header</h2><span class="sub">ORDMAS · record ${id}</span></div></div><div class="table-wrap"><table class="compare"><thead><tr><th>Field</th><th>Original Excel</th><th>Current Oracle</th><th>Proposed</th></tr></thead><tbody>
-      ${[...EDIT_HEAD, ...extraHead].map(c => row('ORDMAS', id, c, head[c])).join('')}</tbody></table></div></section>
-    ${d.rows.ORDSTYLE.map(l => { const sizes = d.rows.ORDSIZE.filter(s => s.SUB3_SUBNO === l.SUBNO);
-      return `<section class="card"><div class="card-head"><div><h2>Line ${esc(l.SNO ?? '')} ${l.COMBO != null ? '· ' + esc(current('ORDSTYLE', 'COMBO', l.COMBO)) : ''}</h2><span class="sub">ORDSTYLE · record ${l.ORDSTYLEID} · line quantity ${fmt(l.ORDQTY)} (recalculated from sizes)</span></div></div>
-        <div class="table-wrap"><table class="compare"><thead><tr><th>Field</th><th>Original Excel</th><th>Current Oracle</th><th>Proposed</th></tr></thead><tbody>
-        ${['COMBO', 'SHIPDT', 'PONUM'].map(c => row('ORDSTYLE', l.ORDSTYLEID, c, l[c])).join('')}
-        ${sizes.map(s => row('ORDSIZE', s.ORDSIZEID, 'RQTY', s.RQTY, `Quantity · size ${current('ORDSIZE', 'GSIZE', s.GSIZE)}`)).join('')}</tbody></table></div></section>`; }).join('')}
-    <div class="action-bar"><span class="muted" id="e-count">No changes yet.</span><div class="row"><a class="btn" href="#/orders/${id}">Cancel</a><button class="btn primary" id="e-review" disabled>${icon('eye')} Review changes</button></div></div></div>`;
-  paintIcons(view);
-  const changes = () => $$('input[data-t]', view).filter(i => i.value.trim() !== i.dataset.orig);
-  view.addEventListener('input', () => { const n = changes().length; $$('[data-row]', view).forEach(r => r.classList.toggle('changed', !!$('input', r) && $('input', r).value.trim() !== $('input', r).dataset.orig));
-    $('#e-count', view).textContent = n ? `${plural(n, 'value')} changed — not saved yet.` : 'No changes yet.'; $('#e-review', view).disabled = !n; });
-  $('#e-review', view).onclick = () => busy('Checking the changes against Oracle…', async () => {
-    const list = changes().flatMap(i => { const base = { table: i.dataset.t, id: Number(i.dataset.id), column: i.dataset.c, value: i.value.trim() };
-      if (base.table === 'ORDSIZE' && base.column === 'RQTY') { const s = d.rows.ORDSIZE.find(x => x.ORDSIZEID === base.id); if (s && s.PQTY === s.RQTY) return [base, { ...base, column: 'PQTY' }]; }
-      return [base]; });
-    const p = await api(`/api/orders/${id}/changes`, { method: 'POST', body: { changes: list } });
-    const body = Modal.open('Review changes before approval', `
-      ${p.errors.length ? `<div class="callout attention">${icon('alert')}<div><strong>Please correct</strong><ul>${p.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-      ${p.changes.length ? `<div class="table-wrap"><table><thead><tr><th>Oracle column</th><th>Record</th><th>Current</th><th></th><th>After approval</th></tr></thead><tbody>${p.changes.map(c => `<tr><td><span class="col-name">${esc(c.table)}.${esc(c.column)}</span>${c.derived ? '<span class="col-label">recalculated total</span>' : ''}</td><td class="mono">${esc(c.id)}</td><td>${c.old == null ? '<span class="blank">blank</span>' : esc(c.old_label || fmt(c.old))}</td><td class="arrow">→</td><td><strong>${c.new == null ? '<span class="blank">blank</span>' : esc(c.new_label || fmt(c.new))}</strong></td></tr>`).join('')}</tbody></table></div>` : ''}
-      ${p.notes.length ? `<div class="callout">${icon('info')}<ul>${p.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
-      <div class="modal-foot"><button class="btn" data-cancel>Keep editing</button><button class="btn primary" data-approve ${p.errors.length ? 'disabled' : ''}>${icon('check')} Approve &amp; update Oracle</button></div>`);
-    $('[data-cancel]', body).onclick = () => Modal.close();
-    $('[data-approve]', body).onclick = () => busy('Updating Oracle and verifying…', async () => {
-      await api(`/api/changes/${p.id}/approve`, { method: 'POST', body: { hash: p.hash } }); Modal.close();
-      toast(`${plural(p.changes.length, 'value')} updated in Oracle and verified. The change is in the order history.`); go(`#/orders/${id}/history`);
-    });
-  });
-}
-
-/* ---------------- single-table orders (EXCEL_ORDERS) ---------------- */
-const ROW_LEVEL = new Set(['ORDSTYLEROW', 'GARMENT', 'COMBO', 'ORDSIZEROW', 'SIZES', 'ORDERQTY', 'QTYTYPE', 'SOURCE_CELL']);
-const SYSTEM_COLS = new Set(['ENTRY_ID', 'ORDER_KEY', 'IMPORT_ID', 'SOURCE_FILE', 'CREATEDBY', 'CREATEDON']);
-function tableOrderDetails(d) {
-  const s = d.summary; const rows = d.rows[d.table]; const head = rows[0]; const src = d.sources || {};
-  const order = Object.keys(head).filter(k => head[k] != null && !ROW_LEVEL.has(k) && !SYSTEM_COLS.has(k));
-  return `<div class="row"><a class="btn primary small" href="#/orders/${d.ordmasid}/edit">${icon('edit')} Edit order</a><a class="btn small" href="#/database/flow/${d.ordmasid}">${icon('flow')} Database</a></div>
-    <div class="dash-tiles"><div><span>Buyer</span><strong>${esc(s.buyer || '—')}</strong></div><div><span>Style</span><strong>${esc(s.style || '—')}</strong></div><div><span>Total pieces</span><strong>${fmt(s.total)}</strong></div><div><span>Ship date</span><strong>${esc(s.ship_dates.join(', ') || '—')}</strong></div></div>
-    ${d.import ? `<div class="callout success">${icon('check')}<div>Saved from <strong>${esc(d.import.filename || 'workbook')}</strong> on ${when(d.import.committed_at)} by ${esc(d.import.approver)} into <code>${esc(d.table)}</code>. Values below are read live from Oracle.</div></div>` : ''}
-    <section class="card"><div class="card-head"><div class="table-name"><span class="tname">${esc(d.table)}</span><span class="muted">· order details (same in every row)</span></div></div>
-      <div class="table-wrap"><table class="kv"><tbody>${order.map(k => `<tr><td><span class="col-name">${esc(k)}</span><span class="col-label">${esc(COLUMN_LABELS[k] || '')}</span></td><td>${esc(val(k, head[k]))}</td><td>${sourceChip(src[`${d.table}:${head.ENTRY_ID}`]?.[k]?.source)}</td></tr>`).join('')}</tbody></table></div></section>
-    ${rowsTable(d, d.table, ['ORDSTYLEROW', 'GARMENT', 'COMBO', 'SIZES', 'ORDERQTY', 'QTYTYPE', 'SOURCE_CELL'], 'ENTRY_ID').replace(/<th>(\w+)<\/th>/, '<th>Row ID</th>')}`;
-}
-
-async function renderTableEdit(view, id, d) {
-  const meta = await api('/api/schema/order-columns'); const rows = d.rows[d.table]; const head = rows[0]; const src = d.sources || {};
-  setTitle(`Edit ${d.summary.order_ref || 'order'}`, 'Proposed changes are previewed and approved before Oracle is updated');
-  const cols = (meta.columns || []).filter(c => c.level === 'order');
-  const excel = (rid, col) => { const x = src[`${d.table}:${rid}`]?.[col]; const v = x?.raw ?? x?.source?.value; return v == null ? '<span class="faint">—</span>' : `${esc(fmt(v))} ${sourceChip(x.source)}`; };
-  const cur = v => v == null ? '' : String(v);
-  view.innerHTML = `<div class="stack"><div class="row between"><a class="btn ghost" href="#/orders/${id}">${icon('back')} Back to order</a><span class="muted">Oracle is not changed until you approve the preview.</span></div>
-    <section class="card"><div class="card-head"><div><h2>Order details</h2><span class="sub">${esc(d.table)} · a change here updates all ${rows.length} rows of this order</span></div></div>
-      <div class="table-wrap"><table class="compare"><thead><tr><th>Field</th><th>Original Excel</th><th>Current Oracle</th><th>Proposed</th></tr></thead><tbody>
-      ${cols.map(c => `<tr data-row><td><span class="col-name">${esc(c.name)}</span><span class="col-label">${esc(c.label)}</span></td><td>${excel(head.ENTRY_ID, c.name)}</td><td>${head[c.name] == null ? '<span class="blank">blank</span>' : esc(val(c.name, head[c.name]))}</td>
-        <td><input data-id="all" data-c="${esc(c.name)}" data-orig="${esc(cur(head[c.name]))}" value="${esc(cur(head[c.name]))}" placeholder="${c.type === 'DATE' ? 'YYYY-MM-DD' : 'blank'}"></td></tr>`).join('')}</tbody></table></div></section>
-    <section class="card"><div class="card-head"><div><h2>Quantities</h2><span class="sub">One row per size · total pieces is recalculated</span></div></div>
-      <div class="table-wrap"><table class="compare"><thead><tr><th>Line · colour</th><th>Size</th><th>Original Excel</th><th>Current Oracle</th><th>Proposed</th></tr></thead><tbody>
-      ${rows.filter(r => r.SIZES != null).map(r => `<tr data-row><td>${esc(r.ORDSTYLEROW ?? '')} · ${esc(r.COMBO || '')}</td><td><strong>${esc(r.SIZES)}</strong></td><td>${excel(r.ENTRY_ID, 'ORDERQTY')}</td><td>${esc(fmt(r.ORDERQTY))}</td>
-        <td><input data-id="${r.ENTRY_ID}" data-c="ORDERQTY" data-orig="${esc(cur(r.ORDERQTY))}" value="${esc(cur(r.ORDERQTY))}" inputmode="numeric"></td></tr>`).join('')}</tbody></table></div></section>
-    <div class="action-bar"><span class="muted" id="e-count">No changes yet.</span><div class="row"><a class="btn" href="#/orders/${id}">Cancel</a><button class="btn primary" id="e-review" disabled>${icon('eye')} Review changes</button></div></div></div>`;
-  paintIcons(view);
-  const changed = () => $$('input[data-c]', view).filter(i => i.value.trim() !== i.dataset.orig);
-  view.addEventListener('input', () => { const n = changed().length; $$('[data-row]', view).forEach(r => { const i = $('input', r); r.classList.toggle('changed', !!i && i.value.trim() !== i.dataset.orig); });
-    $('#e-count', view).textContent = n ? `${plural(n, 'value')} changed — not saved yet.` : 'No changes yet.'; $('#e-review', view).disabled = !n; });
-  $('#e-review', view).onclick = () => busy('Checking the changes against Oracle…', async () => {
-    const list = changed().map(i => ({ id: i.dataset.id === 'all' ? 'all' : Number(i.dataset.id), column: i.dataset.c, value: i.value.trim() }));
-    const p = await api(`/api/orders/${id}/changes`, { method: 'POST', body: { changes: list } });
-    const grouped = {}; p.changes.forEach(c => { const k = `${c.column}|${c.old}|${c.new}`; (grouped[k] ||= { ...c, rows: 0 }).rows++; });
-    const body = Modal.open('Review changes before approval', `
-      ${p.errors.length ? `<div class="callout attention">${icon('alert')}<div><strong>Please correct</strong><ul>${p.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div></div>` : ''}
-      ${p.changes.length ? `<div class="table-wrap"><table><thead><tr><th>Oracle column</th><th>Rows</th><th>Current</th><th></th><th>After approval</th></tr></thead><tbody>${Object.values(grouped).map(c => `<tr><td><span class="col-name">${esc(c.column)}</span><span class="col-label">${esc(c.label || '')}${c.derived ? ' · recalculated' : ''}</span></td><td>${c.rows}</td><td>${c.old == null ? '<span class="blank">blank</span>' : esc(fmt(c.old))}</td><td class="arrow">→</td><td><strong>${c.new == null ? '<span class="blank">blank</span>' : esc(fmt(c.new))}</strong></td></tr>`).join('')}</tbody></table></div>` : ''}
-      ${p.notes.length ? `<div class="callout">${icon('info')}<ul>${p.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul></div>` : ''}
-      <div class="modal-foot"><button class="btn" data-cancel>Keep editing</button><button class="btn primary" data-approve ${p.errors.length ? 'disabled' : ''}>${icon('check')} Approve &amp; update Oracle</button></div>`);
-    $('[data-cancel]', body).onclick = () => Modal.close();
-    $('[data-approve]', body).onclick = () => busy('Updating Oracle and verifying…', async () => {
-      await api(`/api/changes/${p.id}/approve`, { method: 'POST', body: { hash: p.hash } }); Modal.close();
-      toast(`${plural(p.changes.length, 'value')} updated in Oracle and verified. The change is in the order history.`); go(`#/orders/${id}/history`);
-    });
-  });
-}
-
-/* ---------------- data trail: identity, blank meanings, quality checks, value history ---------------- */
-const NULL_TEXT = { PROVIDED: ['Provided', 'green', 'A value from Excel or typed by you was saved.'], NOT_PROVIDED: ['Not in Excel', '', 'The Excel does not mention it. Left blank.'],
-  NOT_APPLICABLE: ['Not applicable', 'violet', 'You marked it as not applicable.'], UNKNOWN: ['Unknown', 'amber', 'The Excel has the label but the value is empty.'], INVALID: ['Invalid', 'red', 'The Excel value could not be used.'] };
-function trailHtml(id, f) {
-  return `<div class="callout">${icon('shield')}<div>Order identity <code>${esc(f.uuid)}</code> · saved from <strong>${esc(f.filename || '')}</strong> (sha256 ${esc(String(f.file_hash).slice(0, 12))}…) · approved by ${esc(f.approved_by)} on ${when(f.approved_at)} · ${f.links.map(l => `${esc(l.table_name)}: ${l.rows} rows`).join(', ')}</div></div>
-    <section class="card"><div class="card-head"><div><h3>Every field and what its value means</h3><span class="sub">Blank is not the same as “no”: click a field to see where its value came from and every change since</span></div></div>
-      ${f.fields.length ? '' : '<p class="muted card-pad">Field meanings are recorded for orders approved in this workspace.</p>'}
-      <div class="table-wrap"><table><tbody>${f.fields.map(x => `<tr class="clickable" data-trail="${esc(x.column_name)}"><td><span class="col-name">${esc(x.column_name)}</span><span class="col-label">${esc(COLUMN_LABELS[x.column_name] || '')}</span></td><td><span class="badge ${NULL_TEXT[x.status]?.[1] || ''}">${esc(NULL_TEXT[x.status]?.[0] || x.status)}</span></td><td class="muted">${esc(x.note || NULL_TEXT[x.status]?.[2] || '')}</td></tr>`).join('')}</tbody></table></div></section>
-    <section class="card"><div class="card-head"><h3>Checks that ran for this order</h3></div><div class="table-wrap"><table><tbody>${f.quality.map(q => `<tr><td><span class="badge ${q.outcome === 'PASS' ? 'green' : q.outcome === 'WARN' ? 'amber' : q.outcome === 'SKIP' ? '' : 'red'}">${esc(q.outcome.toLowerCase())}</span></td><td><strong>${esc(q.rule)}</strong><span class="sub">${esc(q.detail)}</span></td></tr>`).join('')}</tbody></table></div></section>
-    <div id="trail-detail"></div>`;
-}
-function wireTrail(body, id) {
-  $$('[data-trail]', body).forEach(r => r.onclick = () => busy('Reading the data trail…', async () => {
-    const col = r.dataset.trail; const t = await api(`/api/orders/${id}/lineage?column=${encodeURIComponent(col)}`); const first = t.lineage[0];
-    $('#trail-detail', body).innerHTML = `<section class="card"><div class="card-head"><h3>${esc(col)} · ${esc(COLUMN_LABELS[col] || '')}</h3><span class="sub">${plural(t.lineage.length, 'saved row')}</span></div><div class="card-pad stack" style="gap:8px">
-      ${first ? `<div>${first.cell ? `From Excel <span class="chip">${esc(first.sheet)}!${esc(first.cell)}</span> raw value <strong>${esc(first.raw_value ?? '—')}</strong>` : `Origin: <strong>${esc(first.via || first.origin || 'not from Excel')}</strong>`} → saved <strong>${esc(first.saved_value ?? 'blank')}</strong>${first.transformed ? ' <span class="badge violet">converted</span>' : ''} · approved by ${esc(first.approved_by)} · ${first.verified ? '<span class="badge green">read back OK</span>' : '<span class="badge amber">not verified</span>'}</div>` : '<div class="muted">No saved value: this field was blank when the order was approved.</div>'}
-      ${t.history.length > 1 ? `<div><strong>Versions</strong><ul class="timeline" style="padding:4px 0">${t.history.map(h => `<li><span class="dot"></span><span>v${h.version}: <strong>${esc(h.value ?? 'blank')}</strong>${h.previous != null ? ` <span class="muted">(was ${esc(h.previous)})</span>` : h.source ? ` <span class="muted">from ${esc(h.source)}</span>` : ''} · ${esc(h.by)}</span><time>${when(h.at)}</time></li>`).join('')}</ul></div>` : ''}</div></section>`;
-    $('#trail-detail', body).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+async function reviewChanges() {
+  const d = ORD.data; const changes = [];
+  for (const [t, cols] of Object.entries(ORD.edits)) for (const [column, value] of Object.entries(cols)) changes.push({ table: t, id: 'all', column, value });
+  for (const [t, rows] of Object.entries(ORD.rowEdits)) for (const [id, cols] of Object.entries(rows)) for (const [column, value] of Object.entries(cols)) {
+    const row = (d.rows[t] || []).find(r => String(r._id) === String(id)); if (row && String(row[column] ?? '') === String(value)) continue;
+    changes.push({ table: t, id: row ? row._id : id, column, value });
+  }
+  if (!changes.length) { toast('Nothing changed yet.'); return; }
+  const cs = await busy('Checking your changes against Oracle…', () => api(`/api/orders/${d.ordmasid}/changes`, { method: 'POST', body: { changes } }));
+  if (!cs) return;
+  const ok = !cs.errors.length;
+  const body = Modal.open('Review changes', `${cs.errors.length ? `<div class="callout attention">${icon('alert')}<div><strong>Please correct</strong><ul>${cs.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div></div>` : ''}
+    ${cs.changes.length ? `<p>${plural(cs.changes.length, 'value')} will change in Oracle. Each row is checked again when you approve; if someone changed it meanwhile, nothing is saved.</p>
+      <div class="stack tight">${groupChanges(cs.changes).map(g => `<div class="card card-pad" style="box-shadow:none;padding:12px 14px"><div class="row between"><strong>${esc(g.label)} <code style="color:var(--muted)">${esc(g.column)}</code></strong>
+        <span class="muted">${g.table}${g.rows > 1 ? `, ${g.rows} rows` : ''}${g.derived ? ' · follows the sizes' : ''}</span></div>
+        <div class="diff" style="margin-top:6px"><span class="old">${esc(fmtCell(g.old) || 'blank')}</span><span>${icon('arrow')}</span><span class="new">${esc(fmtCell(g.new) || 'blank')}</span></div></div>`).join('')}</div>` : ''}
+    ${cs.notes?.length ? `<div class="callout info">${icon('info')}<div>${cs.notes.map(esc).join('<br>')}</div></div>` : ''}
+    <div class="modal-foot"><button class="btn" data-no>Back</button>${ok ? `<button class="btn primary" data-yes>${icon('check')} Approve changes</button>` : ''}</div>`);
+  $('[data-no]', body).onclick = () => Modal.close();
+  $('[data-yes]', body)?.addEventListener('click', () => busy('Saving the changes in Oracle and reading them back…', async () => {
+    await api(`/api/changes/${cs.id}/approve`, { method: 'POST', body: { hash: cs.hash } });
+    Modal.close(); Object.assign(ORD, { editing: false, edits: {}, rowEdits: {}, data: null });
+    toast('Changes saved and read back from Oracle.'); Drawer.show('details');
+    api('/api/orders').then(list => { ORD.list = list; const el = $('#o-table'); if (el) drawOrders(el); }).catch(() => {});
   }));
+}
+function groupChanges(changes) {
+  const out = new Map();
+  for (const c of changes) { const k = `${c.table}|${c.column}|${c.old}|${c.new}`;
+    if (!out.has(k)) out.set(k, { table: c.table, column: c.column, label: c.label || c.column, old: c.old, new: c.new, derived: c.derived, rows: 0 }); out.get(k).rows++; }
+  return [...out.values()];
+}
+
+function rowsTab(d) {
+  return Object.entries(d.rows || {}).map(([t, rows]) => {
+    const present = rows.filter(r => !r._missing);
+    const cols = (d.columns[t] || []).map(c => c.name).filter(c => present.some(r => r[c] != null && r[c] !== '')).slice(0, 14);
+    const labels = Object.fromEntries((d.columns[t] || []).map(c => [c.name, c.label]));
+    return `<section class="stack tight"><div class="group-head"><h3>${esc(tableLabel(t))} <code style="color:var(--muted)">${esc(t)}</code></h3><p>${plural(rows.length, 'row')} saved by POPPYS</p></div>
+      <div class="card" style="box-shadow:none"><div class="table-wrap" style="max-height:520px"><table class="data-table"><thead><tr><th>#</th>${cols.map(c => `<th title="${esc(labels[c] || c)}">${esc(c)}</th>`).join('')}</tr></thead><tbody>
+      ${rows.map((r, i) => r._missing ? `<tr><td class="muted">${i + 1}</td><td colspan="${cols.length || 1}"><span class="status-chip red">No longer in Oracle</span></td></tr>`
+        : `<tr><td class="muted">${i + 1}</td>${cols.map(c => `<td class="${typeof r[c] === 'number' && !isCode(c) ? 'num' : ''}">${esc(val(c, r[c]))}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div></section>`;
+  }).join('') || '<div class="empty">No rows.</div>';
+}
+
+function historyTab(h, d) {
+  const imp = h.import_ || d.import_ || {};
+  const sets = new Map();
+  for (const c of h.changes || []) { if (!sets.has(c.changeset)) sets.set(c.changeset, []); sets.get(c.changeset).push(c); }
+  return `<ul class="history-list">
+    ${[...sets.values()].map(list => { const first = list[0]; const cols = new Map();
+      for (const c of list) { const k = JSON.stringify([`${c.table}.${c.column}`, c.old, c.new]); cols.set(k, (cols.get(k) || 0) + 1); }
+      return `<li><div class="row between"><strong>${icon('edit')} Changed by ${esc(first.approver)}</strong><span class="muted">${when(first.changed_at)}</span></div>
+        <div class="stack tight" style="margin-top:8px">${[...cols].map(([k, n]) => { const [col, old, nw] = JSON.parse(k);
+          return `<div class="diff"><span><code>${esc(col)}</code>${n > 1 ? ` <span class="muted">(${n} rows)</span>` : ''}</span><span></span><span><span class="old">${esc(old ?? 'blank')}</span> → <span class="new">${esc(nw ?? 'blank')}</span></span></div>`; }).join('')}</div></li>`; }).join('')}
+    <li><div class="row between"><strong>${icon('upload')} Saved from ${esc(imp.filename || 'an Excel upload')} by ${esc(imp.approver || '—')}</strong><span class="muted">${when(imp.committed_at)}</span></div>
+      <p class="muted" style="margin-top:4px">${plural(Object.values(d.rows || {}).reduce((a, r) => a + r.length, 0), 'row')} added in one transaction and read back from Oracle.${imp.job_id ? ` Import ${esc(String(imp.job_id).slice(0, 8))}.` : ''}</p></li></ul>`;
 }

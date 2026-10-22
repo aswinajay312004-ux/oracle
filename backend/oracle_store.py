@@ -396,7 +396,7 @@ def history():
         for j,h,a,d,payload in c:
             result=json.loads(payload.read() if hasattr(payload,'read') else payload)
             out.append(dict(job_id=j,plan_hash=h,approver=a,committed_at=d.isoformat(),orders=result.get('orders',[]),rows=len(result.get('rows',[])),mode=result.get('mode','erp'),
-                table=result.get('table'),tables=result.get('tables',[]),
+                table=result.get('table'),tables=result.get('tables',[]),links=result.get('links',{}),
                 # entry mode: where each saved row is (no values), so screens can read today's values by ROWID
                 row_refs=[dict(table=r['table'],rowid=r['rowid'],order=r.get('order'),id=r.get('id')) for r in result.get('rows',[]) if r.get('rowid')]))
         return out

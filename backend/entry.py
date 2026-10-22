@@ -886,6 +886,7 @@ def commit(draft, expected_hash, approver, learned=None):
                 rows_out.append(dict(table=table, key=op['key'], row=op['row'], id=handle, rowid=rid, order=order_keys[op['order']],
                                      values={n: plain(g) for n, g in zip(names, got)}))
             result = dict(job_id=draft['id'], mode='entry', table=main, tables=list(checked['tables']), orders=orders_out, rows=rows_out,
+                          links={t: info['link'] for t, info in checked['tables'].items() if info.get('link')},
                           committed_at=datetime.now().astimezone().isoformat(), already_committed=False)
             c.setinputsizes(payload=oracledb.DB_TYPE_CLOB)
             c.execute('INSERT INTO PP_IMPORT_LOG(JOBID,FILEHASH,PLANHASH,APPROVER,RESULT_JSON) VALUES (:job,:filehash,:hash,:who,:payload)',

@@ -669,6 +669,9 @@ def verified_links(conn):
         for child,parent in (v.get('link') or {}).items():out.append(dict(table=table,column=child,parent_column=parent))
     for r in oracle.constraints(conn)['foreign_keys']:
         if r['parent']==entry.MAIN:out.append(dict(table=r['child'],column=r['child_column'],parent_column=r['parent_column']))
+    for i in receipts():   # tables POPPYS itself filled together with the order table, by the order's key columns
+        for table,link in (i.get('links') or {}).items():
+            for child,parent in link.items():out.append(dict(table=table,column=child,parent_column=parent))
     seen=set();unique=[]
     for l in out:
         k=(l['table'],l['column'],l['parent_column'])
@@ -880,6 +883,8 @@ def db_overview(user=Depends(authenticated)):
         try:created={x['object'] for x in database.schema_log(conn) if x['action']=='CREATE_TABLE'}
         except oracledb.Error:created=set()
         linked=mapped_tables();rels=relationships(conn)
+        for i in receipts():
+            for table,link in (i.get('links') or {}).items():linked.setdefault(table,dict(link=link,rows='section',mapping=None))
         # TEST_ tables are left by the opt-in Oracle tests; they stay in Oracle but are not shown here.
         shown=[entry.MAIN]+sorted(t for t in set(linked)|created if t in stats and t!=entry.MAIN and not t.startswith('TEST_'))
         tables=[]

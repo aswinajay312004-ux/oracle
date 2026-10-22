@@ -114,7 +114,7 @@ function statusLine(d, counts) {
     ${plan.errors.length ? `<strong>${plural(plan.errors.length, 'thing')} to fix before saving.</strong><ul>${plan.errors.slice(0, 6).map(e => `<li>${esc(e)}</li>`).join('')}</ul>`
       : `<strong>Mapped automatically.</strong> ${t.filled} of ${t.columns} ${esc(plan.table)} columns are filled from this Excel; ${tables || 'no rows'}.`}
     ${counts ? ` All ${fmt(counts.cells)} Excel cells are kept in the JSON${counts.missing ? ` (${counts.missing} could not be placed)` : ''}.` : ''}
-    ${ai?.status === 'pending' ? ' <span class="muted">Local AI is checking the cells no rule could place…</span>' : ai?.detail ? ` <span class="muted">${esc(ai.detail)}.</span>` : ''}
+    ${ai?.status === 'pending' ? ' <span class="muted">Local AI is checking the cells no rule could place…</span>' : ai?.detail ? ` <span class="muted">${esc(ai.detail.replace(/\.$/, ''))}.</span>` : ''}
     ${plan.warnings.length ? `<details class="quiet" style="margin-top:6px"><summary>${plural(plan.warnings.length, 'note')} to check</summary><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul></details>` : ''}</div></div>`;
 }
 function toolbarHtml(d) {

@@ -558,3 +558,79 @@ table.xl td.c.unused { box-shadow: inset 0 -2px 0 #e4b964; }
   .drawer, .drawer.wide { width: 100vw; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* action bar under the preview */
+.actionbar { position: sticky; bottom: 12px; z-index: 15; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; padding: 12px 14px 12px 18px;
+  border-radius: 16px; background: rgba(255, 255, 255, .94); border: 1px solid var(--green-line); box-shadow: var(--shadow-lg); backdrop-filter: blur(8px); }
+.actionbar .grow { min-width: 200px; }
+.editbar { background: #f4f0fb; color: var(--ink); border: 1px solid var(--violet-line); }
+.editbar .btn { border-color: var(--line-strong); }
+.gdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; flex: none; vertical-align: 1px; }
+.switch { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; cursor: pointer; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.switch input { width: 34px; height: 18px; appearance: none; background: var(--line-strong); border-radius: 10px; position: relative; cursor: pointer; transition: background .15s; }
+.switch input::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left .15s; }
+.switch input:checked { background: var(--green); } .switch input:checked::after { left: 18px; }
+.mp-hint { background: var(--green-soft); color: var(--green-deep); border: 1px solid var(--green-line); }
+.mp-hint .ico { color: var(--green); }
+
+/* data mapping flowchart */
+.flow { position: relative; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr); gap: 16px 120px; padding: 10px 22px 24px; }
+.flow-col { display: flex; flex-direction: column; gap: 10px; position: relative; z-index: 1; }
+.flow-col.right { justify-content: center; }
+.flow-node { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: #fff; text-align: left; font: inherit; color: inherit; }
+.flow-node b { font-size: 14px; } .flow-node small { color: var(--muted); font-size: 12.5px; }
+.flow-node.src { background: var(--green-soft); border-color: var(--green-line); }
+.flow-node.part { margin-left: 36px; }
+.flow-node.table { cursor: pointer; border-left: 4px solid var(--green); }
+.flow-node.table b { font-family: var(--mono); font-size: 13.5px; }
+.flow-node.kept { cursor: pointer; border-style: dashed; background: var(--surface-2); }
+.flow-node.active { border-color: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.flow-node.kept.active { border-color: var(--violet); box-shadow: 0 0 0 3px var(--violet-soft); }
+.flow-lines { position: absolute; inset: 0; pointer-events: none; z-index: 0; overflow: visible; }
+.flow-lines path { fill: none; stroke: #9fd3b9; stroke-width: 2; }
+.flow-lines path.stem { stroke: var(--green-line); }
+.flow-lines path.kept { stroke: #cfc4e6; stroke-dasharray: 5 5; }
+.flow-lines path.active { stroke: var(--green); stroke-width: 2.6; }
+details.json-table > summary { padding: 14px 18px; cursor: pointer; list-style: none; }
+details.json-table > summary::-webkit-details-marker { display: none; }
+details.json-table[open] > summary { border-bottom: 1px solid var(--line); }
+
+/* compare with Excel */
+.modal.fullscreen .modal-body { overflow: hidden; padding-bottom: 12px; }
+#cmp-root { display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%; }
+.cmp-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cmp-top .legend { margin-left: auto; }
+.cmp-switch { display: none; }
+.cmp { display: grid; gap: 0; min-height: 0; flex: 1; }
+.cmp-pane { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.cmp-list { overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 2px 6px 8px 2px; min-height: 0; flex: 1; }
+.cmp-item { display: flex; gap: 4px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; cursor: pointer; font-size: 13px; }
+.cmp-item:hover { border-color: var(--green-line); }
+.cmp-item.sel { border-color: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.cmp-item.drop { border-color: var(--violet); box-shadow: 0 0 0 3px var(--violet-soft); }
+.cmp-item code { font-size: 11px; color: var(--faint); }
+.cmp-item .v { font-weight: 650; font-size: 14px; margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
+.cmp-item.s-blank, .cmp-item.s-system, .cmp-item.s-default, .cmp-item.s-cleared, .cmp-item.s-na { border-style: dashed; background: var(--surface-2); }
+.cmp-item.s-error { background: var(--amber-soft); border-color: var(--amber-line); }
+.cmp-item.s-ai { border-color: var(--violet-line); }
+.cmp-item .mp-actions { margin-top: 8px; }
+.cmp-divider { cursor: col-resize; position: relative; }
+.cmp-divider::after { content: ''; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; border-radius: 2px; background: var(--line); }
+.cmp-divider:hover::after, .cmp-divider:focus::after { background: var(--green); }
+.cmp-detail { padding: 8px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 40px; }
+.cmp-detail button.chip { cursor: pointer; }
+.cmp .xl-wrap { max-height: none; flex: 1; min-height: 200px; }
+table.xl td.c.hit { animation: pulse 1.2s ease-out 1; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(15, 138, 95, .55); } 100% { box-shadow: 0 0 0 10px rgba(15, 138, 95, 0); } }
+@media (max-width: 900px) {
+  .cmp { display: block; }
+  .cmp-divider { display: none; }
+  .cmp.pane-oracle > .cmp-pane:last-child, .cmp.pane-excel > .cmp-pane:first-child { display: none; }
+  .cmp > .cmp-pane { height: 100%; }
+  .cmp-switch { display: inline-flex; }
+  .cmp-top .legend { margin-left: 0; }
+  .flow { grid-template-columns: 1fr; gap: 10px; }
+  .flow-lines { display: none; }
+  .flow-node.part { margin-left: 0; }
+  .actionbar .btn.large { width: 100%; }
+}
